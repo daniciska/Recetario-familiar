@@ -1,0 +1,42 @@
+{
+  "slug": "ejemplo-porotos-granados",
+  "ejemplo": true,
+  "titulo": "Porotos granados (receta de ejemplo)",
+  "subtitulo": "Así se verá cada receta. Bórrala cuando subas el primer audio de verdad.",
+  "categoria": "Sopas y cazuelas",
+  "porciones": "6 personas",
+  "tiempo": "1 hora aprox.",
+  "dificultad": "Fácil",
+  "fecha": "2026-09-30",
+  "historia": "Esta es una receta de muestra para que veas cómo queda el recetario. Cuando subas un audio de tu mamá, aquí aparecerá una presentación escrita solo con lo que ella cuente: para quién cocinaba el plato, cuándo lo hacía o de quién lo aprendió.",
+  "ingredientes": [
+    { "cantidad": "1 kg", "ingrediente": "porotos granados desgranados", "como_lo_dice_mama": "" },
+    { "cantidad": "8 choclos", "ingrediente": "choclo rallado", "como_lo_dice_mama": "harto choclo, que quede espesito" },
+    { "cantidad": "1 trozo (unos 500 g)", "ingrediente": "zapallo camote en cubos", "como_lo_dice_mama": "un buen pedazo de zapallo" },
+    { "cantidad": "1 grande", "ingrediente": "cebolla picada en cubitos", "como_lo_dice_mama": "" },
+    { "cantidad": "1 cdta.", "ingrediente": "ají de color", "como_lo_dice_mama": "una pizquita de color" },
+    { "cantidad": "1 manojo", "ingrediente": "albahaca fresca", "como_lo_dice_mama": "la albahaca al final, nunca antes" },
+    { "cantidad": "a gusto", "ingrediente": "sal", "como_lo_dice_mama": "a ojo" }
+  ],
+  "pasos": [
+    "Sofríe la cebolla con un poco de aceite y el ají de color hasta que se ponga transparente.",
+    "Agrega los porotos y el zapallo, cubre con agua caliente y deja cocinar a fuego medio hasta que el zapallo se deshaga.",
+    "Incorpora el choclo rallado de a poco, revolviendo siempre para que no se pegue.",
+    "Cocina unos 10 minutos más, hasta que espese. Corrige la sal.",
+    "Apaga el fuego y recién ahí agrega la albahaca picada."
+  ],
+  "secretos": [
+    "El zapallo tiene que deshacerse: es lo que le da el color y lo espeso.",
+    "No dejes de revolver cuando pongas el choclo, porque se pega al tiro."
+  ],
+  "frases": [
+    "Harto choclo, que quede espesito.",
+    "La albahaca al final, nunca antes."
+  ],
+  "dudas": [
+    "¿Cuánto rato en total se cocinan los porotos antes del choclo?"
+  ],
+  "audios": [],
+  "transcripcion": "(En una receta real aquí aparece, completo y sin retoques, todo lo que tu mamá dijo en el audio.)",
+  "estado": "lista"
+}

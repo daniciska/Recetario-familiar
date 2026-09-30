@@ -1,0 +1,13 @@
+[
+  {
+    "slug": "ejemplo-porotos-granados",
+    "titulo": "Porotos granados (receta de ejemplo)",
+    "subtitulo": "Así se verá cada receta. Bórrala cuando subas el primer audio de verdad.",
+    "categoria": "Sopas y cazuelas",
+    "tiempo": "1 hora aprox.",
+    "estado": "lista",
+    "fecha": "2026-09-30",
+    "ejemplo": true,
+    "con_audio": false
+  }
+]
