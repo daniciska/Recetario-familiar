@@ -1,4 +1,4 @@
-# Las recetas de la mamá
+# Las recetas de la Ñaña
 
 Un recetario familiar hecho con la voz de la mamá. Cada receta guarda **su audio original** y además una versión **pasada en limpio**, con ingredientes, pasos, sus secretos y sus frases, para que sus hijos puedan cocinar como ella.
 
