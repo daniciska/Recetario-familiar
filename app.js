@@ -167,6 +167,20 @@
     else portada();
   }
 
+  // ---------- Colores del cuaderno (cada persona elige los suyos; se guardan en su teléfono) ----------
+  const PALETA_PREDETERMINADA = "verde";
+  function ponerPaleta(nombre) {
+    if (nombre === PALETA_PREDETERMINADA) delete document.documentElement.dataset.paleta;
+    else document.documentElement.dataset.paleta = nombre;
+    document.querySelectorAll(".paletas button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.paleta === nombre));
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", getComputedStyle(document.documentElement).getPropertyValue("--papel").trim());
+  }
+  ponerPaleta(document.documentElement.dataset.paleta || PALETA_PREDETERMINADA);
+  document.querySelectorAll(".paletas button").forEach((b) => b.addEventListener("click", () => {
+    ponerPaleta(b.dataset.paleta);
+    try { localStorage.setItem("paleta", b.dataset.paleta); } catch { /* sin almacenamiento */ }
+  }));
+
   Promise.all([pedir("config.json").catch(() => ({})), pedir("recetas/indice.json").catch(() => [])])
     .then(([config, indice]) => {
       estado.config = config;

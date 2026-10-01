@@ -1,29 +1,56 @@
+/* Diseño "Cuaderno": hoja cuadriculada de cuaderno escolar, margen rojo, cinta adhesiva y destacador.
+   Los colores salen de las variables de :root; cada paleta solo las redefine. */
 :root {
-  --papel: #f6efe3;
-  --tarjeta: #fffaf2;
-  --tinta: #3b2a20;
-  --tinta-suave: #7a6556;
-  --acento: #b5532f;
-  --acento-suave: #f0d9c8;
-  --hoja: #6f7d4e;
-  --linea: #e4d6c3;
-  --sombra: 0 1px 2px rgba(59, 42, 32, .06), 0 6px 20px rgba(59, 42, 32, .07);
-  --serif: "Fraunces", Georgia, serif;
-  --mano: "Caveat", "Segoe Script", cursive;
-  --sans: "Source Sans 3", system-ui, sans-serif;
+  color-scheme: light;
+  --papel: #fbf7ee;
+  --tarjeta: #fffdf8;
+  --tinta: #1f4d3a;
+  --tinta-suave: #5d6b5f;
+  --acento: #b5452f;
+  --acento-suave: #ffdcbf;
+  --hoja: #1f4d3a;
+  --linea: #ddd2bb;
+  --cuadro: #ebe2cf;
+  --cinta: rgba(201, 222, 196, .85);
+  --sombra-nota: rgba(31, 77, 58, .12);
+  --sombra: none;
+  --serif: "Kalam", "Comic Sans MS", cursive; --mano: "Kalam", "Comic Sans MS", cursive;
+  --sans: "Atkinson Hyperlegible", system-ui, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --papel: #1f1915; --tarjeta: #2a221c; --tinta: #f1e6d8; --tinta-suave: #bba897;
-    --acento: #e08a62; --acento-suave: #4a3226; --hoja: #a9b886; --linea: #3d322a;
-    --sombra: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
-  }
+
+/* ---------- Paletas (se eligen abajo en la página; la verde es la predeterminada) ---------- */
+:root[data-paleta="azul"] {
+  --papel: #fbfcfd; --tarjeta: #ffffff; --tinta: #1d2f6f; --tinta-suave: #56617f;
+  --acento: #cf3f33; --acento-suave: #fff1a1; --hoja: #1d2f6f; --linea: #c9d6e6;
+  --cuadro: #dde8f4; --cinta: rgba(243, 226, 150, .8); --sombra-nota: rgba(29, 47, 111, .1);
 }
-:root[data-theme="dark"] {
-  --papel: #1f1915; --tarjeta: #2a221c; --tinta: #f1e6d8; --tinta-suave: #bba897;
-  --acento: #e08a62; --acento-suave: #4a3226; --hoja: #a9b886; --linea: #3d322a;
-  --sombra: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+:root[data-paleta="rosa"] {
+  --papel: #fcfbfd;
+  --tarjeta: #ffffff;
+  --tinta: #2e2e36;
+  --tinta-suave: #62606e;
+  --acento: #d1356f;
+  --acento-suave: #ffd8e8;
+  --hoja: #2e2e36;
+  --linea: #d9d4e6;
+  --cuadro: #e9e5f2;
+  --cinta: rgba(184, 226, 208, .85);
+  --sombra-nota: rgba(46, 46, 54, .12);
 }
+:root[data-paleta="turquesa"] {
+  --papel: #fafdfd;
+  --tarjeta: #ffffff;
+  --tinta: #0e5561;
+  --tinta-suave: #4d6e74;
+  --acento: #e0601a;
+  --acento-suave: #eef79a;
+  --hoja: #0e5561;
+  --linea: #c4e0e3;
+  --cuadro: #d9eef0;
+  --cinta: rgba(255, 205, 160, .85);
+  --sombra-nota: rgba(14, 85, 97, .12);
+}
+
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -42,7 +69,7 @@ button { font: inherit; }
 .portada h1 { font-size: clamp(2rem, 7vw, 3rem); margin: 8px 0 12px; }
 .portada .dedicatoria { font-family: var(--mano); font-size: 1.5rem; color: var(--tinta-suave); max-width: 520px; margin: 0 auto; line-height: 1.3; }
 
-.buscador { position: sticky; top: 0; background: var(--papel); padding: 12px 0; z-index: 2; }
+.buscador { position: sticky; top: env(safe-area-inset-top, 0px); background: var(--papel); padding: 12px 0; z-index: 2; }
 .buscador input {
   width: 100%; padding: 12px 16px; border-radius: 999px; border: 1px solid var(--linea);
   background: var(--tarjeta); color: var(--tinta); font: inherit;
@@ -134,6 +161,61 @@ details.transcripcion div { white-space: pre-wrap; font-size: .95rem; color: var
 }
 
 .pie { text-align: center; font-family: var(--mano); font-size: 1.35rem; color: var(--tinta-suave); padding: 0 16px 40px; }
+
+
+body {
+  background-color: var(--papel);
+  background-image: linear-gradient(var(--cuadro) 1px, transparent 1px), linear-gradient(90deg, var(--cuadro) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+main { border-left: 2px solid var(--acento); padding-left: 18px; margin-left: 16px; margin-right: 0; }
+@media (min-width: 800px) { main { margin-left: auto; margin-right: auto; } }
+.olla { display: none; }
+.portada { text-align: left; padding-top: 40px; }
+.portada::before { content: "Cuaderno de cocina"; display: block; margin-bottom: 6px; font-family: var(--mano); color: var(--acento); font-size: 1.1rem; }
+.portada h1 { font-weight: 700; display: inline; background: linear-gradient(transparent 58%, var(--acento-suave) 58%); }
+.portada .dedicatoria { margin: 16px 0 0; font-size: 1.35rem; color: var(--tinta); }
+.buscador { background: transparent; }
+.buscador input { border-radius: 4px; border: 1.5px solid var(--linea); }
+.chips button { border-radius: 4px; font-family: var(--mano); font-size: 1rem; }
+.chips button[aria-pressed="true"] { background: var(--tinta); border-color: var(--tinta); color: var(--papel); }
+.lista { gap: 22px; margin-top: 24px; }
+.tarjeta { position: relative; border: 1px solid var(--linea); border-left: 1px solid var(--linea); border-radius: 3px; box-shadow: 0 2px 0 var(--linea); }
+.tarjeta::before { content: ""; position: absolute; top: -9px; left: 22px; width: 70px; height: 18px; background: var(--cinta); transform: rotate(-4deg); }
+.tarjeta:nth-child(even) { transform: rotate(.5deg); }
+.tarjeta:nth-child(even)::before { left: auto; right: 22px; transform: rotate(3deg); }
+.tarjeta h2 { font-size: 1.5rem; font-weight: 700; }
+.etiqueta-estado { font-family: var(--mano); font-size: 1rem; }
+.volver { font-family: var(--mano); font-size: 1.15rem; }
+.cabecera .categoria { font-family: var(--mano); text-transform: none; letter-spacing: 0; color: var(--acento); font-size: 1.05rem; }
+.cabecera h1 { font-weight: 700; }
+.cabecera .subtitulo { color: var(--tinta-suave); }
+.datos span { background: var(--acento-suave); border-radius: 2px; }
+.caja { border: 1px solid var(--linea); border-radius: 3px; }
+.caja h2 { font-weight: 700; font-size: 1.45rem; text-decoration: underline wavy var(--acento); text-underline-offset: 6px; text-decoration-thickness: 1.5px; }
+.escuchar h2::before, .secretos h2::before, .dudas h2::before { content: none; }
+.ingredientes input { accent-color: var(--tinta); }
+.ingredientes .dice { font-size: 1.15rem; }
+.pasos li::before { background: transparent; border: 2px solid var(--acento); border-radius: 50% 44% 56% 47%; font-family: var(--mano); font-weight: 700; }
+.secretos { background: var(--acento-suave); transform: rotate(-1deg); box-shadow: 0 8px 14px var(--sombra-nota); border: 0; }
+.secretos h2 { text-decoration: none; }
+.frases blockquote { font-size: 1.9rem; color: var(--tinta); }
+.dudas { border: 2px dashed var(--acento); background: var(--tarjeta); }
+.aviso { background: var(--acento-suave); border-radius: 3px; }
+.acciones button { border-radius: 4px; background: var(--tarjeta); font-family: var(--mano); font-size: 1.05rem; }
+.pie { font-size: 1.3rem; }
+
+/* ---------- Selector de colores ---------- */
+.paletas { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 18px; font-family: var(--sans); }
+.paletas span { font-size: .85rem; color: var(--tinta-suave); }
+.paletas div { display: flex; gap: 14px; }
+.paletas button {
+  width: 40px; height: 40px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 3px solid var(--papel); box-shadow: 0 0 0 1.5px var(--linea);
+  background: linear-gradient(135deg, var(--m) 0 50%, var(--d) 50% 100%);
+}
+.paletas button[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--tinta); }
+.paletas button:focus-visible { outline: 2px solid var(--acento); outline-offset: 4px; }
 
 @media print {
   body { background: #fff; color: #000; font-size: 12pt; }

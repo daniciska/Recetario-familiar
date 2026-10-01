@@ -33,6 +33,8 @@ En GitHub: *Settings → Secrets and variables → Actions → New repository se
 ### 4. Personalizar
 Edita `config.json`: el título del recetario, cómo llaman a la mamá (`"cocinera"`), la dedicatoria y la firma.
 
+Cada persona puede elegir los colores del cuaderno (verde, azul, rosa o turquesa) al final de la página; queda guardado en su teléfono. El verde es el predeterminado.
+
 Borra la carpeta `recetas/ejemplo-porotos-granados` cuando subas la primera receta real, y actualiza el índice (la próxima vez que se suba un audio se actualiza solo).
 
 ## Qué tiene cada receta

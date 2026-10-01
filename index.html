@@ -4,18 +4,31 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <meta name="theme-color" content="#f6efe3">
+  <meta name="theme-color" content="#fbf7ee">
   <title>Recetario familiar</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍲</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Caveat:wght@500;700&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Kalam:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="estilos.css">
+  <script>
+    // Aplicar la paleta guardada antes de dibujar, para que no parpadee.
+    try { const p = localStorage.getItem("paleta"); if (p) document.documentElement.dataset.paleta = p; } catch (e) {}
+  </script>
 </head>
 <body>
   <main id="app" aria-live="polite"></main>
   <footer class="pie">
     <p id="firma"></p>
+    <div class="paletas" role="group" aria-labelledby="paletas-titulo">
+      <span id="paletas-titulo">Colores del cuaderno</span>
+      <div>
+        <button type="button" data-paleta="verde" aria-label="Verde" style="--m:#b5452f;--d:#1f4d3a"></button>
+        <button type="button" data-paleta="azul" aria-label="Azul" style="--m:#cf3f33;--d:#1d2f6f"></button>
+        <button type="button" data-paleta="rosa" aria-label="Rosa" style="--m:#d1356f;--d:#2e2e36"></button>
+        <button type="button" data-paleta="turquesa" aria-label="Turquesa" style="--m:#e0601a;--d:#0e5561"></button>
+      </div>
+    </div>
   </footer>
   <script src="app.js"></script>
 </body>
