@@ -1,0 +1,13 @@
+# Publicación en Netlify: página estática, sin compilación.
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+
+[[headers]]
+  for = "/recetas/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
