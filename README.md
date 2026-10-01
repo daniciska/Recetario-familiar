@@ -17,13 +17,12 @@ Si todavía no configuraste la clave de Claude (paso 3 de la instalación), la r
 ### 1. Repositorio privado
 Deja este repositorio en **privado** en GitHub (Settings → General → Danger Zone → Change visibility). Así los audios no quedan públicos.
 
-### 2. Publicar la página solo para la familia — Cloudflare (gratis)
-1. Crea una cuenta en [cloudflare.com](https://dash.cloudflare.com/sign-up).
-2. *Workers & Pages* → *Create* → *Pages* → *Connect to Git* → elige este repositorio. Sin comando de compilación; carpeta de salida: `/`. Te dará una dirección tipo `recetas-mama.pages.dev`.
-3. Para que solo entren tus hermanos: *Zero Trust* → *Access* → *Applications* → *Add an application* → *Self-hosted*, con la dirección de tu página. En la regla, elige *Emails* y escribe los correos de cada hermano.
-   Cuando alguien abra el enlace, le llegará un código a su correo para entrar. Nadie más puede verla.
+### 2. Publicar la página solo para la familia — Netlify
+La página está en Netlify, conectada a este repositorio: cada cambio en GitHub se publica solo.
 
-Cada vez que se agrega una receta, Cloudflare vuelve a publicar la página automáticamente.
+- Dirección: https://recetas-de-la-nana-bgac.netlify.app
+- Para entrar se pide la **contraseña de la familia**. No importan mayúsculas, espacios ni tildes, y cada teléfono la recuerda por un año.
+- Para cambiar la contraseña: en Netlify, *Project configuration → Environment variables → CLAVE_FAMILIA*, y luego *Deploys → Trigger deploy*. Al cambiarla, todos tienen que volver a escribirla.
 
 ### 3. (Opcional) Que las recetas se pasen en limpio solas
 En GitHub: *Settings → Secrets and variables → Actions → New repository secret*
