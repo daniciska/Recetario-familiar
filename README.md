@@ -17,12 +17,11 @@ Si todavía no configuraste la clave de Claude (paso 3 de la instalación), la r
 ### 1. Repositorio privado
 Deja este repositorio en **privado** en GitHub (Settings → General → Danger Zone → Change visibility). Así los audios no quedan públicos.
 
-### 2. Publicar la página solo para la familia — Netlify
+### 2. Publicar la página — Netlify
 La página está en Netlify, conectada a este repositorio: cada cambio en GitHub se publica solo.
 
 - Dirección: https://recetas-de-la-nana-bgac.netlify.app
-- Para entrar se pide la **contraseña de la familia**. No importan mayúsculas, espacios ni tildes, y cada teléfono la recuerda por un año.
-- Para cambiar la contraseña: en Netlify, *Project configuration → Environment variables → CLAVE_FAMILIA*, y luego *Deploys → Trigger deploy*. Al cambiarla, todos tienen que volver a escribirla.
+- No pide contraseña: cualquiera que tenga el enlace puede verla (los buscadores no la muestran). Compártelo solo con la familia.
 
 ### 3. (Opcional) Que las recetas se pasen en limpio solas
 En GitHub: *Settings → Secrets and variables → Actions → New repository secret*
