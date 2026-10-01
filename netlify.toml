@@ -1,5 +1,7 @@
 # Publicación en Netlify: página estática, sin compilación.
 [build]
+  # Este comando reemplaza al que Netlify adivinó en su panel ("hugo"): no hay nada que compilar.
+  command = "echo 'Sitio estático: no hay nada que compilar'"
   publish = "."
 
 [[headers]]
