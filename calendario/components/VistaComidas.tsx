@@ -375,14 +375,17 @@ function buscarReceta(lista: Receta[], id: string) {
 
 // ---------- Generar lista de compras ----------
 
-/** Al abrir, parte marcado lo que tiene cantidad y no está en el carro ("al gusto" normalmente ya está en casa). */
-const parteMarcada = (l: LineaGenerada) => l.cantidad != null && !l.yaComprado;
+/**
+ * Al abrir, parte marcado lo que tiene cantidad y no está en el carro. Lo "al gusto" normalmente ya está
+ * en casa y parte desmarcado, salvo que ya se haya mandado y siga pendiente en la lista (se acabó la sal).
+ */
+const parteMarcada = (l: LineaGenerada) => !l.yaComprado && (l.cantidad != null || !!l.enLista);
 
 function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: () => void; alEnviar: () => void }) {
   const { estado, actualizar } = useDatos();
   // Se calcula una vez al abrir: descuenta lo que ya está en el carro de esta semana.
   const [lineas] = useState(() => generarLista(estado.plan, estado.recetas, lunes, estado.compras));
-  // Lo "al gusto" (sal, pimienta) normalmente ya está en casa, y lo ya comprado no se repite: parten desmarcados.
+  // Qué parte marcado al abrir: ver parteMarcada.
   const [incluir, setIncluir] = useState<Set<string>>(() => new Set(lineas.filter(parteMarcada).map((l) => l.clave)));
   const grupos = agruparPorCategoria(lineas);
   const delMenu = estado.compras.filter((c) => c.origen === "menu" && c.semana === lunes);
@@ -391,7 +394,7 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
   const nDescontados = lineas.filter((l) => l.yaComprado || l.descontado).length;
 
   const elegidas = lineas.filter((l) => incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
-  // El usuario desmarcó algo que partió marcado (lo "al gusto" y lo ya comprado parten desmarcados solos).
+  // El usuario desmarcó algo que partió marcado (ver parteMarcada).
   const quedaPorMandar = lineas.some((l) => parteMarcada(l) && !incluir.has(l.clave));
   const enviar = () => {
     actualizar("compras", (lista) => [

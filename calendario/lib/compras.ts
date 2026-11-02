@@ -335,6 +335,8 @@ export interface LineaGenerada {
   yaComprado?: boolean;
   /** Cuánto se descontó por estar ya comprado, para mostrarlo. */
   descontado?: string;
+  /** Ya está pendiente en la lista (lo mandó antes el menú de esta semana y aún no se compra). */
+  enLista?: boolean;
 }
 
 export function claveComida(fecha: string, tipo: string) {
@@ -401,6 +403,12 @@ export function generarLista(
     const cant = c.cantidad == null ? null : c.cantidad * b.factor;
     comprado.set(clave, cant == null ? (previo ?? null) : (previo ?? 0) + cant);
   }
+  // Lo que el menú de esta semana ya mandó y sigue sin comprar.
+  const pendiente = new Set(
+    compras
+      .filter((c) => c.origen === "menu" && c.semana === lunes && !c.comprado)
+      .map((c) => claveSuma(c.nombre, c.unidad).clave),
+  );
 
   return [...acumulado.values()]
     .map((l) => {
@@ -421,7 +429,7 @@ export function generarLista(
         }
       }
       const r = paraMostrar(cantidad, l.unidad);
-      return { ...l, cantidad: r.cantidad, unidad: r.unidad, yaComprado, descontado };
+      return { ...l, cantidad: r.cantidad, unidad: r.unidad, yaComprado, descontado, enLista: pendiente.has(l.clave) };
     })
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }
