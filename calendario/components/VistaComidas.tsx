@@ -88,7 +88,7 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
       {aviso && <div className="rounded-2xl bg-acento-suave px-4 py-2 text-lg font-bold">{aviso}</div>}
 
       {/* Tablet: grilla días × comidas */}
-      <div className="desliza hidden min-h-0 flex-1 grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] grid-rows-[auto_repeat(4,minmax(4.5rem,1fr))] gap-2 overflow-y-auto md:grid">
+      <div className="desliza hidden min-h-0 flex-1 grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] grid-rows-[auto_repeat(5,minmax(3rem,1fr))] gap-2 overflow-y-auto md:grid [@media(max-height:700px)]:gap-1.5">
         <div className="sticky top-0 z-10 bg-fondo" />
         {dias.map((f, i) => (
           <div
@@ -115,7 +115,8 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
               {DIAS_LARGOS[i]} <span className="num">{partes(f).dia}</span>
               {f === hoy && <span className="ml-2 text-acento">· Hoy</span>}
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            {/* 5 comidas en 2 columnas: la última (cena) ocupa la fila entera. */}
+            <div className="grid grid-cols-2 gap-2 [&>:last-child:nth-child(odd)]:col-span-2">
               {TIPOS_COMIDA.map((t) => (
                 <Celda
                   key={t.id}
@@ -147,6 +148,16 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   );
 }
 
+/**
+ * Ícono de la celda de la grilla según el alto disponible dentro de la celda (sin borde ni relleno):
+ * completo si caben ícono + 2 líneas (≈ 75 px), chico hasta 3,5rem (ícono de 20 px + 2 líneas en
+ * text-sm ≈ 57 px) y oculto por debajo (el nombre solo ≈ 35 px).
+ */
+// (Clases escritas completas: Tailwind sólo genera las que encuentra literalmente en el código.)
+const ICONO_BAJO =
+  "[@container(max-height:4.75rem)]:size-5 [@container(max-height:4.75rem)]:text-lg [@container(max-height:4.75rem)]:leading-none [@container(max-height:3.5rem)]:hidden";
+const NOMBRE_BAJO = "[@container(max-height:4.75rem)]:text-sm [@container(max-height:4.75rem)]:leading-tight";
+
 function FilaComida({
   tipo,
   dias,
@@ -163,8 +174,8 @@ function FilaComida({
   const { estado } = useDatos();
   return (
     <>
-      <div className="flex flex-col items-center justify-center rounded-2xl bg-superficie-2 text-center">
-        <span className="text-3xl [@media(max-height:700px)]:text-2xl">{tipo.emoji}</span>
+      <div className="flex flex-col items-center justify-center rounded-2xl bg-superficie-2 text-center [container-type:size]">
+        <span className="text-3xl [@container(max-height:4.5rem)]:text-xl [@container(max-height:3.5rem)]:hidden">{tipo.emoji}</span>
         <span className="text-base font-extrabold">{tipo.nombre}</span>
       </div>
       {dias.map((f) => (
@@ -207,12 +218,12 @@ function Celda({
       type="button"
       onClick={onClick}
       className={cx(
-        "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] py-1 text-center transition active:scale-[0.97]",
-        // En la grilla de un tablet bajo (Fire HD 8 con la barra de Silk) todo cabe en filas de 72 px,
-        // así se ven las 4 comidas sin tener que desplazar.
-        // En la grilla casi sin relleno lateral: el nombre usa todo el ancho y sólo se corta en sílabas
-        // cuando de verdad no cabe (iPad vertical).
-        enGrilla ? "min-h-0 px-0.5 [@media(max-height:700px)]:py-0.5" : "min-h-20 px-1.5",
+        "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] text-center transition active:scale-[0.97]",
+        // En la grilla la celda toma el alto de su fila y es un contenedor: si la fila es baja (Fire HD 8
+        // en el navegador), el ícono se achica y luego se oculta, para que las 5 comidas se vean sin
+        // desplazar y el nombre nunca se corte. Casi sin relleno lateral: el nombre usa todo el ancho y
+        // sólo se corta en sílabas cuando de verdad no cabe (iPad vertical).
+        enGrilla ? "min-h-0 px-0.5 py-0.5 [container-type:size]" : "min-h-20 px-1.5 py-1",
         esHoy ? "border-hoy-borde bg-hoy shadow-md" : "border-transparent bg-superficie",
         !comida && "border-dashed border-borde",
       )}
@@ -223,25 +234,30 @@ function Celda({
       ) : (
         <>
           {receta ? (
-            <FotoReceta
-              receta={receta}
-              className="size-9 text-3xl 2xl:size-12 2xl:text-4xl [@media(max-height:700px)]:size-6 [@media(max-height:700px)]:text-xl"
-            />
+            <FotoReceta receta={receta} className={cx("size-9 text-3xl 2xl:size-12 2xl:text-4xl", enGrilla && ICONO_BAJO)} />
           ) : (
-            <span className="text-2xl [@media(max-height:700px)]:text-xl [@media(max-height:700px)]:leading-none">🍴</span>
+            <span className={cx("text-2xl", enGrilla && ICONO_BAJO)}>🍴</span>
           )}
           <span
             className={cx(
               // Una palabra más ancha que la celda ("Charquicán" en el iPad vertical) se corta en
               // sílabas en vez de quedar recortada por los lados.
               "line-clamp-2 max-w-full break-words hyphens-auto text-base font-extrabold leading-[1.15] md:max-[56rem]:text-sm 2xl:text-lg",
-              enGrilla && "[@media(max-height:700px)]:text-sm [@media(max-height:700px)]:leading-tight",
+              enGrilla && NOMBRE_BAJO,
             )}
           >
             {nombre}
           </span>
           {receta && (
-            <span className="num absolute right-1.5 top-1 text-xs font-bold text-tinta-suave">👥{comida.porciones}</span>
+            <span
+              className={cx(
+                "num absolute right-1.5 top-1 text-xs font-bold text-tinta-suave",
+                // Sin ícono (fila muy baja) el nombre sube y el 👥 lo taparía.
+                enGrilla && "[@container(max-height:3.5rem)]:hidden",
+              )}
+            >
+              👥{comida.porciones}
+            </span>
           )}
         </>
       )}
@@ -252,6 +268,8 @@ function Celda({
 // ---------- Elegir qué se cocina ----------
 
 const ATAJOS = ["Sobras", "Comemos fuera", "Delivery", "Cada uno se las arregla", "Pan con palta"];
+/** La colación casi nunca es una receta: atajos propios. */
+const ATAJOS_COLACION = ["Fruta", "Yogur", "Sándwich", "Barra de cereal", "Galletas", "Sin colación"];
 
 function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoComida; alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();
@@ -340,7 +358,7 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
         <div>
           <span className="mb-1.5 block text-base font-bold text-tinta-suave">…o escribe algo sin receta</span>
           <div className="mb-2 flex flex-wrap gap-2">
-            {ATAJOS.map((a) => (
+            {(tipo === "colacion" ? ATAJOS_COLACION : ATAJOS).map((a) => (
               <button
                 key={a}
                 type="button"

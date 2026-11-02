@@ -20,7 +20,7 @@ import type {
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
-const CLAVE_PLAN = /^\d{4}-\d{2}-\d{2}\|(desayuno|almuerzo|once|cena)$/;
+const CLAVE_PLAN = /^\d{4}-\d{2}-\d{2}\|(desayuno|colacion|almuerzo|once|cena)$/;
 const REPETICIONES: Repeticion[] = ["nunca", "diaria", "semanal", "mensual"];
 const UNIDADES_OK = new Set<string>(UNIDADES.map((u) => u.valor));
 const CATEGORIAS_OK = new Set<string>(CATEGORIAS.map((c) => c.nombre));

@@ -9,7 +9,7 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 | Pestaña | Qué hace |
 |---|---|
 | 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos con repetición diaria / semanal / mensual, fecha de término opcional, y borrar “sólo este día”. Clima de cada día y la comida al pie de cada columna. |
-| 🍽️ Menú | Grilla lunes–domingo × desayuno / almuerzo / once / cena. Se asigna una receta (con porciones por día) o un texto libre (“Sobras”, “Comemos fuera”). “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
+| 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena (la colación trae atajos propios: fruta, yogur, sándwich…). Se asigna una receta (con porciones por día) o un texto libre (“Sobras”, “Comemos fuera”). “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
 | 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. |
 | 🛒 Compras | Agrupada por categoría (Verduras y frutas, Carnes y pescados, Lácteos y huevos…). Agregar a mano (“2 kg papas” entiende la cantidad). Marcar comprado, sacar comprados. Regenerar la lista de la semana reemplaza sólo lo que vino del menú y aún no se compra. |
 | ✅ Tareas | Tareas con casilla grande, asignadas a una persona (tocar el avatar la cambia), filtro por persona. |
@@ -34,7 +34,7 @@ npm run build      # versión de producción en out/ (archivos estáticos)
 
 La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`): no necesita servidor ni funciones.
 
-Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, **Base directory** = `calendario` y la rama que quieras publicar (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Sin eso, se vuelve a publicar a mano.
+Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, rama `claude/recetario-familiar`, **Base directory** = `calendario` (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Desde ahí, cada push que toque `calendario/` se publica solo; los cambios del recetario no lo gatillan.
 
 **Vercel** (alternativa): *Add New → Project*, elige este repositorio y en **Root Directory** pon `calendario`.
 

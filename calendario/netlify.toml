@@ -4,6 +4,9 @@
 [build]
   command = "npm run build"
   publish = "out"
+  # Con el repositorio conectado, sólo se vuelve a publicar si cambió algo dentro de calendario/
+  # (los audios y recetas del recetario no lo gatillan). Sin publicación previa, siempre publica.
+  ignore = 'if [ -z "$CACHED_COMMIT_REF" ] || [ "$CACHED_COMMIT_REF" = "$COMMIT_REF" ]; then exit 1; fi; git diff --quiet "$CACHED_COMMIT_REF" "$COMMIT_REF" -- .'
 
 # Es un panel privado de la familia: que no aparezca en buscadores.
 [[headers]]

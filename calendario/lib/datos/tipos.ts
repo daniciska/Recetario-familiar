@@ -81,7 +81,7 @@ export interface Receta {
   nota?: string;
 }
 
-export type TipoComida = "desayuno" | "almuerzo" | "once" | "cena";
+export type TipoComida = "desayuno" | "colacion" | "almuerzo" | "once" | "cena";
 
 export interface ComidaPlanificada {
   recetaId?: Id; // receta de la biblioteca

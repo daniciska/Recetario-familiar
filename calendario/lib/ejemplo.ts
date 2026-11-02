@@ -189,6 +189,8 @@ export function estadoEjemplo(): EstadoApp {
     plan[claveComida(d(dia), tipo)] = { recetaId, porciones, texto };
   };
   poner(0, "almuerzo", "rec_charquican");
+  poner(0, "colacion", undefined, 2, "Manzana y yogur");
+  poner(2, "colacion", undefined, 2, "Sándwich de quesillo");
   poner(1, "almuerzo", "rec_cazuela");
   poner(2, "cena", "rec_porotos_riendas");
   poner(3, "almuerzo", undefined, 4, "Sobras de porotos");
