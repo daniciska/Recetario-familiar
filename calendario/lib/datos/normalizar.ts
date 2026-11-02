@@ -11,7 +11,10 @@ import type {
   Ingrediente,
   ItemCompra,
   Miembro,
+  Momento,
+  MovimientoEstrellas,
   PlanComidas,
+  Premio,
   Receta,
   Repeticion,
   Tarea,
@@ -21,7 +24,8 @@ import type {
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
 const CLAVE_PLAN = /^\d{4}-\d{2}-\d{2}\|(desayuno|colacion|almuerzo|once|cena)$/;
-const REPETICIONES: Repeticion[] = ["nunca", "diaria", "semanal", "mensual"];
+const REPETICIONES: Repeticion[] = ["nunca", "diaria", "semanal", "mensual", "anual"];
+const MOMENTOS: Momento[] = ["manana", "tarde", "noche"];
 const UNIDADES_OK = new Set<string>(UNIDADES.map((u) => u.valor));
 const CATEGORIAS_OK = new Set<string>(CATEGORIAS.map((c) => c.nombre));
 
@@ -54,6 +58,7 @@ function ajustes(x: unknown, base: Ajustes): Ajustes {
     tema: x.tema === "auto" || x.tema === "claro" || x.tema === "noche" ? x.tema : base.tema,
     nocheDesde: hora(x.nocheDesde) ?? base.nocheDesde,
     nocheHasta: hora(x.nocheHasta) ?? base.nocheHasta,
+    pin: txtOpc(x.pin),
   };
 }
 
@@ -90,6 +95,7 @@ function evento(x: unknown): Evento | null {
     repetirHasta,
     nota: txtOpc(x.nota),
     excepciones: excepciones.length ? excepciones : undefined,
+    cuentaRegresiva: x.cuentaRegresiva === true ? true : undefined,
   };
 }
 
@@ -158,12 +164,47 @@ function itemCompra(x: unknown): ItemCompra | null {
 
 function tarea(x: unknown): Tarea | null {
   if (!esObj(x) || typeof x.titulo !== "string") return null;
+  const repetir = x.repetir === "diaria" || x.repetir === "dias" ? x.repetir : "nunca";
+  const dias = [...new Set(lista(x.dias, (d) => (Number.isInteger(d) && (d as number) >= 0 && (d as number) <= 6 ? (d as number) : null)))].sort();
+  const estrellas = num(x.estrellas);
   return {
     id: id(x.id, "tar"),
     titulo: x.titulo,
     miembroId: txtOpc(x.miembroId),
     hecha: x.hecha === true,
     creada: txt(x.creada, new Date().toISOString()),
+    // "Algunos días" sin días marcados no aparecería nunca: queda como una sola vez.
+    repetir: repetir === "dias" && dias.length === 0 ? "nunca" : repetir,
+    dias: repetir === "dias" && dias.length ? dias : undefined,
+    hechas: repetir === "nunca" ? undefined : [...new Set(lista(x.hechas, (f) => fecha(f) ?? null))].sort().slice(-60),
+    estrellas: estrellas && estrellas > 0 ? Math.min(5, Math.round(estrellas)) : undefined,
+    momento: MOMENTOS.includes(x.momento as Momento) ? (x.momento as Momento) : undefined,
+  };
+}
+
+function premio(x: unknown): Premio | null {
+  if (!esObj(x) || typeof x.titulo !== "string" || !x.titulo.trim()) return null;
+  const costo = num(x.costo);
+  return {
+    id: id(x.id, "pre"),
+    titulo: x.titulo,
+    emoji: txt(x.emoji, "🎁") || "🎁",
+    costo: costo && costo > 0 ? Math.min(500, Math.round(costo)) : 10,
+    miembroId: txtOpc(x.miembroId),
+  };
+}
+
+function movimiento(x: unknown): MovimientoEstrellas | null {
+  if (!esObj(x) || typeof x.miembroId !== "string") return null;
+  const cantidad = num(x.cantidad);
+  if (!cantidad) return null;
+  return {
+    id: id(x.id, "est"),
+    miembroId: x.miembroId,
+    cantidad: Math.round(cantidad),
+    motivo: txt(x.motivo),
+    fecha: txt(x.fecha, new Date().toISOString()),
+    ref: txtOpc(x.ref),
   };
 }
 
@@ -182,6 +223,8 @@ export function normalizarGuardado(crudo: Partial<Record<keyof EstadoApp, unknow
     plan: plan(crudo.plan),
     compras: lista(crudo.compras, itemCompra),
     tareas: lista(crudo.tareas, tarea),
+    premios: lista(crudo.premios, premio),
+    estrellas: lista(crudo.estrellas, movimiento),
   };
 }
 
@@ -202,6 +245,8 @@ export function normalizarRespaldo(crudo: unknown, ajustesBase: Ajustes): { esta
       plan: plan(crudo.plan),
       compras: lista(crudo.compras, itemCompra),
       tareas: lista(crudo.tareas, tarea),
+      premios: lista(crudo.premios, premio),
+      estrellas: lista(crudo.estrellas, movimiento),
     },
   };
 }

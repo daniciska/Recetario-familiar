@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ProveedorDatos, useDatos } from "@/lib/store";
+import { ProveedorCandado, useCandado } from "@/lib/candado";
 import { useAhora, useClima, useModoPared, useRecargaDiaria, useTema, useWakeLock } from "@/lib/hooks";
 import BarraSuperior, { PantallaCompleta } from "./BarraSuperior";
 import VistaCalendario from "./VistaCalendario";
@@ -26,7 +27,9 @@ const PESTANAS: { id: Pestana; icono: string; texto: string }[] = [
 export default function App() {
   return (
     <ProveedorDatos>
-      <Panel />
+      <ProveedorCandado>
+        <Panel />
+      </ProveedorCandado>
     </ProveedorDatos>
   );
 }
@@ -47,16 +50,38 @@ function Panel() {
   useWakeLock(true);
   useRecargaDiaria(ahora, "03:30", sinGuardar);
 
+  const { proteger } = useCandado();
   const [pestana, setPestana] = useState<Pestana>("calendario");
+  const ir = useCallback(
+    (p: Pestana) => {
+      const cambiar = () => {
+        history.replaceState(null, "", p === "calendario" ? location.pathname : `#${p}`);
+        setPestana(p);
+      };
+      // Los ajustes de la familia (integrantes, PIN, respaldo) piden el PIN en la pared.
+      if (p === "ajustes") proteger(cambiar);
+      else cambiar();
+    },
+    [proteger],
+  );
+  // La pestaña sale de la dirección (#compras…). Llegar a #ajustes (recarga, enlace) también pide
+  // el PIN; una vez adentro, no se echa a nadie aunque venza el desbloqueo.
+  const irRef = useRef(ir);
   useEffect(() => {
-    setPestana(leerHash());
-    const f = () => setPestana(leerHash());
+    irRef.current = ir;
+  }, [ir]);
+  useEffect(() => {
+    const f = () => {
+      const h = leerHash();
+      if (h === "ajustes") {
+        history.replaceState(null, "", location.pathname);
+        setPestana("calendario");
+        irRef.current("ajustes");
+      } else setPestana(h);
+    };
+    f();
     window.addEventListener("hashchange", f);
     return () => window.removeEventListener("hashchange", f);
-  }, []);
-  const ir = useCallback((p: Pestana) => {
-    history.replaceState(null, "", p === "calendario" ? location.pathname : `#${p}`);
-    setPestana(p);
   }, []);
 
   // Modo pared: si nadie toca la pantalla en 5 minutos, vuelve al calendario de esta semana.
@@ -122,7 +147,7 @@ function Panel() {
           {pestana === "comidas" && <VistaComidas hoy={ahora.fecha} alIrACompras={() => ir("compras")} />}
           {pestana === "recetas" && <VistaRecetas />}
           {pestana === "compras" && <VistaCompras />}
-          {pestana === "tareas" && <VistaTareas />}
+          {pestana === "tareas" && <VistaTareas hoy={ahora.fecha} />}
           {pestana === "ajustes" && <VistaAjustes />}
         </main>
       </div>

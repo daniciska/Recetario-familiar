@@ -4,7 +4,7 @@ import { useState } from "react";
 
 const PREFIJO = "calendario-familiar:v1:";
 const COMO_OBJETO = new Set(["plan", "ajustes"]);
-const COMO_LISTA = new Set(["miembros", "eventos", "recetas", "compras", "tareas"]);
+const COMO_LISTA = new Set(["miembros", "eventos", "recetas", "compras", "tareas", "premios", "estrellas"]);
 
 /** Si algo falla al dibujar la app (p. ej. datos dañados), se puede salir sin borrar el navegador. */
 export default function ErrorApp({ reset }: { error: Error; reset: () => void }) {

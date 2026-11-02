@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDatos } from "@/lib/store";
 import { fechaLarga, type Ahora } from "@/lib/fechas";
 import { iconoClima, type Clima } from "@/lib/hooks";
 import { claveComida, sinTildes } from "@/lib/compras";
+import { cuentasRegresivas, textoFaltan, type CuentaRegresiva } from "@/lib/eventos";
 import { SIN_COLACION, TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
 import type { TipoComida } from "@/lib/datos/tipos";
 import { BotonIcono } from "./ui";
@@ -27,6 +28,7 @@ export default function BarraSuperior({
   // Qué se cocina hoy: almuerzo y cena primero (lo que más importa en la casa), después desayuno y
   // once, y la colación al último (a media mañana, casi nunca se cocina). "Sin colación" no cuenta: si
   // no, sería el titular o le quitaría el lugar a la once.
+  const cuentas = useMemo(() => cuentasRegresivas(estado.eventos, ahora.fecha), [estado.eventos, ahora.fecha]);
   const recetas = new Map(estado.recetas.map((r) => [r.id, r]));
   const hoyComidas = PRIORIDAD.map((id) => {
     const t = TIPOS_COMIDA.find((x) => x.id === id)!;
@@ -47,7 +49,7 @@ export default function BarraSuperior({
         {/* Sin min-w-0: el mínimo es la palabra más larga ("septiembre"), así nunca se sale de su caja. */}
         <div className="leading-tight">
           <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl">{fecha}</div>
-          <div className="text-base font-bold text-tinta-suave md:text-xl">{estado.ajustes.nombreFamilia}</div>
+          <LineaCuentas cuentas={cuentas} familia={estado.ajustes.nombreFamilia} />
         </div>
       </div>
 
@@ -104,6 +106,34 @@ export default function BarraSuperior({
     </header>
   );
 }
+
+/**
+ * Bajo la fecha: las cuentas regresivas, una a la vez (rotan cada 8 s), o el nombre de la familia si no
+ * hay. `w-0 min-w-full` hace que un título largo no ensanche el bloque de la hora: se corta con "…".
+ */
+function LineaCuentas({ cuentas, familia }: { cuentas: CuentaRegresiva[]; familia: string }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (cuentas.length < 2) return;
+    const t = setInterval(() => setI((n) => n + 1), 8000);
+    return () => clearInterval(t);
+  }, [cuentas.length]);
+  const c = cuentas.length ? cuentas[i % cuentas.length] : null;
+  return (
+    <div className="w-0 min-w-full truncate text-base font-bold text-tinta-suave md:text-xl" title={c ? undefined : familia}>
+      {c ? (
+        <>
+          {/* Primero cuánto falta: si el título no cabe, se corta el título y no los días. */}
+          ⏳ <span className={c.dias <= 1 ? "text-acento" : undefined}>{mayuscula(textoFaltan(c.dias))}</span> · {c.evento.titulo}
+        </>
+      ) : (
+        familia
+      )}
+    </div>
+  );
+}
+
+const mayuscula = (t: string) => t.replace(/^(¡?)(.)/, (_, a: string, b: string) => a + b.toUpperCase());
 
 /** Botón ⛶ (va en el riel lateral del tablet). */
 export function PantallaCompleta() {

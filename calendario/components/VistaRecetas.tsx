@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useDatos } from "@/lib/store";
+import { useCandado } from "@/lib/candado";
 import type { Ingrediente, Receta, Unidad } from "@/lib/datos/tipos";
 import { CATEGORIAS, UNIDADES, adivinarCategoria, escalar, sinTildes, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
@@ -20,6 +21,7 @@ export function FotoReceta({ receta, className }: { receta: Pick<Receta, "foto" 
 
 export default function VistaRecetas() {
   const { estado } = useDatos();
+  const { proteger } = useCandado();
   const [busqueda, setBusqueda] = useState("");
   const [viendo, setViendo] = useState<Receta | null>(null);
   const [editando, setEditando] = useState<Receta | "nueva" | null>(null);
@@ -39,7 +41,7 @@ export default function VistaRecetas() {
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
         />
-        <Boton variante="primario" className="ml-auto" onClick={() => setEditando("nueva")}>
+        <Boton variante="primario" className="ml-auto" onClick={() => proteger(() => setEditando("nueva"))}>
           ＋ Receta
         </Boton>
       </div>
@@ -76,10 +78,12 @@ export default function VistaRecetas() {
         <RecetaDetalle
           receta={estado.recetas.find((r) => r.id === viendo.id) ?? viendo}
           alCerrar={() => setViendo(null)}
-          alEditar={() => {
-            setEditando(estado.recetas.find((r) => r.id === viendo.id) ?? viendo);
-            setViendo(null);
-          }}
+          alEditar={() =>
+            proteger(() => {
+              setEditando(estado.recetas.find((r) => r.id === viendo.id) ?? viendo);
+              setViendo(null);
+            })
+          }
         />
       )}
       {editando && (

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useDatos } from "@/lib/store";
+import { useCandado } from "@/lib/candado";
 import type { Evento, Miembro, Ocurrencia } from "@/lib/datos/tipos";
 import {
   DIAS_CORTOS,
@@ -42,6 +43,7 @@ export default function VistaCalendario({
   const a = ancla ?? hoy;
   const [filtro, setFiltro] = useState<Set<string>>(new Set());
   const [editando, setEditando] = useState<{ evento?: Evento; fecha: string } | null>(null);
+  const { proteger } = useCandado();
 
   const miembros = useMemo(() => new Map(estado.miembros.map((m) => [m.id, m])), [estado.miembros]);
 
@@ -106,7 +108,7 @@ export default function VistaCalendario({
               { valor: "mes", texto: "Mes" },
             ]}
           />
-          <Boton variante="primario" aria-label="Nuevo evento" onClick={() => setEditando({ fecha: a })}>
+          <Boton variante="primario" aria-label="Nuevo evento" onClick={() => proteger(() => setEditando({ fecha: a }))}>
             ＋<span className="max-sm:hidden">Evento</span>
           </Boton>
         </div>
@@ -121,7 +123,7 @@ export default function VistaCalendario({
             miembros={miembros}
             clima={clima}
             alAbrir={(evento, fecha) => setEditando({ evento, fecha })}
-            alNuevo={(fecha) => setEditando({ fecha })}
+            alNuevo={(fecha) => proteger(() => setEditando({ fecha }))}
             alIrAMenu={alIrAMenu}
             alVerDia={(f) => {
               setAncla(f);

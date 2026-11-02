@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useDatos } from "@/lib/store";
+import { useCandado } from "@/lib/candado";
 import type { Evento, Repeticion } from "@/lib/datos/tipos";
 import { nuevoId } from "@/lib/ejemplo";
 import { NOMBRE_REPETICION } from "@/lib/eventos";
 import { fechaLarga, horaAMinutos, partes } from "@/lib/fechas";
-import { AreaTexto, Boton, Campo, ChipMiembro, Entrada, Modal, Segmentos, SelectorHora } from "./ui";
+import { AreaTexto, Boton, Campo, Casilla, ChipMiembro, Entrada, Modal, Segmentos, SelectorHora } from "./ui";
 
 const HORA_DEFECTO = "09:00";
 
@@ -24,6 +25,7 @@ export default function EventoModal({
   alCerrar: () => void;
 }) {
   const { estado, actualizar } = useDatos();
+  const { proteger } = useCandado();
   const [f, setF] = useState<Evento>(
     () =>
       evento ?? {
@@ -118,11 +120,11 @@ export default function EventoModal({
           {evento && confirmarBorrar && (
             <div className="mr-auto flex flex-wrap gap-2">
               {evento.repeticion !== "nunca" && (
-                <Boton variante="peligro" onClick={borrarSoloEste}>
+                <Boton variante="peligro" onClick={() => proteger(borrarSoloEste)}>
                   Sólo el {fechaLarga(fecha)}
                 </Boton>
               )}
-              <Boton variante="peligro" onClick={borrarTodo}>
+              <Boton variante="peligro" onClick={() => proteger(borrarTodo)}>
                 {evento.repeticion !== "nunca" ? "Todas las repeticiones" : "Sí, borrar"}
               </Boton>
               <Boton variante="fantasma" onClick={() => setConfirmarBorrar(false)}>
@@ -133,7 +135,7 @@ export default function EventoModal({
           <Boton variante="fantasma" onClick={alCerrar}>
             Cancelar
           </Boton>
-          <Boton variante="primario" disabled={!valido} onClick={guardar}>
+          <Boton variante="primario" disabled={!valido} onClick={() => proteger(guardar)}>
             Guardar
           </Boton>
         </>
@@ -237,6 +239,10 @@ export default function EventoModal({
           </div>
         </div>
 
+        {f.repeticion === "anual" && partes(f.fecha).mes === 2 && partes(f.fecha).dia === 29 && (
+          <p className="-mt-3 text-base text-tinta-suave">En los años que no son bisiestos, se muestra el 28 de febrero.</p>
+        )}
+
         {f.repeticion === "mensual" && partes(f.fecha).dia > 28 && (
           <p className="-mt-3 text-base text-tinta-suave">
             En los meses que no tienen el día {partes(f.fecha).dia}, se muestra el último día del mes.
@@ -253,6 +259,20 @@ export default function EventoModal({
             )}
           </Campo>
         )}
+
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!!f.cuentaRegresiva}
+          onClick={() => set("cuentaRegresiva", f.cuentaRegresiva ? undefined : true)}
+          className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+        >
+          <Casilla marcada={!!f.cuentaRegresiva} />
+          <span className="flex-1">
+            <span className="block text-lg font-bold">⏳ Cuenta regresiva</span>
+            <span className="block text-base text-tinta-suave">Arriba se ve “… en 5 días” (cumpleaños, viajes).</span>
+          </span>
+        </button>
 
         <Campo etiqueta="Nota">
           <AreaTexto value={f.nota ?? ""} onChange={(e) => set("nota", e.target.value)} placeholder="Ej.: llevar la carpeta" />

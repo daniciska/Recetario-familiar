@@ -2,7 +2,7 @@ import type { Repositorio } from "./repositorio";
 import type { ClaveColeccion, EstadoApp } from "./tipos";
 
 export const PREFIJO = "calendario-familiar:v1:";
-const CLAVES: ClaveColeccion[] = ["ajustes", "miembros", "eventos", "recetas", "plan", "compras", "tareas"];
+const CLAVES: ClaveColeccion[] = ["ajustes", "miembros", "eventos", "recetas", "plan", "compras", "tareas", "premios", "estrellas"];
 
 function leer(clave: string): unknown {
   const crudo = localStorage.getItem(PREFIJO + clave); // si el navegador bloquea el almacenamiento, esto lanza

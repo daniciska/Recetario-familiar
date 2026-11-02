@@ -185,6 +185,7 @@ export function estadoEjemplo(): EstadoApp {
   const m = { mama: "mie_mama", papa: "mie_papa", sofi: "mie_sofi", tomi: "mie_tomi" };
 
   const plan: EstadoApp["plan"] = {};
+  const ahoraIso = new Date().toISOString();
   const poner = (dia: number, tipo: string, recetaId: string | undefined, porciones = 4, texto?: string) => {
     plan[claveComida(d(dia), tipo)] = { recetaId, porciones, texto };
   };
@@ -229,7 +230,8 @@ export function estadoEjemplo(): EstadoApp {
       { id: "ev_reunion", titulo: "Reunión clienta", miembros: [m.mama], fecha: d(2), todoElDia: false, horaInicio: "10:00", horaFin: "11:00", repeticion: "nunca" },
       { id: "ev_dentista", titulo: "Dentista", miembros: [m.tomi, m.papa], fecha: d(2), todoElDia: false, horaInicio: "16:00", horaFin: "16:45", repeticion: "nunca", nota: "Clínica dental, 3er piso" },
       { id: "ev_feria", titulo: "Feria", miembros: [m.papa], fecha: d(5), todoElDia: false, horaInicio: "09:30", horaFin: "11:00", repeticion: "semanal" },
-      { id: "ev_cumple", titulo: "Cumple de la Tía Ana 🎂", miembros: [m.mama, m.papa, m.sofi, m.tomi], fecha: d(5), todoElDia: true, repeticion: "nunca" },
+      { id: "ev_cumple", titulo: "Cumple de la Tía Ana 🎂", miembros: [m.mama, m.papa, m.sofi, m.tomi], fecha: d(5), todoElDia: true, repeticion: "anual", cuentaRegresiva: true },
+      { id: "ev_vacaciones", titulo: "Vacaciones en La Serena 🏖️", miembros: [m.mama, m.papa, m.sofi, m.tomi], fecha: d(26), todoElDia: true, repeticion: "nunca", cuentaRegresiva: true },
       { id: "ev_basura", titulo: "Sacar la basura", miembros: [m.papa], fecha: d(3), todoElDia: false, horaInicio: "21:00", repeticion: "semanal" },
       { id: "ev_almuerzo_abuela", titulo: "Almuerzo donde la abuela", miembros: [m.mama, m.papa, m.sofi, m.tomi], fecha: d(6), todoElDia: false, horaInicio: "13:30", horaFin: "17:00", repeticion: "nunca" },
       { id: "ev_arriendo", titulo: "Pagar cuentas", miembros: [m.papa], fecha: d(4), todoElDia: true, repeticion: "mensual" },
@@ -242,12 +244,26 @@ export function estadoEjemplo(): EstadoApp {
       { id: nuevoId("com"), nombre: "Plátanos", cantidad: 1, unidad: "kg", categoria: "Verduras y frutas", comprado: true, origen: "manual" },
     ],
     tareas: [
-      { id: nuevoId("tar"), titulo: "Regar las plantas", miembroId: m.sofi, hecha: false, creada: new Date().toISOString() },
-      { id: nuevoId("tar"), titulo: "Ordenar la pieza", miembroId: m.tomi, hecha: false, creada: new Date().toISOString() },
+      { id: nuevoId("tar"), titulo: "Hacer la cama", miembroId: m.sofi, hecha: false, creada: ahoraIso, repetir: "diaria", estrellas: 1, momento: "manana" },
+      { id: nuevoId("tar"), titulo: "Hacer la cama", miembroId: m.tomi, hecha: false, creada: ahoraIso, repetir: "diaria", estrellas: 1, momento: "manana" },
+      { id: nuevoId("tar"), titulo: "Poner la mesa", miembroId: m.tomi, hecha: false, creada: ahoraIso, repetir: "dias", dias: [0, 2, 4], estrellas: 2, momento: "tarde" },
+      { id: nuevoId("tar"), titulo: "Regar las plantas", miembroId: m.sofi, hecha: false, creada: ahoraIso, repetir: "dias", dias: [1, 4], estrellas: 1, momento: "tarde" },
+      { id: nuevoId("tar"), titulo: "Sacar la basura", hecha: false, creada: ahoraIso, repetir: "dias", dias: [0, 3], estrellas: 2, momento: "noche" },
+      { id: nuevoId("tar"), titulo: "Ordenar la pieza", miembroId: m.tomi, hecha: false, creada: new Date().toISOString(), estrellas: 2 },
       { id: nuevoId("tar"), titulo: "Cambiar sábanas", miembroId: m.mama, hecha: false, creada: new Date().toISOString() },
       { id: nuevoId("tar"), titulo: "Llevar el auto a revisión técnica", miembroId: m.papa, hecha: false, creada: new Date().toISOString() },
       { id: nuevoId("tar"), titulo: "Pasear al perro", miembroId: m.tomi, hecha: true, creada: new Date().toISOString() },
       { id: nuevoId("tar"), titulo: "Comprar regalo Tía Ana", hecha: false, creada: new Date().toISOString() },
+    ],
+    premios: [
+      { id: "pre_helado", titulo: "Helado", emoji: "🍦", costo: 10 },
+      { id: "pre_juegos", titulo: "30 minutos de videojuegos", emoji: "🎮", costo: 15, miembroId: m.tomi },
+      { id: "pre_pelicula", titulo: "Elegir la película del viernes", emoji: "🎬", costo: 20 },
+      { id: "pre_parque", titulo: "Ir al parque con papá", emoji: "🛝", costo: 25 },
+    ],
+    estrellas: [
+      { id: nuevoId("est"), miembroId: m.sofi, cantidad: 12, motivo: "Semana pasada", fecha: ahoraIso },
+      { id: nuevoId("est"), miembroId: m.tomi, cantidad: 7, motivo: "Semana pasada", fecha: ahoraIso },
     ],
   };
 }

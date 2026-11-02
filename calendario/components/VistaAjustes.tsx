@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useDatos } from "@/lib/store";
+import { TecladoPin, huellaPin, usePedirPinEnEquipo } from "@/lib/candado";
 import type { EstadoApp, Miembro, Tema } from "@/lib/datos/tipos";
 import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
@@ -161,6 +162,8 @@ export default function VistaAjustes() {
             </div>
           )}
         </div>
+
+        <SeccionPin />
 
         <div className="rounded-3xl bg-superficie p-4">
           <h2 className="mb-1 text-xl font-extrabold">Respaldo</h2>
@@ -325,5 +328,80 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** PIN para que en la pantalla de la pared los niños puedan mirar y marcar quehaceres, pero no cambiar todo. */
+function SeccionPin() {
+  const { estado, actualizar } = useDatos();
+  const [pedir, setPedir] = usePedirPinEnEquipo();
+  const [paso, setPaso] = useState<null | { primero?: string }>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const tiene = !!estado.ajustes.pin;
+
+  const elegido = async (pin: string) => {
+    if (!paso?.primero) return setPaso({ primero: pin });
+    setPaso(null);
+    if (pin !== paso.primero) return setMsg("Los dos PIN no coinciden. Prueba de nuevo.");
+    const ok = await actualizar("ajustes", (a) => ({ ...a, pin: huellaPin(pin) }));
+    setMsg(ok ? "✓ PIN guardado." : "No se pudo guardar en este equipo.");
+  };
+
+  return (
+    <div className="rounded-3xl bg-superficie p-4">
+      <h2 className="mb-1 text-xl font-extrabold">🔒 PIN para hacer cambios</h2>
+      <p className="mb-3 text-base text-tinta-suave">
+        Con PIN, en la pantalla de la pared se pide para crear o cambiar eventos, el menú y las recetas, administrar
+        quehaceres y premios, canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo
+        piden. Después de ponerlo queda abierto 5 minutos.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        {tiene ? (
+          <>
+            <Boton onClick={() => setPaso({})}>Cambiar PIN</Boton>
+            <Boton
+              variante="peligro"
+              onClick={async () => {
+                const ok = await actualizar("ajustes", (a) => ({ ...a, pin: undefined }));
+                setMsg(ok ? "PIN quitado: cualquiera puede hacer cambios." : "No se pudo guardar en este equipo.");
+              }}
+            >
+              Quitar PIN
+            </Boton>
+          </>
+        ) : (
+          <Boton variante="primario" onClick={() => setPaso({})}>
+            Definir PIN
+          </Boton>
+        )}
+      </div>
+      {tiene && (
+        <div className="mt-4">
+          <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Pedir el PIN en este equipo?</span>
+          <Segmentos<"si" | "no">
+            valor={pedir ? "si" : "no"}
+            alCambiar={(v) => setPedir(v === "si")}
+            opciones={[
+              { valor: "si", texto: "Sí" },
+              { valor: "no", texto: "No" },
+            ]}
+          />
+          <p className="mt-1.5 text-base text-tinta-suave">
+            Por defecto lo pide sólo la pantalla de la pared, no el teléfono. Si olvidas el PIN, cámbialo desde un equipo que
+            no lo pida.
+          </p>
+        </div>
+      )}
+      {msg && <p className="mt-3 text-lg font-bold">{msg}</p>}
+      {paso && (
+        <TecladoPin
+          titulo={paso.primero ? "Repite el PIN" : "Elige un PIN de 4 dígitos"}
+          ayuda={paso.primero ? "Para confirmar." : "Lo pedirá la pantalla de la pared para hacer cambios."}
+          alElegir={elegido}
+          alCancelar={() => setPaso(null)}
+          key={paso.primero ? "2" : "1"}
+        />
+      )}
+    </div>
   );
 }

@@ -137,6 +137,11 @@ function paredPorDefecto(): boolean {
   return window.matchMedia("(min-width: 900px) and (min-height: 464px) and (pointer: coarse)").matches;
 }
 
+/** ¿Este equipo es la pantalla de la pared? (lectura directa, para usar fuera del render) */
+export function esPantallaPared(): boolean {
+  return leerPared();
+}
+
 function leerPared(): boolean {
   try {
     const v = localStorage.getItem(CLAVE_PARED);

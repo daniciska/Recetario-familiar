@@ -129,3 +129,13 @@ button,
 .aparecer {
   animation: aparecer 0.18s ease-out;
 }
+
+/* PIN incorrecto */
+@keyframes sacudir {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+.sacudir {
+  animation: sacudir 0.35s ease-in-out;
+}

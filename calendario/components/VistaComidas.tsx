@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useDatos } from "@/lib/store";
+import { useCandado } from "@/lib/candado";
 import type { ComidaPlanificada, Receta, TipoComida } from "@/lib/datos/tipos";
 import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, semanaCorta, sumarDias } from "@/lib/fechas";
 import {
@@ -22,6 +23,7 @@ import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
 
 export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrACompras: () => void }) {
   const { estado, actualizar } = useDatos();
+  const { proteger } = useCandado();
   // null = la semana de hoy (sigue sola al cambiar de semana).
   const [semana, setSemana] = useState<string | null>(null);
   const lunes = semana ?? lunesDe(hoy);
@@ -76,10 +78,10 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
           </span>
         </h1>
         <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-none md:flex-nowrap">
-          <Boton onClick={repetirSemanaPasada} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
+          <Boton onClick={() => proteger(repetirSemanaPasada)} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
             ↻<span className="md:max-xl:hidden"> Repetir semana</span>
           </Boton>
-          <Boton variante="primario" className="whitespace-nowrap" onClick={() => setGenerando(lunes)} disabled={nComidas === 0}>
+          <Boton variante="primario" className="whitespace-nowrap" onClick={() => proteger(() => setGenerando(lunes))} disabled={nComidas === 0}>
             🛒 <span className="md:max-xl:hidden">Generar lista de compras</span>
             <span className="hidden md:max-xl:inline">Lista de compras</span>
           </Boton>
@@ -294,6 +296,7 @@ const ATAJOS_COLACION = ["Fruta", "Yogur", "Sándwich", "Barra de cereal", "Gall
 
 function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoComida; alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();
+  const { proteger } = useCandado();
   const clave = claveComida(fecha, tipo);
   const actual = estado.plan[clave];
   const tamFamilia = Math.max(1, estado.miembros.length);
@@ -304,15 +307,17 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
   const t = TIPOS_COMIDA.find((x) => x.id === tipo)!;
   const dia = DIAS_LARGOS[(new Date(fecha + "T12:00:00Z").getUTCDay() + 6) % 7];
 
-  const poner = (c: ComidaPlanificada | null) => {
-    actualizar("plan", (plan) => {
-      const n = { ...plan };
-      if (c) n[clave] = c;
-      else delete n[clave];
-      return n;
+  // Mirar qué hay (y ver la receta) es libre; cambiar la comida pide el PIN en la pared.
+  const poner = (c: ComidaPlanificada | null) =>
+    proteger(() => {
+      actualizar("plan", (plan) => {
+        const n = { ...plan };
+        if (c) n[clave] = c;
+        else delete n[clave];
+        return n;
+      });
+      alCerrar();
     });
-    alCerrar();
-  };
 
   const q = sinTildes(busqueda);
   const filtradas = estado.recetas

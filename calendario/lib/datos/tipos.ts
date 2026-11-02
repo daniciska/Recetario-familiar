@@ -11,7 +11,7 @@ export interface Miembro {
   emoji: string;
 }
 
-export type Repeticion = "nunca" | "diaria" | "semanal" | "mensual";
+export type Repeticion = "nunca" | "diaria" | "semanal" | "mensual" | "anual";
 
 export interface Evento {
   id: Id;
@@ -25,6 +25,7 @@ export interface Evento {
   repetirHasta?: string; // AAAA-MM-DD, opcional
   nota?: string;
   excepciones?: string[]; // fechas en que NO ocurre (borrado "sólo este día")
+  cuentaRegresiva?: boolean; // se muestra arriba "⏳ … en N días" (cumpleaños, viajes)
 }
 
 /** Una ocurrencia concreta de un evento (los repetidos se expanden). */
@@ -105,12 +106,39 @@ export interface ItemCompra {
   oculto?: boolean; // comprado y sacado de la vista; se guarda para descontarlo si se regenera la lista
 }
 
+/** Franja del día de un quehacer (rutina de mañana, tarde o noche). */
+export type Momento = "manana" | "tarde" | "noche";
+
 export interface Tarea {
   id: Id;
   titulo: string;
-  miembroId?: Id;
-  hecha: boolean;
+  miembroId?: Id; // sin persona = "Quien pueda": al marcarla se elige quién la hizo
+  hecha: boolean; // tareas que no se repiten
   creada: string; // ISO
+  /** "nunca": una sola vez · "diaria": todos los días · "dias": los días de `dias`. */
+  repetir?: "nunca" | "diaria" | "dias";
+  dias?: number[]; // 0 = lunes … 6 = domingo
+  hechas?: string[]; // fechas AAAA-MM-DD en que se completó (tareas que se repiten; sólo las recientes)
+  estrellas?: number; // 0–5 que gana quien la hace
+  momento?: Momento;
+}
+
+export interface Premio {
+  id: Id;
+  titulo: string;
+  emoji: string;
+  costo: number; // estrellas
+  miembroId?: Id; // para quién; sin persona = para cualquiera
+}
+
+/** Movimiento de estrellas: el saldo de cada persona es la suma de los suyos. */
+export interface MovimientoEstrellas {
+  id: Id;
+  miembroId: Id;
+  cantidad: number; // + gana, − canjea o se descuenta
+  motivo: string;
+  fecha: string; // ISO
+  ref?: string; // quehacer que lo generó (`tareaId` o `tareaId|AAAA-MM-DD`), para deshacerlo al desmarcar
 }
 
 export type Tema = "auto" | "claro" | "noche";
@@ -123,6 +151,7 @@ export interface Ajustes {
   tema: Tema;
   nocheDesde: string; // HH:mm
   nocheHasta: string; // HH:mm
+  pin?: string; // huella del PIN de 4 dígitos para hacer cambios en la pantalla de la pared
 }
 
 export interface EstadoApp {
@@ -134,6 +163,8 @@ export interface EstadoApp {
   plan: PlanComidas;
   compras: ItemCompra[];
   tareas: Tarea[];
+  premios: Premio[];
+  estrellas: MovimientoEstrellas[];
 }
 
 export type ClaveColeccion = Exclude<keyof EstadoApp, "version">;

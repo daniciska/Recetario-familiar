@@ -30,6 +30,8 @@ const NOMBRES: Record<ClaveColeccion, string> = {
   plan: "el menú",
   compras: "la lista de compras",
   tareas: "las tareas",
+  premios: "los premios",
+  estrellas: "las estrellas",
 };
 
 /** Sin almacenamiento, el aviso cerrado vuelve con el primer cambio pasado este rato (no en cada toque). */
