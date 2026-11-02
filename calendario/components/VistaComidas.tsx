@@ -10,6 +10,7 @@ import {
   comidasDeSemana,
   generarLista,
   lineaAItem,
+  sinTildes,
   textoCantidad,
   type LineaGenerada,
 } from "@/lib/compras";
@@ -21,7 +22,9 @@ import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
 
 export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrACompras: () => void }) {
   const { estado, actualizar } = useDatos();
-  const [lunes, setLunes] = useState(() => lunesDe(hoy));
+  // null = la semana de hoy (sigue sola al cambiar de semana).
+  const [semana, setSemana] = useState<string | null>(null);
+  const lunes = semana ?? lunesDe(hoy);
   const [celda, setCelda] = useState<{ fecha: string; tipo: TipoComida } | null>(null);
   const [generando, setGenerando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -51,37 +54,44 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
 
   return (
     <section className="flex h-full flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <BotonIcono etiqueta="Semana anterior" onClick={() => setLunes((l) => sumarDias(l, -7))}>
+      <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+        <BotonIcono etiqueta="Semana anterior" onClick={() => setSemana(sumarDias(lunes, -7))}>
           ‹
         </BotonIcono>
-        <Boton onClick={() => setLunes(lunesDe(hoy))} className={cx(lunes === lunesDe(hoy) && "opacity-60")}>
+        <Boton onClick={() => setSemana(null)} className={cx("whitespace-nowrap", lunes === lunesDe(hoy) && "opacity-60")}>
           Esta semana
         </Boton>
-        <BotonIcono etiqueta="Semana siguiente" onClick={() => setLunes((l) => sumarDias(l, 7))}>
+        <BotonIcono etiqueta="Semana siguiente" onClick={() => setSemana(sumarDias(lunes, 7))}>
           ›
         </BotonIcono>
-        <h1 className="mx-1 whitespace-nowrap font-display text-2xl font-semibold xl:text-3xl">
-          Menú <span className="text-tinta-suave">· {rangoSemana(lunes)}</span>
+        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold md:whitespace-nowrap xl:text-3xl">
+          <span className="md:max-xl:hidden">Menú </span>
+          <span className="text-tinta-suave">
+            <span className="md:max-xl:hidden">· </span>
+            {rangoSemana(lunes)}
+          </span>
         </h1>
-        <div className="flex flex-1 flex-wrap justify-end gap-2">
-          <Boton onClick={repetirSemanaPasada} className="whitespace-nowrap">↻ Repetir semana</Boton>
+        <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-nowrap">
+          <Boton onClick={repetirSemanaPasada} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
+            ↻<span className="md:max-xl:hidden"> Repetir semana</span>
+          </Boton>
           <Boton variante="primario" className="whitespace-nowrap" onClick={() => setGenerando(true)} disabled={nComidas === 0}>
-            🛒 Generar lista de compras
+            🛒 <span className="md:max-xl:hidden">Generar lista de compras</span>
+            <span className="max-md:hidden xl:hidden">Lista de compras</span>
           </Boton>
         </div>
       </div>
       {aviso && <div className="rounded-2xl bg-acento-suave px-4 py-2 text-lg font-bold">{aviso}</div>}
 
       {/* Tablet: grilla días × comidas */}
-      <div className="hidden min-h-0 flex-1 grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] grid-rows-[auto_repeat(4,minmax(0,1fr))] gap-2 md:grid">
-        <div />
+      <div className="desliza hidden min-h-0 flex-1 grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] grid-rows-[auto_repeat(4,minmax(4.5rem,1fr))] gap-2 overflow-y-auto md:grid">
+        <div className="sticky top-0 z-10 bg-fondo" />
         {dias.map((f, i) => (
           <div
             key={f}
             className={cx(
-              "rounded-2xl py-1.5 text-center",
-              f === hoy ? "bg-acento text-acento-tinta" : "text-tinta-suave",
+              "sticky top-0 z-10 rounded-2xl py-1.5 text-center",
+              f === hoy ? "bg-acento text-acento-tinta" : "bg-fondo text-tinta-suave",
             )}
           >
             <span className="text-lg font-extrabold uppercase">{DIAS_CORTOS[i]}</span>{" "}
@@ -150,7 +160,7 @@ function FilaComida({
   return (
     <>
       <div className="flex flex-col items-center justify-center rounded-2xl bg-superficie-2 text-center">
-        <span className="text-3xl">{tipo.emoji}</span>
+        <span className="text-3xl [@media(max-height:700px)]:text-2xl">{tipo.emoji}</span>
         <span className="text-base font-extrabold">{tipo.nombre}</span>
       </div>
       {dias.map((f) => (
@@ -160,6 +170,7 @@ function FilaComida({
           comida={estado.plan[claveComida(f, tipo.id)]}
           recetas={recetas}
           esHoy={f === hoy}
+          enGrilla
           onClick={() => alElegir(f)}
         />
       ))}
@@ -173,6 +184,7 @@ function Celda({
   recetas,
   esHoy,
   conEtiqueta,
+  enGrilla,
   onClick,
 }: {
   tipo: (typeof TIPOS_COMIDA)[number];
@@ -180,6 +192,8 @@ function Celda({
   recetas: Map<string, Receta>;
   esHoy: boolean;
   conEtiqueta?: boolean;
+  /** En la grilla del tablet la celda se ajusta a su fila (pantallas bajas como el Fire HD 8). */
+  enGrilla?: boolean;
   onClick: () => void;
 }) {
   const receta = comida?.recetaId ? recetas.get(comida.recetaId) : undefined;
@@ -189,7 +203,8 @@ function Celda({
       type="button"
       onClick={onClick}
       className={cx(
-        "relative flex min-h-20 min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] px-1.5 py-1 text-center transition active:scale-[0.97]",
+        "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] px-1.5 py-1 text-center transition active:scale-[0.97]",
+        enGrilla ? "min-h-0" : "min-h-20",
         esHoy ? "border-hoy-borde bg-hoy shadow-md" : "border-transparent bg-superficie",
         !comida && "border-dashed border-borde",
       )}
@@ -200,9 +215,12 @@ function Celda({
       ) : (
         <>
           {receta ? (
-            <FotoReceta receta={receta} className="size-9 text-3xl 2xl:size-12 2xl:text-4xl" />
+            <FotoReceta
+              receta={receta}
+              className="size-9 text-3xl 2xl:size-12 2xl:text-4xl [@media(max-height:700px)]:size-6 [@media(max-height:700px)]:text-xl"
+            />
           ) : (
-            <span className="text-2xl">🍴</span>
+            <span className="text-2xl [@media(max-height:700px)]:text-xl">🍴</span>
           )}
           <span className="line-clamp-2 text-base font-extrabold leading-[1.15] 2xl:text-lg">{nombre}</span>
           {receta && (
@@ -240,8 +258,9 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
     alCerrar();
   };
 
+  const q = sinTildes(busqueda);
   const filtradas = estado.recetas
-    .filter((r) => r.nombre.toLowerCase().includes(busqueda.toLowerCase()))
+    .filter((r) => sinTildes(r.nombre).includes(q))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 
   if (verReceta) return <RecetaDetalle receta={verReceta} alCerrar={() => setVerReceta(null)} porcionesIniciales={porciones} />;
@@ -341,18 +360,21 @@ function buscarReceta(lista: Receta[], id: string) {
 
 function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: () => void; alEnviar: () => void }) {
   const { estado, actualizar } = useDatos();
-  const lineas = useMemo(() => generarLista(estado.plan, estado.recetas, lunes), [estado.plan, estado.recetas, lunes]);
-  // Lo "al gusto" (sal, pimienta) normalmente ya está en casa: parte desmarcado.
+  // Se calcula una vez al abrir: descuenta lo que ya está en el carro de esta semana.
+  const [lineas] = useState(() => generarLista(estado.plan, estado.recetas, lunes, estado.compras));
+  // Lo "al gusto" (sal, pimienta) normalmente ya está en casa, y lo ya comprado no se repite: parten desmarcados.
   const [incluir, setIncluir] = useState<Set<string>>(
-    () => new Set(lineas.filter((l) => l.cantidad != null).map((l) => l.clave)),
+    () => new Set(lineas.filter((l) => l.cantidad != null && !l.yaComprado).map((l) => l.clave)),
   );
   const grupos = agruparPorCategoria(lineas);
-  const yaHabia = estado.compras.some((c) => c.origen === "menu" && c.semana === lunes && !c.comprado);
+  const delMenu = estado.compras.filter((c) => c.origen === "menu" && c.semana === lunes);
+  const yaHabia = delMenu.length > 0;
+  const nDescontados = lineas.filter((l) => l.yaComprado || l.descontado).length;
 
+  const elegidas = lineas.filter((l) => incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
   const enviar = () => {
-    const elegidas = lineas.filter((l) => incluir.has(l.clave));
     actualizar("compras", (lista) => [
-      // Reemplaza lo que el menú de esta semana había mandado antes (y que aún no se compra).
+      // Reemplaza lo que el menú de esta semana había mandado antes y aún no se compra.
       ...lista.filter((c) => !(c.origen === "menu" && c.semana === lunes && !c.comprado)),
       ...elegidas.map((l: LineaGenerada) => lineaAItem(l, lunes, nuevoId("com"))),
     ]);
@@ -370,15 +392,20 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
           <Boton variante="fantasma" onClick={alCerrar}>
             Cancelar
           </Boton>
-          <Boton variante="primario" grande disabled={incluir.size === 0} onClick={enviar}>
-            Mandar {incluir.size} a la lista
+          <Boton variante="primario" grande disabled={elegidas.length === 0} onClick={enviar}>
+            Mandar {elegidas.length} a la lista
           </Boton>
         </>
       }
     >
       {yaHabia && (
         <p className="mb-4 rounded-2xl bg-acento-suave px-4 py-3 text-lg">
-          Ya habías generado la lista de esta semana. Al mandarla, se reemplazan esos ítems (los que ya marcaste como comprados se quedan).
+          Ya habías mandado la lista de esta semana. Lo pendiente se reemplaza por esta
+          {nDescontados === 1
+            ? " y a 1 ingrediente se le descontó lo que ya compraste."
+            : nDescontados > 1
+              ? ` y a ${nDescontados} ingredientes se les descontó lo que ya compraste.`
+              : "."}
         </p>
       )}
       <div className="space-y-5">
@@ -390,6 +417,7 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
             <div className="space-y-1.5">
               {g.items.map((l) => {
                 const marcado = incluir.has(l.clave);
+                const todoComprado = l.yaComprado && (l.cantidad === 0 || l.cantidad == null);
                 return (
                   <button
                     key={l.clave}
@@ -411,9 +439,16 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
                     <div className="min-w-0 flex-1">
                       <div className="text-xl font-extrabold">
                         {l.nombre}{" "}
-                        <span className="num font-bold text-acento">{textoCantidad(l.cantidad, l.unidad)}</span>
+                        {todoComprado ? (
+                          <span className="font-bold text-ok">✓ ya en el carro</span>
+                        ) : (
+                          <span className="num font-bold text-acento">{textoCantidad(l.cantidad, l.unidad)}</span>
+                        )}
                       </div>
-                      <div className="truncate text-sm text-tinta-suave">{l.recetas.join(" · ")}</div>
+                      <div className="truncate text-sm text-tinta-suave">
+                        {l.descontado && !todoComprado && `ya compraste ${l.descontado} · `}
+                        {l.recetas.join(" · ")}
+                      </div>
                     </div>
                   </button>
                 );

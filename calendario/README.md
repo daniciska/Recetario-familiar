@@ -13,9 +13,11 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 | 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. |
 | 🛒 Compras | Agrupada por categoría (Verduras y frutas, Carnes y pescados, Lácteos y huevos…). Agregar a mano (“2 kg papas” entiende la cantidad). Marcar comprado, sacar comprados. Regenerar la lista de la semana reemplaza sólo lo que vino del menú y aún no se compra. |
 | ✅ Tareas | Tareas con casilla grande, asignadas a una persona (tocar el avatar la cambia), filtro por persona. |
-| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, respaldo (descargar / cargar) y volver a los datos de ejemplo. |
+| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, respaldo (descargar / cargar) y volver a los datos de ejemplo. |
 
-Para la pared: reloj en vivo, día de hoy resaltado, modo noche automático (por defecto 20:30–07:00), la pantalla se mantiene encendida (Wake Lock), vuelve sola al calendario después de 5 minutos sin tocarla, y se recarga sola cada madrugada a las 03:30 para tomar versiones nuevas.
+Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al día y la semana nuevos), modo noche automático (por defecto 20:30–07:00, sin destello al recargar de noche), la pantalla se mantiene encendida (Wake Lock) y se recarga sola cada madrugada a las 03:30 para tomar versiones nuevas. La recarga sólo ocurre si hay internet y no hay nada a medio editar; si no, lo reintenta cada 5 minutos.
+
+**Vuelta sola al calendario:** en el equipo marcado como *pantalla de la pared* (Familia → Este equipo), si nadie lo toca en 5 minutos vuelve al calendario de esta semana. No lo hace si hay una ventana abierta (una receta mientras se cocina, un formulario a medio llenar). En el teléfono no ocurre nunca. Un tablet táctil grande y apaisado se marca solo como pantalla de pared; se puede cambiar a mano.
 
 ## Correrlo
 
@@ -34,14 +36,15 @@ npm run build && npm start   # versión de producción
 
 ## Datos
 
-Hoy los datos viven en el `localStorage` **de cada dispositivo**: lo que cambias en el teléfono no aparece en el tablet. Para mover los datos usa *Familia → Descargar respaldo / Cargar respaldo*.
+Hoy los datos viven en el `localStorage` **de cada dispositivo**: lo que cambias en el teléfono no aparece en el tablet. Para mover los datos usa *Familia → Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída; si el almacenamiento se llena (fotos), la app avisa y no da por guardado lo que no se guardó.
 
-Para compartirlos de verdad hay que conectar una base de datos. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`); basta con escribir otra implementación (Supabase, Firebase, una API propia) y cambiar una línea en `lib/datos/index.ts`. El método `suscribir` está pensado para recibir cambios en vivo de otros dispositivos.
+Para compartirlos de verdad hay que conectar una base de datos. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): se escribe otra implementación (Supabase, Firebase, una API propia) y se cambia una línea en `lib/datos/index.ts`. El método `suscribir` está pensado para recibir cambios en vivo de otros dispositivos. Si el tablet y el teléfono van a escribir a la vez, conviene que esa implementación mezcle los cambios por elemento (por `id`) en vez de reemplazar colecciones completas.
 
 ```
 lib/datos/tipos.ts            modelo (Miembro, Evento, Receta, ItemCompra, Tarea…)
 lib/datos/repositorio.ts      interfaz de almacenamiento
 lib/datos/repositorioLocal.ts implementación con localStorage
+lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
 lib/compras.ts                categorías, unidades, suma de ingredientes
 lib/fechas.ts                 fechas en America/Santiago, semana lunes–domingo
 lib/eventos.ts                repeticiones
@@ -54,7 +57,7 @@ components/                   las vistas
 Pasos comunes, en cualquier tablet:
 
 1. Publica la app (Vercel o Netlify) y abre la dirección en el tablet.
-2. Configúrala **en ese tablet** (integrantes, recetas): los datos quedan guardados ahí.
+2. Configúrala **en ese tablet** (integrantes, recetas): los datos quedan guardados ahí. En *Familia → Este equipo* revisa que diga **Pantalla de la pared**.
 3. Deja el tablet **enchufado** siempre y en **horizontal**.
 4. Desactiva las actualizaciones automáticas de sistema en horario nocturno si el tablet se reinicia solo.
 
@@ -67,6 +70,8 @@ La app ya pide que la pantalla no se apague (Wake Lock), pero cada sistema tiene
 3. **Acceso Guiado:** *Ajustes → Accesibilidad → Acceso Guiado* → actívalo, define un **código** y en *Bloqueo automático* elige **Nunca**.
 4. Abre la app desde el ícono y presiona **3 veces el botón lateral** (o el botón de inicio) → **Acceso Guiado** → en *Opciones* deja activado *Tocar* y desactiva *Botones de volumen* / *Bloqueo* si quieres → **Iniciar**.
 5. Para salir: 3 clics al botón y el código.
+
+El botón ⛶ del riel lateral pone pantalla completa en el navegador, pero el navegador la quita en cada recarga (la de las 03:30 incluida); por eso conviene abrirla desde el ícono de inicio, que ya es pantalla completa.
 
 Volver sola a la app: con Acceso Guiado el iPad **no puede salir** de la app, así que siempre está ahí. Si se corta la luz y se reinicia, iPadOS no reabre la app sola: hay que abrirla y activar Acceso Guiado de nuevo (para eso existe MDM, ver al final).
 

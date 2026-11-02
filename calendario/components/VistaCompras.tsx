@@ -2,28 +2,80 @@
 
 import { useState } from "react";
 import { useDatos } from "@/lib/store";
-import type { CategoriaCompra, ItemCompra } from "@/lib/datos/tipos";
+import type { CategoriaCompra, ItemCompra, Unidad } from "@/lib/datos/tipos";
 import { CATEGORIAS, adivinarCategoria, agruparPorCategoria, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
+import { hoy, lunesDe, partes, sumarDias, MESES } from "@/lib/fechas";
 import { Boton, BotonIcono, Casilla, Entrada, Selector, Vacio, cx } from "./ui";
 
-/** "2 kg papas" → { cantidad: 2, unidad: "kg", nombre: "papas" } */
-function interpretar(texto: string): Pick<ItemCompra, "nombre" | "cantidad" | "unidad"> {
-  const m = texto.trim().match(/^(\d+(?:[.,]\d+)?)\s*(kg|g|gr|l|lt|litros?|ml|un|unidades?)?\s+(.+)$/i);
-  if (!m) return { nombre: texto.trim(), cantidad: null, unidad: "unidad" };
-  const cant = Number(m[1].replace(",", "."));
-  const u = (m[2] ?? "").toLowerCase();
-  const unidad =
-    u === "kg" ? "kg" : u === "g" || u === "gr" ? "g" : u.startsWith("l") ? "l" : u === "ml" ? "ml" : "unidad";
-  return { nombre: m[3].trim(), cantidad: cant, unidad };
+/** Unidades que se entienden al escribir a mano ("2 kilos de papas", "1 docena de huevos"). */
+const ALIAS: [RegExp, Unidad, number][] = [
+  [/^(kg|kgs|kilos?)$/i, "kg", 1],
+  [/^(g|gr|grs|gramos?)$/i, "g", 1],
+  [/^(l|lt|lts|litros?)$/i, "l", 1],
+  [/^(ml|cc)$/i, "ml", 1],
+  [/^(un|und|unid|unidad(es)?)$/i, "unidad", 1],
+  [/^docenas?$/i, "unidad", 12],
+  [/^paquetes?$/i, "paquete", 1],
+  [/^latas?$/i, "lata", 1],
+  [/^atados?$/i, "atado", 1],
+  [/^tazas?$/i, "taza", 1],
+  [/^dientes?$/i, "diente", 1],
+];
+
+/** Número escrito en Chile: "1.000" son mil, "1,5" es uno y medio, "1/2" es medio. */
+function numeroCL(s: string): number {
+  if (s === "½") return 0.5;
+  if (s === "¼") return 0.25;
+  if (s === "¾") return 0.75;
+  const fr = s.match(/^(\d+)\/(\d+)$/);
+  if (fr) return Number(fr[1]) / Number(fr[2] || 1);
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, "");
+  return Number(s.replace(",", "."));
+}
+
+/** "2 kg de papas" → { cantidad: 2, unidad: "kg", nombre: "papas" } */
+export function interpretar(texto: string): Pick<ItemCompra, "nombre" | "cantidad" | "unidad"> {
+  const t = texto.trim().replace(/\s+/g, " ");
+  const sin = { nombre: t, cantidad: null, unidad: "unidad" as Unidad };
+  const m = t.match(/^(\d+(?:[.,]\d+)*|\d+\/\d+|½|¼|¾)\s*(.*)$/);
+  if (!m || !m[2]) return sin;
+  let cantidad = numeroCL(m[1]);
+  if (!Number.isFinite(cantidad) || cantidad <= 0) return sin;
+  let unidad: Unidad = "unidad";
+  let resto = m[2];
+  const w = resto.match(/^([a-záéíóúñ]+)\.?(?:\s+(.*))?$/i);
+  if (w) {
+    const alias = ALIAS.find(([re]) => re.test(w[1]));
+    if (alias) {
+      if (!w[2]) return sin; // "2 kg" sin decir de qué
+      unidad = alias[1];
+      cantidad *= alias[2];
+      resto = w[2];
+    }
+  }
+  resto = resto.replace(/^de\s+/i, "").trim();
+  if (!resto) return sin;
+  return { nombre: resto, cantidad, unidad };
+}
+
+/** "2–8 nov" para distinguir ítems del menú de distintas semanas. */
+function semanaCorta(lunes: string): string {
+  const a = partes(lunes);
+  const b = partes(sumarDias(lunes, 6));
+  const mes = (n: number) => MESES[n - 1].slice(0, 3);
+  return a.mes === b.mes ? `${a.dia}–${b.dia} ${mes(b.mes)}` : `${a.dia} ${mes(a.mes)}–${b.dia} ${mes(b.mes)}`;
 }
 
 export default function VistaCompras() {
   const { estado, actualizar } = useDatos();
   const [texto, setTexto] = useState("");
   const [categoria, setCategoria] = useState<CategoriaCompra | "auto">("auto");
-  const pendientes = estado.compras.filter((c) => !c.comprado);
-  const comprados = estado.compras.filter((c) => c.comprado);
+  // Los "ocultos" son comprados que se sacaron de la vista; se guardan para descontarlos si se regenera la lista.
+  const visibles = estado.compras.filter((c) => !c.oculto);
+  const pendientes = visibles.filter((c) => !c.comprado);
+  const comprados = visibles.filter((c) => c.comprado);
+  const variasSemanas = new Set(visibles.filter((c) => c.origen === "menu" && c.semana).map((c) => c.semana)).size > 1;
 
   const agregar = (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,7 +96,20 @@ export default function VistaCompras() {
 
   const alternar = (id: string) =>
     actualizar("compras", (l) => l.map((c) => (c.id === id ? { ...c, comprado: !c.comprado } : c)));
-  const quitar = (id: string) => actualizar("compras", (l) => l.filter((c) => c.id !== id));
+
+  /** Un comprado del menú de esta semana o de una próxima se oculta (no se borra); lo demás se borra. */
+  const lunesHoy = lunesDe(hoy());
+  const seGuarda = (c: ItemCompra) => c.comprado && c.origen === "menu" && !!c.semana && c.semana >= lunesHoy;
+  const quitar = (id: string) =>
+    actualizar("compras", (l) =>
+      l.flatMap((c) => (c.id !== id ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
+    );
+  const sacarComprados = () =>
+    actualizar("compras", (l) =>
+      l
+        .filter((c) => !(c.oculto && c.semana && c.semana < lunesHoy)) // limpia ocultos de semanas pasadas
+        .flatMap((c) => (!c.comprado || c.oculto ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
+    );
 
   return (
     <section className="flex h-full flex-col gap-3">
@@ -53,7 +118,7 @@ export default function VistaCompras() {
           Lista de compras <span className="num text-tinta-suave">· {pendientes.length}</span>
         </h1>
         {comprados.length > 0 && (
-          <Boton className="ml-auto" onClick={() => actualizar("compras", (l) => l.filter((c) => !c.comprado))}>
+          <Boton className="ml-auto" onClick={sacarComprados}>
             🧹 Sacar comprados ({comprados.length})
           </Boton>
         )}
@@ -80,7 +145,7 @@ export default function VistaCompras() {
       </form>
 
       <div className="desliza min-h-0 flex-1 overflow-y-auto">
-        {estado.compras.length === 0 ? (
+        {visibles.length === 0 ? (
           <Vacio emoji="🛒" texto="La lista está vacía. Genérala desde el Menú o agrega cosas arriba." />
         ) : (
           <div className="columns-1 gap-3 md:columns-2 xl:columns-3">
@@ -91,7 +156,7 @@ export default function VistaCompras() {
                 </h2>
                 <div className="space-y-1">
                   {g.items.map((c) => (
-                    <Fila key={c.id} item={c} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
+                    <Fila key={c.id} item={c} conSemana={variasSemanas} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
                   ))}
                 </div>
               </div>
@@ -101,7 +166,7 @@ export default function VistaCompras() {
                 <h2 className="mb-2 px-1 text-lg font-extrabold uppercase text-ok">✓ En el carro</h2>
                 <div className="space-y-1">
                   {comprados.map((c) => (
-                    <Fila key={c.id} item={c} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
+                    <Fila key={c.id} item={c} conSemana={variasSemanas} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
                   ))}
                 </div>
               </div>
@@ -113,7 +178,17 @@ export default function VistaCompras() {
   );
 }
 
-function Fila({ item, alAlternar, alQuitar }: { item: ItemCompra; alAlternar: () => void; alQuitar: () => void }) {
+function Fila({
+  item,
+  conSemana,
+  alAlternar,
+  alQuitar,
+}: {
+  item: ItemCompra;
+  conSemana: boolean;
+  alAlternar: () => void;
+  alQuitar: () => void;
+}) {
   return (
     <div className="flex items-center gap-1">
       <button
@@ -130,7 +205,10 @@ function Fila({ item, alAlternar, alQuitar }: { item: ItemCompra; alAlternar: ()
             )}
           </div>
           {item.origen === "menu" && item.detalle && (
-            <div className="truncate text-sm font-bold text-tinta-suave">🍽️ {item.detalle}</div>
+            <div className="truncate text-sm font-bold text-tinta-suave">
+              🍽️ {conSemana && item.semana ? `${semanaCorta(item.semana)} · ` : ""}
+              {item.detalle}
+            </div>
           )}
         </div>
       </button>

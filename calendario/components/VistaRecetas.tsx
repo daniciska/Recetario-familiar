@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useDatos } from "@/lib/store";
 import type { Ingrediente, Receta, Unidad } from "@/lib/datos/tipos";
-import { CATEGORIAS, UNIDADES, adivinarCategoria, escalar, textoCantidad } from "@/lib/compras";
+import { CATEGORIAS, UNIDADES, adivinarCategoria, escalar, sinTildes, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
 import { AreaTexto, Boton, BotonIcono, Campo, Contador, Entrada, Modal, Selector, Vacio, cx } from "./ui";
 
@@ -24,8 +24,9 @@ export default function VistaRecetas() {
   const [viendo, setViendo] = useState<Receta | null>(null);
   const [editando, setEditando] = useState<Receta | "nueva" | null>(null);
 
+  const q = sinTildes(busqueda);
   const lista = estado.recetas
-    .filter((r) => r.nombre.toLowerCase().includes(busqueda.toLowerCase()))
+    .filter((r) => sinTildes(r.nombre).includes(q))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 
   return (
@@ -128,7 +129,7 @@ export function RecetaDetalle({
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <span className="text-lg font-bold">Porciones</span>
             <Contador valor={porciones} alCambiar={setPorciones} />
-            {receta.tiempoMin && <span className="text-lg font-bold text-tinta-suave">⏱ {receta.tiempoMin} min</span>}
+            {receta.tiempoMin ? <span className="text-lg font-bold text-tinta-suave">⏱ {receta.tiempoMin} min</span> : null}
           </div>
           <h3 className="mb-2 text-lg font-extrabold uppercase text-acento">Ingredientes</h3>
           <ul className="space-y-1.5">
@@ -178,7 +179,8 @@ export function RecetaDetalle({
 }
 
 function redondeo(n: number) {
-  return n >= 10 ? Math.round(n) : Math.round(n * 4) / 4;
+  if (n <= 0) return 0;
+  return n >= 10 ? Math.round(n) : Math.max(0.25, Math.round(n * 4) / 4);
 }
 
 // ---------- Editor ----------
@@ -225,6 +227,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
       },
   );
   const [confirmar, setConfirmar] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof Receta>(k: K, v: Receta[K]) => setR((p) => ({ ...p, [k]: v }));
   const setIng = (id: string, cambios: Partial<Ingrediente>) =>
     set(
@@ -232,17 +235,24 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
       r.ingredientes.map((i) => (i.id === id ? { ...i, ...cambios } : i)),
     );
 
-  const guardar = () => {
+  const guardar = async () => {
     const limpia: Receta = {
       ...r,
       nombre: r.nombre.trim(),
+      tiempoMin: r.tiempoMin && r.tiempoMin > 0 ? Math.round(r.tiempoMin) : undefined,
       ingredientes: r.ingredientes.filter((i) => i.nombre.trim()).map((i) => ({ ...i, nombre: i.nombre.trim() })),
       pasos: r.pasos.map((p) => p.trim()).filter(Boolean),
     };
-    actualizar("recetas", (lista) =>
+    const ok = await actualizar("recetas", (lista) =>
       receta ? lista.map((x) => (x.id === receta.id ? limpia : x)) : [...lista, limpia],
     );
-    alCerrar();
+    if (ok) alCerrar();
+    else
+      setError(
+        r.foto
+          ? "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba quitando la foto o borrando fotos de otras recetas."
+          : "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba borrando fotos de otras recetas.",
+      );
   };
 
   const borrar = () => {
@@ -286,6 +296,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
       }
     >
       <div className="space-y-6">
+        {error && <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300">{error}</p>}
         <div className="grid gap-4 md:grid-cols-[1fr_auto]">
           <Campo etiqueta="Nombre">
             <Entrada value={r.nombre} onChange={(e) => set("nombre", e.target.value)} placeholder="Ej.: Pastel de papas" />
@@ -336,7 +347,13 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                   className="hidden"
                   onChange={async (e) => {
                     const a = e.target.files?.[0];
-                    if (a) set("foto", await reducirFoto(a));
+                    e.target.value = "";
+                    if (!a) return;
+                    try {
+                      set("foto", await reducirFoto(a));
+                    } catch {
+                      setError("No se pudo leer esa foto. Prueba con otra (JPG o PNG).");
+                    }
                   }}
                 />
               </label>
@@ -353,9 +370,13 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
           <h3 className="mb-2 text-lg font-extrabold uppercase text-acento">Ingredientes</h3>
           <div className="space-y-2">
             {r.ingredientes.map((i) => (
-              <div key={i.id} className="grid grid-cols-[5.5rem_8rem_1fr_auto] gap-2 rounded-2xl bg-superficie-2 p-2 md:grid-cols-[6rem_9rem_1fr_13rem_auto]">
+              <div
+                key={i.id}
+                className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2 rounded-2xl bg-superficie-2 p-2 md:grid-cols-[6rem_9rem_minmax(0,1fr)_13rem_auto]"
+              >
                 <Entrada
                   aria-label="Cantidad"
+                  className="col-start-1 row-start-2 md:row-start-1"
                   type="number"
                   inputMode="decimal"
                   step="any"
@@ -367,6 +388,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 />
                 <Selector
                   aria-label="Unidad"
+                  className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:row-start-1"
                   value={i.unidad}
                   onChange={(e) => {
                     const u = e.target.value as Unidad;
@@ -382,6 +404,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 <Entrada
                   aria-label="Ingrediente"
                   placeholder="Ingrediente"
+                  className="col-span-2 col-start-1 row-start-1 md:col-span-1 md:col-start-3"
                   value={i.nombre}
                   onChange={(e) => {
                     const nombre = e.target.value;
@@ -392,7 +415,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 />
                 <Selector
                   aria-label="Categoría"
-                  className="col-span-3 md:col-span-1"
+                  className="col-span-3 col-start-1 row-start-3 md:col-span-1 md:col-start-4 md:row-start-1"
                   value={i.categoria}
                   onChange={(e) => setIng(i.id, { categoria: e.target.value as Ingrediente["categoria"] })}
                 >
@@ -404,7 +427,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 </Selector>
                 <BotonIcono
                   etiqueta="Quitar ingrediente"
-                  className="row-start-1 col-start-4 md:col-start-5"
+                  className="col-start-3 row-start-1 md:col-start-5"
                   onClick={() => set("ingredientes", r.ingredientes.filter((x) => x.id !== i.id))}
                 >
                   ✕

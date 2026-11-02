@@ -86,20 +86,28 @@ button,
 }
 
 /* Tarjeta de evento: color de la persona mezclado con la superficie */
+/* Sólo background-color (no el atajo "background"): así no se borran las franjas de .compartido. */
 .tarjeta-evento {
-  background: color-mix(in srgb, var(--color-persona) 20%, var(--c-superficie));
+  background-color: color-mix(in srgb, var(--color-persona) 20%, var(--c-superficie));
   border-left: 7px solid var(--color-persona);
 }
 :root[data-tema="noche"] .tarjeta-evento {
-  background: color-mix(in srgb, var(--color-persona) 26%, var(--c-superficie));
+  background-color: color-mix(in srgb, var(--color-persona) 26%, var(--c-superficie));
 }
+/* Evento de varias personas: una franja vertical con todos sus colores. */
 .tarjeta-evento.compartido {
   border-left: 0;
-  padding-left: calc(7px + 0.625rem);
+  padding-left: calc(7px + 0.5rem);
   background-image: linear-gradient(to bottom, var(--franjas));
   background-size: 7px 100%;
   background-repeat: no-repeat;
   background-color: color-mix(in srgb, var(--color-persona) 16%, var(--c-superficie));
+}
+:root[data-tema="noche"] .tarjeta-evento.compartido {
+  background-color: color-mix(in srgb, var(--color-persona) 22%, var(--c-superficie));
+}
+.tarjeta-evento.compartido.etiqueta-mes {
+  padding-left: calc(7px + 0.375rem);
 }
 
 @keyframes aparecer {

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ahoraEnSantiago, horaAMinutos, type Ahora } from "./fechas";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ahoraEnSantiago, horaAMinutos, sumarDias, type Ahora } from "./fechas";
 import type { Ajustes } from "./datos/tipos";
 
 /** Reloj en vivo (se actualiza cada segundo). */
@@ -57,14 +57,80 @@ export function useWakeLock(activo = true) {
 /**
  * Auto-refresco: recarga la página una vez al día de madrugada (toma versiones nuevas
  * del deploy y limpia memoria en tablets que pasan meses encendidos).
+ *
+ * Sólo recarga si el servidor responde (sin internet, recargar dejaría la pantalla de error
+ * del navegador), si no hay una ventana abierta a medio editar y si no hay cambios sin guardar.
+ * Si no se puede, lo reintenta cada 5 minutos. Si el equipo estaba suspendido a esa hora,
+ * recarga apenas despierta.
  */
-export function useRecargaDiaria(ahora: Ahora, hora = "03:30") {
-  const [inicio] = useState(() => Date.now());
+export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false) {
+  const [objetivo] = useState(() => `${ahora.hora < hora ? ahora.fecha : sumarDias(ahora.fecha, 1)} ${hora}`);
+  const probando = useRef(false);
+  const ultimoIntento = useRef(0);
   useEffect(() => {
-    if (ahora.hora === hora && ahora.segundos < 2 && Date.now() - inicio > 60_000) {
-      window.location.reload();
+    if (`${ahora.fecha} ${ahora.hora}` < objetivo) return;
+    if (bloqueada || probando.current || Date.now() - ultimoIntento.current < 5 * 60_000) return;
+    if (document.querySelector('[role="dialog"]')) return;
+    if (navigator.onLine === false) return;
+    probando.current = true;
+    ultimoIntento.current = Date.now();
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    fetch(location.pathname, { method: "HEAD", cache: "no-store", signal: ctrl.signal })
+      .then((r) => {
+        if (r.ok) window.location.reload();
+      })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(t);
+        probando.current = false;
+      });
+  }, [ahora, objetivo, bloqueada]);
+}
+
+// ---------- Modo pared (ajuste de este equipo, no se comparte) ----------
+
+const CLAVE_PARED = "calendario-familiar:equipo:pared";
+const oyentesPared = new Set<() => void>();
+
+/** Por defecto: pantalla táctil grande y apaisada (el tablet de la pared), nunca un teléfono. */
+function paredPorDefecto(): boolean {
+  return window.matchMedia("(min-width: 900px) and (min-height: 500px) and (pointer: coarse)").matches;
+}
+
+function leerPared(): boolean {
+  try {
+    const v = localStorage.getItem(CLAVE_PARED);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    /* sin almacenamiento */
+  }
+  return paredPorDefecto();
+}
+
+/**
+ * "Este equipo es la pantalla de la pared": vuelve solo al calendario tras 5 minutos sin tocarlo.
+ * Se guarda sólo en este equipo, para que el teléfono nunca lo herede.
+ */
+export function useModoPared(): [boolean, (v: boolean) => void] {
+  const valor = useSyncExternalStore(
+    (cb) => {
+      oyentesPared.add(cb);
+      return () => oyentesPared.delete(cb);
+    },
+    leerPared,
+    () => false,
+  );
+  const cambiar = (v: boolean) => {
+    try {
+      localStorage.setItem(CLAVE_PARED, v ? "1" : "0");
+    } catch {
+      /* sin almacenamiento */
     }
-  }, [ahora, hora, inicio]);
+    oyentesPared.forEach((f) => f());
+  };
+  return [valor, cambiar];
 }
 
 // ---------- Clima (Open-Meteo, sin clave) ----------
@@ -140,7 +206,7 @@ export function useClima(lat: number, lon: number): Clima | null {
 /** En el teléfono, lleva la lista de días hasta "hoy" al abrir la vista. */
 export function useIrAHoyEnMovil(dependencia: unknown) {
   useEffect(() => {
-    if (window.innerWidth >= 768) return;
+    if (window.matchMedia("(min-width: 48rem)").matches) return;
     document.querySelector("[data-hoy-movil]")?.scrollIntoView({ block: "start" });
   }, [dependencia]);
 }

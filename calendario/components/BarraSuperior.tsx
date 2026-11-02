@@ -33,21 +33,21 @@ export default function BarraSuperior({
   ].slice(0, 2);
 
   return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 xl:gap-x-6 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:flex-nowrap md:px-4 md:pt-4">
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:flex-nowrap md:px-4 md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
       {/* Hora y fecha */}
-      <div className="flex items-baseline gap-4">
+      <div className="flex min-w-0 shrink-0 items-baseline gap-4 md:shrink">
         <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl">
           {ahora.hora}
         </span>
-        <div className="leading-tight">
-          <div className="whitespace-nowrap text-xl font-extrabold first-letter:uppercase md:text-2xl 2xl:text-3xl">{fecha}</div>
+        <div className="min-w-0 leading-tight">
+          <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl">{fecha}</div>
           <div className="text-base font-bold text-tinta-suave md:text-xl">{estado.ajustes.nombreFamilia}</div>
         </div>
       </div>
 
       {/* Clima */}
       {clima && ci && (
-        <div className="flex items-center gap-2 rounded-3xl bg-superficie px-3 py-2 md:px-4">
+        <div className="flex shrink-0 items-center gap-2 rounded-3xl bg-superficie px-3 py-2 md:px-4">
           <span className="text-3xl md:text-5xl" aria-hidden>
             {ci.icono}
           </span>
@@ -65,14 +65,21 @@ export default function BarraSuperior({
       <button
         type="button"
         onClick={alIrAMenu}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-3xl bg-acento-suave px-3 py-2 md:gap-3 md:px-4 text-left transition active:scale-[0.99] md:min-w-64"
+        className="flex min-w-0 flex-[1_1_14rem] items-center gap-2 rounded-3xl bg-acento-suave px-3 py-2 text-left transition active:scale-[0.99] md:gap-3 md:px-4"
       >
         <span className="text-3xl md:text-4xl" aria-hidden>
           {destacadas[0]?.emoji ?? "🍳"}
         </span>
         <div className="min-w-0 leading-tight">
           <div className="truncate text-sm font-extrabold uppercase tracking-wide text-acento md:text-base">
-            {destacadas[0] ? `Hoy · ${destacadas[0].tipo.nombre}` : "Hoy se cocina"}
+            {destacadas[0] ? (
+              <>
+                <span className="md:max-xl:hidden">Hoy · </span>
+                {destacadas[0].tipo.nombre}
+              </>
+            ) : (
+              "Hoy se cocina"
+            )}
           </div>
           {destacadas.length === 0 ? (
             <div className="truncate text-lg font-bold text-tinta-suave md:text-xl">Nada planificado · toca para elegir</div>
@@ -88,13 +95,12 @@ export default function BarraSuperior({
           )}
         </div>
       </button>
-
-      <PantallaCompleta />
     </header>
   );
 }
 
-function PantallaCompleta() {
+/** Botón ⛶ (va en el riel lateral del tablet). */
+export function PantallaCompleta() {
   const [puede, setPuede] = useState(false);
   const [activa, setActiva] = useState(false);
   useEffect(() => {
@@ -107,7 +113,6 @@ function PantallaCompleta() {
   return (
     <BotonIcono
       etiqueta={activa ? "Salir de pantalla completa" : "Pantalla completa"}
-      className="max-md:hidden"
       onClick={() =>
         activa ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {})
       }

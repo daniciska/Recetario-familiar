@@ -50,13 +50,18 @@ export function sumarDias(f: string, n: number): string {
   return deUTC(d);
 }
 
+/** Último día (28–31) del mes de la fecha. */
+export function ultimoDiaDelMes(f: string): number {
+  const [a, m] = f.split("-").map(Number);
+  return new Date(Date.UTC(a, m, 0)).getUTCDate();
+}
+
 export function sumarMeses(f: string, n: number): string {
   const d = aUTC(f);
   const dia = d.getUTCDate();
   d.setUTCDate(1);
   d.setUTCMonth(d.getUTCMonth() + n);
-  const ultimo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(dia, ultimo));
+  d.setUTCDate(Math.min(dia, ultimoDiaDelMes(deUTC(d))));
   return deUTC(d);
 }
 

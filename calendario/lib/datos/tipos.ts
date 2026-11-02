@@ -102,6 +102,7 @@ export interface ItemCompra {
   origen: "manual" | "menu";
   semana?: string; // lunes de la semana del menú que lo generó
   detalle?: string; // "Pastel de choclo, Cazuela"
+  oculto?: boolean; // comprado y sacado de la vista; se guarda para descontarlo si se regenera la lista
 }
 
 export interface Tarea {

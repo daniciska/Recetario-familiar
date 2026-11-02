@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ProveedorDatos, useDatos } from "@/lib/store";
-import { useAhora, useClima, useRecargaDiaria, useTema, useWakeLock } from "@/lib/hooks";
-import BarraSuperior from "./BarraSuperior";
+import { useAhora, useClima, useModoPared, useRecargaDiaria, useTema, useWakeLock } from "@/lib/hooks";
+import BarraSuperior, { PantallaCompleta } from "./BarraSuperior";
 import VistaCalendario from "./VistaCalendario";
 import VistaComidas from "./VistaComidas";
 import VistaRecetas from "./VistaRecetas";
@@ -36,13 +36,16 @@ function leerHash(): Pestana {
   return PESTANAS.some((p) => p.id === h) ? h : "calendario";
 }
 
+const INACTIVIDAD = 5 * 60_000;
+
 function Panel() {
-  const { estado, errorGuardado } = useDatos();
+  const { estado, errorGuardado, cerrarError, sinGuardar } = useDatos();
   const ahora = useAhora();
   const clima = useClima(estado.ajustes.latitud, estado.ajustes.longitud);
+  const [modoPared] = useModoPared();
   useTema(estado.ajustes, ahora.minutosDelDia);
   useWakeLock(true);
-  useRecargaDiaria(ahora);
+  useRecargaDiaria(ahora, "03:30", sinGuardar);
 
   const [pestana, setPestana] = useState<Pestana>("calendario");
   useEffect(() => {
@@ -51,44 +54,71 @@ function Panel() {
     window.addEventListener("hashchange", f);
     return () => window.removeEventListener("hashchange", f);
   }, []);
-  const ir = (p: Pestana) => {
+  const ir = useCallback((p: Pestana) => {
     history.replaceState(null, "", p === "calendario" ? location.pathname : `#${p}`);
     setPestana(p);
-  };
+  }, []);
 
-  // Modo pared: si nadie toca la pantalla en 5 minutos, vuelve al calendario.
+  // Modo pared: si nadie toca la pantalla en 5 minutos, vuelve al calendario de esta semana.
+  // Sólo en el equipo marcado como pantalla de pared (nunca en el teléfono), y nunca si hay
+  // una ventana abierta (una receta mientras se cocina, un formulario a medio llenar).
+  const [reinicio, setReinicio] = useState(0);
   useEffect(() => {
-    if (pestana === "calendario") return;
-    let t = setTimeout(() => ir("calendario"), 5 * 60_000);
-    const reiniciar = () => {
-      clearTimeout(t);
-      t = setTimeout(() => ir("calendario"), 5 * 60_000);
+    if (!modoPared) return;
+    let ultimo = Date.now();
+    let yaVolvio = false;
+    const actividad = () => {
+      ultimo = Date.now();
+      yaVolvio = false;
     };
-    window.addEventListener("pointerdown", reiniciar);
-    window.addEventListener("keydown", reiniciar);
+    const alVisible = () => document.visibilityState === "visible" && actividad();
+    const t = setInterval(() => {
+      if (yaVolvio || document.hidden || Date.now() - ultimo < INACTIVIDAD) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      yaVolvio = true;
+      ir("calendario");
+      setReinicio((n) => n + 1); // vuelve a semana / hoy / sin filtro
+    }, 10_000);
+    const opciones = { capture: true, passive: true } as const;
+    window.addEventListener("pointerdown", actividad, opciones);
+    window.addEventListener("keydown", actividad, opciones);
+    window.addEventListener("wheel", actividad, opciones);
+    document.addEventListener("visibilitychange", alVisible);
     return () => {
-      clearTimeout(t);
-      window.removeEventListener("pointerdown", reiniciar);
-      window.removeEventListener("keydown", reiniciar);
+      clearInterval(t);
+      window.removeEventListener("pointerdown", actividad, opciones);
+      window.removeEventListener("keydown", actividad, opciones);
+      window.removeEventListener("wheel", actividad, opciones);
+      document.removeEventListener("visibilitychange", alVisible);
     };
-  }, [pestana]);
+  }, [modoPared, ir]);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
       {/* Riel lateral (tablet / pantalla de pared) */}
-      <nav className="hidden w-28 shrink-0 flex-col items-center gap-2 border-r border-borde bg-superficie py-4 md:flex">
+      <nav className="desliza hidden w-28 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-borde bg-superficie py-4 pl-[env(safe-area-inset-left)] md:flex [@media(max-height:620px)]:gap-1 [@media(max-height:620px)]:py-2">
         {PESTANAS.map((p) => (
           <BotonPestana key={p.id} p={p} activa={pestana === p.id} onClick={() => ir(p.id)} />
         ))}
+        <div className="mt-auto pt-2">
+          <PantallaCompleta />
+        </div>
       </nav>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <BarraSuperior ahora={ahora} clima={clima} alIrAMenu={() => ir("comidas")} />
         {errorGuardado && (
-          <div className="mx-3 mb-2 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700">{errorGuardado}</div>
+          <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4">
+            <span className="flex-1">{errorGuardado}</span>
+            <button type="button" onClick={cerrarError} aria-label="Cerrar aviso" className="min-h-11 min-w-11 rounded-xl text-xl">
+              ✕
+            </button>
+          </div>
         )}
         <main className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-4 md:pb-4">
-          {pestana === "calendario" && <VistaCalendario hoy={ahora.fecha} clima={clima} />}
+          {pestana === "calendario" && (
+            <VistaCalendario key={reinicio} hoy={ahora.fecha} clima={clima} alIrAMenu={() => ir("comidas")} />
+          )}
           {pestana === "comidas" && <VistaComidas hoy={ahora.fecha} alIrACompras={() => ir("compras")} />}
           {pestana === "recetas" && <VistaRecetas />}
           {pestana === "compras" && <VistaCompras />}
@@ -133,7 +163,7 @@ function BotonPestana({
       onClick={onClick}
       aria-current={activa ? "page" : undefined}
       className={cx(
-        "flex w-22 flex-col items-center gap-1 rounded-2xl py-3 text-sm font-extrabold transition active:scale-95",
+        "flex w-22 shrink-0 flex-col items-center gap-1 rounded-2xl py-3 text-sm font-extrabold transition active:scale-95 [@media(max-height:620px)]:py-1.5",
         activa ? "bg-acento text-acento-tinta shadow" : "text-tinta-suave",
       )}
     >

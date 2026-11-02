@@ -26,23 +26,33 @@ import EventoModal from "./EventoModal";
 
 type Modo = "dia" | "semana" | "mes";
 
-export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Clima | null }) {
+export default function VistaCalendario({
+  hoy,
+  clima,
+  alIrAMenu,
+}: {
+  hoy: string;
+  clima: Clima | null;
+  alIrAMenu: () => void;
+}) {
   const { estado } = useDatos();
   const [modo, setModo] = useState<Modo>("semana");
-  const [ancla, setAncla] = useState(hoy);
+  // null = seguir a "hoy" (así a medianoche la pared pasa sola al día y la semana nuevos).
+  const [ancla, setAncla] = useState<string | null>(null);
+  const a = ancla ?? hoy;
   const [filtro, setFiltro] = useState<Set<string>>(new Set());
   const [editando, setEditando] = useState<{ evento?: Evento; fecha: string } | null>(null);
 
   const miembros = useMemo(() => new Map(estado.miembros.map((m) => [m.id, m])), [estado.miembros]);
 
   const mover = (dir: number) => {
-    if (modo === "dia") setAncla((a) => sumarDias(a, dir));
-    if (modo === "semana") setAncla((a) => sumarDias(a, 7 * dir));
-    if (modo === "mes") setAncla((a) => sumarMeses(a, dir));
+    if (modo === "dia") setAncla((x) => sumarDias(x ?? hoy, dir));
+    if (modo === "semana") setAncla((x) => sumarDias(x ?? hoy, 7 * dir));
+    if (modo === "mes") setAncla((x) => sumarMeses(x ?? hoy, dir));
   };
 
   const titulo =
-    modo === "semana" ? rangoSemana(lunesDe(ancla)) : modo === "mes" ? mesAnio(ancla) : fechaLarga(ancla, true);
+    modo === "semana" ? rangoSemana(lunesDe(a)) : modo === "mes" ? mesAnio(a) : fechaLarga(a, true);
 
   const alternar = (id: string) =>
     setFiltro((f) => {
@@ -59,13 +69,15 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
         <BotonIcono etiqueta="Anterior" onClick={() => mover(-1)}>
           ‹
         </BotonIcono>
-        <Boton onClick={() => setAncla(hoy)} className={cx(ancla === hoy && "opacity-60")}>
+        <Boton onClick={() => setAncla(null)} className={cx(a === hoy && "opacity-60")}>
           Hoy
         </Boton>
         <BotonIcono etiqueta="Siguiente" onClick={() => mover(1)}>
           ›
         </BotonIcono>
-        <h1 className="mx-1 whitespace-nowrap font-display text-2xl font-semibold first-letter:uppercase xl:text-3xl">{titulo}</h1>
+        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold first-letter:uppercase md:whitespace-nowrap xl:text-3xl">
+          {titulo}
+        </h1>
         <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
           <div className="hidden items-center gap-1 xl:flex">
             {estado.miembros.map((m) => (
@@ -94,7 +106,7 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
               { valor: "mes", texto: "Mes" },
             ]}
           />
-          <Boton variante="primario" onClick={() => setEditando({ fecha: ancla })}>
+          <Boton variante="primario" onClick={() => setEditando({ fecha: a })}>
             ＋ Evento
           </Boton>
         </div>
@@ -103,13 +115,14 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
       <div className="min-h-0 flex-1">
         {modo === "semana" && (
           <Semana
-            lunes={lunesDe(ancla)}
+            lunes={lunesDe(a)}
             hoy={hoy}
             filtro={filtro}
             miembros={miembros}
             clima={clima}
             alAbrir={(evento, fecha) => setEditando({ evento, fecha })}
             alNuevo={(fecha) => setEditando({ fecha })}
+            alIrAMenu={alIrAMenu}
             alVerDia={(f) => {
               setAncla(f);
               setModo("dia");
@@ -118,7 +131,7 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
         )}
         {modo === "mes" && (
           <Mes
-            ancla={ancla}
+            ancla={a}
             hoy={hoy}
             filtro={filtro}
             miembros={miembros}
@@ -130,12 +143,13 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
         )}
         {modo === "dia" && (
           <Dia
-            fecha={ancla}
+            fecha={a}
             hoy={hoy}
             filtro={filtro}
             miembros={miembros}
             clima={clima}
             alAbrir={(evento, fecha) => setEditando({ evento, fecha })}
+            alIrAMenu={alIrAMenu}
           />
         )}
       </div>
@@ -149,13 +163,25 @@ export default function VistaCalendario({ hoy, clima }: { hoy: string; clima: Cl
 
 // ---------- Tarjeta de evento ----------
 
+function coloresDe(ids: string[], miembros: Map<string, Miembro>): string[] {
+  return ids.map((id) => miembros.get(id)?.color).filter(Boolean) as string[];
+}
+
 function estiloPersonas(ids: string[], miembros: Map<string, Miembro>): React.CSSProperties {
-  const colores = ids.map((id) => miembros.get(id)?.color).filter(Boolean) as string[];
+  const colores = coloresDe(ids, miembros);
   const c = colores[0] ?? "#999999";
   if (colores.length <= 1) return { ["--color-persona" as string]: c };
   const paso = 100 / colores.length;
   const franjas = colores.map((col, i) => `${col} ${i * paso}% ${(i + 1) * paso}%`).join(", ");
   return { ["--color-persona" as string]: c, ["--franjas" as string]: franjas };
+}
+
+/** Punto del mes en el teléfono: un color, o un círculo repartido entre todas las personas. */
+function puntoPersonas(ids: string[], miembros: Map<string, Miembro>): string {
+  const colores = coloresDe(ids, miembros);
+  if (colores.length <= 1) return colores[0] ?? "#999999";
+  const paso = 360 / colores.length;
+  return `conic-gradient(${colores.map((c, i) => `${c} ${i * paso}deg ${(i + 1) * paso}deg`).join(", ")})`;
 }
 
 function TarjetaEvento({
@@ -179,19 +205,42 @@ function TarjetaEvento({
         onClick();
       }}
       className={cx(
-        "tarjeta-evento w-full rounded-xl px-2.5 py-2 text-left transition active:scale-[0.98]",
+        "tarjeta-evento w-full min-w-0 rounded-xl px-2 py-1.5 text-left transition active:scale-[0.98] xl:px-2.5 xl:py-2",
         personas.length > 1 && "compartido",
       )}
       style={estiloPersonas(ev.miembros, miembros)}
     >
-      <div className={cx("num whitespace-nowrap font-bold text-tinta-suave", grande ? "text-xl" : "text-sm 2xl:text-base")}>
-        {textoHora(ev)}
-        {ev.repeticion !== "nunca" && <span className="ml-1" aria-label="se repite">↻</span>}
+      <div
+        className={cx(
+          "num flex flex-wrap items-baseline font-bold leading-tight text-tinta-suave",
+          grande ? "text-xl" : "text-base 2xl:text-lg",
+        )}
+      >
+        {ev.horaInicio && ev.horaFin && !ev.todoElDia ? (
+          <>
+            <span className="whitespace-nowrap">{ev.horaInicio}–</span>
+            <span className="whitespace-nowrap">{ev.horaFin}</span>
+          </>
+        ) : (
+          <span>{textoHora(ev)}</span>
+        )}
+        {ev.repeticion !== "nunca" && (
+          <span className="ml-1" aria-label="se repite">
+            ↻
+          </span>
+        )}
       </div>
-      <div className={cx("font-extrabold leading-snug", grande ? "text-3xl" : "text-base xl:text-lg")}>{ev.titulo}</div>
+      <div
+        className={cx(
+          "font-extrabold leading-snug break-words hyphens-auto",
+          grande ? "text-3xl" : "text-base lg:text-lg xl:text-xl",
+        )}
+      >
+        {ev.titulo}
+      </div>
       <div className="mt-1 flex flex-wrap gap-0.5">
         {personas.map((m) => (
-          <span key={m.id} className={grande ? "text-2xl" : "text-base"} title={m.nombre}>
+          <span key={m.id} className={grande ? "text-2xl" : "text-lg"} title={m.nombre}>
             {m.emoji}
           </span>
         ))}
@@ -204,7 +253,8 @@ function TarjetaEvento({
 
 // ---------- Semana ----------
 
-function ComidasDelDia({ fecha, compacto }: { fecha: string; compacto?: boolean }) {
+/** Almuerzo y cena al pie del día; tocarlo lleva al menú. */
+function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void }) {
   const { estado } = useDatos();
   const recetas = new Map(estado.recetas.map((r) => [r.id, r]));
   const lista = TIPOS_COMIDA.filter((t) => t.id === "almuerzo" || t.id === "cena")
@@ -212,13 +262,21 @@ function ComidasDelDia({ fecha, compacto }: { fecha: string; compacto?: boolean 
     .filter((x) => x.c);
   if (!lista.length) return null;
   return (
-    <div className={cx("space-y-0.5 border-t border-dashed border-borde pt-1.5", compacto ? "text-sm" : "text-sm xl:text-base")}>
+    <button
+      type="button"
+      aria-label="Ver el menú"
+      onClick={(e) => {
+        e.stopPropagation();
+        alTocar();
+      }}
+      className="block w-full space-y-0.5 border-t border-dashed border-borde pt-1.5 text-left text-base transition active:scale-[0.98]"
+    >
       {lista.map(({ t, c }) => (
         <div key={t.id} className="truncate font-bold text-tinta-suave">
           <span aria-hidden>{t.emoji}</span> {nombreComida(c!, recetas)}
         </div>
       ))}
-    </div>
+    </button>
   );
 }
 
@@ -231,6 +289,7 @@ function Semana({
   alAbrir,
   alNuevo,
   alVerDia,
+  alIrAMenu,
 }: {
   lunes: string;
   hoy: string;
@@ -240,6 +299,7 @@ function Semana({
   alAbrir: (e: Evento, f: string) => void;
   alNuevo: (f: string) => void;
   alVerDia: (f: string) => void;
+  alIrAMenu: () => void;
 }) {
   const { estado } = useDatos();
   const dias = diasDeSemana(lunes);
@@ -291,7 +351,7 @@ function Semana({
                   <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, f)} />
                 ))}
               </div>
-              <ComidasDelDia fecha={f} />
+              <ComidasDelDia fecha={f} alTocar={alIrAMenu} />
             </div>
           );
         })}
@@ -323,7 +383,7 @@ function Semana({
                 ))}
               </div>
               <div className="mt-2">
-                <ComidasDelDia fecha={f} compacto />
+                <ComidasDelDia fecha={f} alTocar={alIrAMenu} />
               </div>
             </div>
           );
@@ -382,8 +442,11 @@ function Mes({
                 {lista.slice(0, 2).map((oc) => (
                   <span
                     key={oc.evento.id}
-                    className="tarjeta-evento shrink-0 truncate rounded-md px-1.5 py-px text-sm font-bold leading-snug"
-                    style={{ ["--color-persona" as string]: miembros.get(oc.evento.miembros[0])?.color ?? "#999" }}
+                    className={cx(
+                      "tarjeta-evento etiqueta-mes shrink-0 truncate rounded-md px-1.5 py-px text-sm font-bold leading-snug",
+                      coloresDe(oc.evento.miembros, miembros).length > 1 && "compartido",
+                    )}
+                    style={estiloPersonas(oc.evento.miembros, miembros)}
                   >
                     {oc.evento.titulo}
                   </span>
@@ -395,7 +458,7 @@ function Mes({
                   <span
                     key={oc.evento.id}
                     className="size-2 rounded-full"
-                    style={{ background: miembros.get(oc.evento.miembros[0])?.color }}
+                    style={{ background: puntoPersonas(oc.evento.miembros, miembros) }}
                   />
                 ))}
               </div>
@@ -416,6 +479,7 @@ function Dia({
   miembros,
   clima,
   alAbrir,
+  alIrAMenu,
 }: {
   fecha: string;
   hoy: string;
@@ -423,6 +487,7 @@ function Dia({
   miembros: Map<string, Miembro>;
   clima: Clima | null;
   alAbrir: (e: Evento, f: string) => void;
+  alIrAMenu: () => void;
 }) {
   const { estado } = useDatos();
   const lista = ocurrenciasEnRango(estado.eventos, fecha, fecha, filtro).get(fecha)!;
@@ -454,7 +519,7 @@ function Dia({
             </div>
           </div>
         )}
-        <div className="rounded-3xl bg-superficie p-4">
+        <button type="button" onClick={alIrAMenu} className="block w-full rounded-3xl bg-superficie p-4 text-left transition active:scale-[0.99]">
           <div className="mb-2 text-lg font-extrabold uppercase text-acento">Menú del día</div>
           {TIPOS_COMIDA.map((t) => {
             const c = estado.plan[claveComida(fecha, t.id)];
@@ -468,7 +533,7 @@ function Dia({
               </div>
             );
           })}
-        </div>
+        </button>
       </div>
     </div>
   );

@@ -246,6 +246,9 @@ export function Casilla({ marcada, color }: { marcada: boolean; color?: string }
 }
 
 const HORAS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+/** Propia (sin el px-4 de claseInput ni la flecha nativa) para que "09" quepa entero en el teléfono. */
+const claseHora =
+  "num min-h-13 w-auto min-w-0 flex-1 appearance-none rounded-2xl border-2 border-borde bg-fondo px-1 py-2.5 text-center text-xl font-bold text-tinta outline-none focus:border-acento disabled:opacity-60";
 const MINUTOS = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0"));
 
 /** Hora en formato 24 h (independiente del idioma del tablet). */
@@ -266,7 +269,7 @@ export function SelectorHora({
     <div className="flex items-center gap-1.5" role="group" aria-label={etiqueta}>
       <select
         aria-label={`${etiqueta}: hora`}
-        className={cx(claseInput, "num w-auto flex-1 text-center text-xl font-bold")}
+        className={claseHora}
         value={h}
         onChange={(e) => alCambiar(e.target.value ? `${e.target.value}:${mm}` : undefined)}
       >
@@ -280,7 +283,7 @@ export function SelectorHora({
       <span className="text-2xl font-black">:</span>
       <select
         aria-label={`${etiqueta}: minutos`}
-        className={cx(claseInput, "num w-auto flex-1 text-center text-xl font-bold")}
+        className={claseHora}
         value={h ? mm : ""}
         disabled={!h}
         onChange={(e) => alCambiar(`${h}:${e.target.value}`)}

@@ -38,105 +38,205 @@ export const UNIDADES: { valor: Unidad; nombre: string }[] = [
   { valor: "al gusto", nombre: "al gusto" },
 ];
 
-/** Palabras clave → categoría, con nombres chilenos. Se revisa en orden. */
+/**
+ * Palabras clave → categoría, con nombres chilenos.
+ * Cada palabra calza también en plural ("papa" → "papas", "limón" → "limones").
+ * Con "*" al final calza como raíz ("congelad*" → congelado, congeladas…).
+ */
 const DICCIONARIO: [CategoriaCompra, string[]][] = [
-  ["Congelados", ["congelad", "helado", "arvejas congeladas"]],
+  ["Congelados", ["congelad*", "helado", "arvejas congeladas"]],
   [
     "Lácteos y huevos",
-    ["leche", "queso", "quesillo", "mantequilla", "crema", "yogur", "manjar", "huevo", "margarina"],
+    [
+      "leche", "queso", "quesillo", "mantequilla", "crema", "yogur", "yogurt", "manjar", "huevo",
+      "margarina", "mozzarella", "ricotta", "leche condensada", "leche evaporada",
+    ],
   ],
   [
     "Carnes y pescados",
     [
       "carne", "pollo", "posta", "osobuco", "plateada", "lomo", "pulpa", "cerdo", "chuleta",
-      "longaniza", "chorizo", "tocino", "jamón", "jamon", "salchicha", "vienesa", "pescado",
-      "merluza", "reineta", "salmón", "salmon", "jurel", "atún", "atun", "camarón", "camaron",
-      "pino", "molida", "costilla", "trutro", "pechuga", "vacuno",
+      "longaniza", "chorizo", "tocino", "jamón", "salchicha", "vienesa", "pescado", "merluza",
+      "reineta", "salmón", "jurel", "atún", "camarón", "pino", "molida", "costilla", "costillar",
+      "trutro", "pechuga", "vacuno", "congrio", "corvina", "chorito", "macha", "almeja", "ostión",
+      "jaiba", "loco", "pulpo", "calamar", "marisco", "pavo", "asiento", "tapapecho",
+      "sobrecostilla", "huachalomo", "malaya", "pernil", "prieta", "panceta", "salame",
+      "hamburguesa", "filete", "abastero", "punta de ganso", "lomo vetado",
     ],
   ],
   [
     "Verduras y frutas",
     [
-      "cebolla", "ajo", "tomate", "lechuga", "papa", "zapallo", "choclo", "zanahoria", "pimentón",
-      "pimenton", "ají", "aji", "cilantro", "perejil", "albahaca", "apio", "porotos verdes",
-      "poroto verde", "acelga", "espinaca", "betarraga", "palta", "limón", "limon", "plátano",
-      "platano", "manzana", "naranja", "frutilla", "pepino", "repollo", "brócoli", "brocoli",
-      "coliflor", "champiñón", "champinon", "camote", "porotos granados", "arveja", "pera",
-      "durazno", "uva", "kiwi", "mandarina", "cebollín", "cebollin", "puerro", "berenjena",
+      "cebolla", "ajo", "tomate", "lechuga", "papa", "zapallo", "zapallo italiano", "choclo",
+      "zanahoria", "pimentón", "ají", "cilantro", "perejil", "albahaca", "apio", "porotos verdes",
+      "poroto verde", "acelga", "espinaca", "betarraga", "palta", "limón", "plátano", "manzana",
+      "naranja", "frutilla", "pepino", "repollo", "brócoli", "coliflor", "champiñón", "camote",
+      "porotos granados", "arveja", "pera", "durazno", "uva", "kiwi", "mandarina", "cebollín",
+      "puerro", "berenjena", "haba", "rábano", "melón", "sandía", "piña", "cereza", "ciruela",
+      "damasco", "zucchini", "espárrago", "jengibre", "romero", "menta", "chirimoya", "lúcuma",
+      "membrillo", "alcachofa", "frambuesa", "arándano", "mora", "papaya", "ciboulette",
+      "tomillo",
     ],
   ],
-  ["Panadería", ["pan", "marraqueta", "hallulla", "pan de molde", "tortilla", "masa"]],
+  ["Panadería", ["pan", "marraqueta", "hallulla", "pan de molde", "pan amasado", "tortilla", "masa", "dobladita"]],
   [
     "Condimentos y especias",
     [
-      "sal", "pimienta", "comino", "orégano", "oregano", "merkén", "merken", "paprika", "ají de color",
-      "aji de color", "laurel", "canela", "nuez moscada", "caldo", "vinagre", "mostaza", "mayonesa",
-      "ketchup", "salsa", "chancho en piedra", "vainilla", "azúcar flor",
+      "sal", "pimienta", "comino", "orégano", "merkén", "paprika", "ají de color", "laurel",
+      "canela", "nuez moscada", "caldo", "vinagre", "mostaza", "mayonesa", "ketchup", "salsa",
+      "chancho en piedra", "pebre", "vainilla", "esencia de vainilla", "azúcar flor", "aliño",
+      "curry", "ajo en polvo", "ajo granulado",
     ],
   ],
-  ["Bebidas", ["jugo", "bebida", "agua mineral", "vino", "cerveza", "té ", "café"]],
-  ["Aseo y hogar", ["detergente", "lavaloza", "papel higiénico", "toalla", "cloro", "esponja", "bolsas", "jabón"]],
+  ["Bebidas", ["jugo", "bebida", "agua", "agua mineral", "vino", "cerveza", "té", "café", "néctar", "pisco"]],
+  [
+    "Aseo y hogar",
+    [
+      "detergente", "lavaloza", "papel higiénico", "toalla", "toalla de papel", "cloro", "esponja",
+      "bolsa", "jabón", "suavizante", "servilleta", "lavalozas",
+    ],
+  ],
   [
     "Despensa",
     [
-      "arroz", "fideo", "tallarín", "tallarin", "spaghetti", "harina", "azúcar", "azucar", "aceite",
-      "poroto", "lenteja", "garbanzo", "avena", "chuño", "maicena", "polvos de hornear", "levadura",
-      "chancaca", "mermelada", "galleta", "cereal", "aceituna", "pasas", "nuez", "almendra",
-      "salsa de tomate", "pasta de tomate", "conserva", "mote", "sémola", "semola", "quinoa",
+      "arroz", "fideo", "tallarín", "spaghetti", "espagueti", "harina", "azúcar", "aceite", "poroto",
+      "lenteja", "garbanzo", "avena", "chuño", "maicena", "polvos de hornear", "polvo de hornear",
+      "levadura", "chancaca", "mermelada", "galleta", "cereal", "aceituna", "pasas", "nuez", "nueces",
+      "almendra", "salsa de tomate", "pasta de tomate", "conserva", "mote", "sémola", "quinoa",
+      "miel", "chocolate", "maíz", "maní", "mantequilla de maní", "pan rallado", "coco rallado",
     ],
   ],
 ];
 
-function sinTildes(t: string) {
-  return t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+/** Minúsculas, sin tildes y sin espacios de sobra. */
+export function sinTildes(t: string) {
+  return t
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
+const escapar = (q: string) => q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const PATRONES: { cat: CategoriaCompra; largo: number; exp: RegExp; congelado: boolean }[] = DICCIONARIO.flatMap(
+  ([cat, palabras]) =>
+    palabras.map((p) => {
+      const raiz = p.endsWith("*");
+      const q = sinTildes(raiz ? p.slice(0, -1) : p);
+      const fin = raiz ? "" : "(?:s|es)?(?=[^a-z]|$)";
+      return { cat, largo: q.length, exp: new RegExp(`(^|[^a-z])${escapar(q)}${fin}`), congelado: q === "congelad" };
+    }),
+);
+
+/**
+ * Adivina la categoría por el nombre. En español el producto va primero ("yogur de frutilla",
+ * "caldo de pollo"), así que gana la palabra que aparece antes; si empatan, la más larga
+ * ("porotos verdes" le gana a "poroto"). "Congelado" en cualquier parte manda a Congelados.
+ */
 export function adivinarCategoria(nombre: string): CategoriaCompra {
   const n = ` ${sinTildes(nombre)} `;
-  // Primero las coincidencias más largas (evita que "porotos verdes" caiga en Despensa).
-  let mejor: { cat: CategoriaCompra; largo: number } | null = null;
-  for (const [cat, palabras] of DICCIONARIO) {
-    for (const p of palabras) {
-      const q = sinTildes(p);
-      const exp = new RegExp(`(^|[^a-z])${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
-      if (exp.test(n) && (!mejor || q.length > mejor.largo)) mejor = { cat, largo: q.length };
-    }
+  let mejor: { cat: CategoriaCompra; largo: number; pos: number } | null = null;
+  for (const p of PATRONES) {
+    const m = p.exp.exec(n);
+    if (!m) continue;
+    if (p.congelado) return "Congelados";
+    const pos = m.index + m[1].length;
+    if (!mejor || pos < mejor.pos || (pos === mejor.pos && p.largo > mejor.largo)) mejor = { cat: p.cat, largo: p.largo, pos };
   }
   return mejor?.cat ?? "Otros";
 }
 
+/** Clave para sumar ingredientes: sin tildes, espacios simples y en singular ("Huevos" = "huevo"). */
+export function claveIngrediente(nombre: string): string {
+  return sinTildes(nombre).split(" ").map(singular).join(" ");
+}
+
+function singular(w: string): string {
+  if (w.length <= 3) return w; // sal, ajo, pan, té
+  let s = w.endsWith("s") ? w.slice(0, -1) : w; // tomates → tomate
+  if (s.length > 3 && /[lnrdjy]e$/.test(s)) s = s.slice(0, -1); // limone → limon, pane → pan
+  if (/ie$/.test(s)) s = s.slice(0, -1); // ajíes → aji
+  return s.replace(/z$/, "ce"); // nuez = nueces, arroz = arroces
+}
+
 // ---------- Unidades ----------
+
+/**
+ * Equivalencias de tazas y cucharadas para poder sumarlas con g o ml.
+ * Se busca por el comienzo del nombre (el producto va primero).
+ */
+const EQUIVALENCIAS: [string, "ml" | "g", number][] = (
+  [
+  // líquidos: 1 taza = 250 ml
+  ["leche", "ml", 250],
+  ["agua", "ml", 250],
+  ["aceite", "ml", 250],
+  ["caldo", "ml", 250],
+  ["crema", "ml", 250],
+  ["jugo", "ml", 250],
+  ["vino", "ml", 250],
+  ["vinagre", "ml", 250],
+  ["salsa de soya", "ml", 250],
+  // sólidos: gramos por taza
+  ["arroz", "g", 200],
+  ["harina", "g", 140],
+  ["azucar flor", "g", 120],
+  ["azucar", "g", 200],
+  ["avena", "g", 90],
+  ["maicena", "g", 130],
+  ["pan rallado", "g", 110],
+  ["queso rallado", "g", 100],
+  ["coco rallado", "g", 80],
+  ["choclo", "g", 160],
+  ["arveja", "g", 150],
+  ["poroto", "g", 180],
+  ["lenteja", "g", 190],
+  ["garbanzo", "g", 180],
+  ["quinoa", "g", 170],
+  ["mote", "g", 180],
+  ["nueces", "g", 120],
+  ["pasas", "g", 150],
+  ] as [string, "ml" | "g", number][]
+).map(([p, u, n]) => [claveIngrediente(p), u, n]);
+
+const MEDIDA_EN_CDTA: Partial<Record<Unidad, number>> = { taza: 48, cda: 3, cdta: 1 };
 
 type Base = { unidad: Unidad; factor: number };
 
-/** Unidad base para sumar: g y kg se suman en g; ml y l en ml; taza = 250 ml. */
-function base(u: Unidad): Base {
-  switch (u) {
-    case "kg":
-      return { unidad: "g", factor: 1000 };
-    case "l":
-      return { unidad: "ml", factor: 1000 };
-    case "taza":
-      return { unidad: "ml", factor: 250 };
-    default:
-      return { unidad: u, factor: 1 };
+/** Unidad base para sumar: g y kg en g; ml y l en ml; tazas y cucharadas en g/ml si se sabe, o en cdta. */
+function base(u: Unidad, clave = ""): Base {
+  if (u === "kg") return { unidad: "g", factor: 1000 };
+  if (u === "l") return { unidad: "ml", factor: 1000 };
+  const enCdta = MEDIDA_EN_CDTA[u];
+  if (enCdta) {
+    const eq = EQUIVALENCIAS.find(([p]) => clave === p || clave.startsWith(p + " "));
+    if (eq) return { unidad: eq[1], factor: (eq[2] / 48) * enCdta };
+    return { unidad: "cdta", factor: enCdta };
   }
+  return { unidad: u, factor: 1 };
 }
 
-/** Pasa de vuelta a la unidad más cómoda de leer. */
+/** Pasa de la unidad base a la más cómoda de leer. */
 export function legible(cantidad: number | null, unidad: Unidad): { cantidad: number | null; unidad: Unidad } {
   if (cantidad == null) return { cantidad, unidad };
   if (unidad === "g" && cantidad >= 1000) return { cantidad: cantidad / 1000, unidad: "kg" };
   if (unidad === "ml" && cantidad >= 1000) return { cantidad: cantidad / 1000, unidad: "l" };
+  if (unidad === "cdta" && cantidad >= 48) return { cantidad: cantidad / 48, unidad: "taza" };
+  if (unidad === "cdta" && cantidad >= 3) return { cantidad: cantidad / 3, unidad: "cda" };
   return { cantidad, unidad };
 }
 
-/** Redondeo amable para la lista de compras. */
+/** Redondeo amable para la lista de compras (siempre hacia arriba: mejor que sobre). */
 function redondear(c: number, u: Unidad): number {
-  if (u === "g" || u === "ml") return c >= 100 ? Math.ceil(c / 50) * 50 : Math.ceil(c / 10) * 10;
-  if (u === "kg" || u === "l") return Math.ceil(c * 4) / 4; // de a cuarto
+  if (c <= 0) return 0;
+  if (u === "g" || u === "ml") {
+    const paso = c < 100 ? 10 : c < 1000 ? 50 : 100;
+    return Math.ceil(c / paso - 1e-9) * paso;
+  }
   if (["unidad", "diente", "atado", "lata", "paquete"].includes(u)) return Math.ceil(c - 1e-9);
-  return Math.round(c * 4) / 4;
+  return Math.ceil(c * 4 - 1e-9) / 4; // kg, l, tazas, cucharadas, pizcas: de a cuarto
 }
 
 const fmtNum = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2 });
@@ -181,6 +281,10 @@ export interface LineaGenerada {
   unidad: Unidad;
   categoria: CategoriaCompra;
   recetas: string[];
+  /** Ya está todo comprado (marcado en el carro): parte desmarcada. */
+  yaComprado?: boolean;
+  /** Cuánto se descontó por estar ya comprado, para mostrarlo. */
+  descontado?: string;
 }
 
 export function claveComida(fecha: string, tipo: string) {
@@ -194,7 +298,23 @@ export function comidasDeSemana(plan: PlanComidas, lunes: string): ComidaPlanifi
     .map(([, v]) => v);
 }
 
-export function generarLista(plan: PlanComidas, recetas: Receta[], lunes: string): LineaGenerada[] {
+/** Clave de suma de un ingrediente o de un ítem de la lista: nombre en singular + unidad base. */
+function claveSuma(nombre: string, unidad: Unidad): { clave: string; b: Base } {
+  const n = claveIngrediente(nombre);
+  const b = base(unidad, n);
+  return { clave: `${n}|${b.unidad}`, b };
+}
+
+/**
+ * Junta los ingredientes del menú de la semana, escalados por porciones y sumados.
+ * Si se pasa la lista de compras, descuenta lo que ya está comprado de esa semana.
+ */
+export function generarLista(
+  plan: PlanComidas,
+  recetas: Receta[],
+  lunes: string,
+  compras: ItemCompra[] = [],
+): LineaGenerada[] {
   const porId = new Map(recetas.map((r) => [r.id, r]));
   const acumulado = new Map<string, LineaGenerada>();
 
@@ -202,8 +322,8 @@ export function generarLista(plan: PlanComidas, recetas: Receta[], lunes: string
     const receta = comida.recetaId ? porId.get(comida.recetaId) : undefined;
     if (!receta) continue;
     for (const ing of receta.ingredientes) {
-      const b = base(ing.unidad);
-      const clave = `${sinTildes(ing.nombre)}|${b.unidad}`;
+      if (!ing.nombre.trim()) continue;
+      const { clave, b } = claveSuma(ing.nombre, ing.unidad);
       const cant = escalar(ing.cantidad, receta, comida.porciones);
       const previo = acumulado.get(clave);
       if (previo) {
@@ -212,7 +332,7 @@ export function generarLista(plan: PlanComidas, recetas: Receta[], lunes: string
       } else {
         acumulado.set(clave, {
           clave,
-          nombre: ing.nombre.trim(),
+          nombre: ing.nombre.trim().replace(/\s+/g, " "),
           cantidad: cant == null ? null : cant * b.factor,
           unidad: b.unidad,
           categoria: ing.categoria,
@@ -222,14 +342,36 @@ export function generarLista(plan: PlanComidas, recetas: Receta[], lunes: string
     }
   }
 
+  // Lo que ya se compró de esta semana (en unidad base).
+  const comprado = new Map<string, number | null>();
+  for (const c of compras) {
+    if (c.origen !== "menu" || c.semana !== lunes || !c.comprado) continue;
+    const { clave, b } = claveSuma(c.nombre, c.unidad);
+    const previo = comprado.get(clave);
+    const cant = c.cantidad == null ? null : c.cantidad * b.factor;
+    comprado.set(clave, cant == null ? (previo ?? null) : (previo ?? 0) + cant);
+  }
+
   return [...acumulado.values()]
     .map((l) => {
-      const r = legible(l.cantidad, l.unidad);
-      return {
-        ...l,
-        cantidad: r.cantidad == null ? null : redondear(r.cantidad, r.unidad),
-        unidad: r.unidad,
-      };
+      let cantidad = l.cantidad;
+      let yaComprado = false;
+      let descontado: string | undefined;
+      if (comprado.has(l.clave)) {
+        const ya = comprado.get(l.clave);
+        if (cantidad == null || ya == null) yaComprado = true;
+        else {
+          const r = legible(redondear(ya, l.unidad), l.unidad);
+          descontado = textoCantidad(r.cantidad, r.unidad);
+          cantidad = cantidad - ya;
+          if (cantidad <= 1e-9) {
+            cantidad = 0;
+            yaComprado = true;
+          }
+        }
+      }
+      const r = legible(cantidad == null ? null : redondear(cantidad, l.unidad), l.unidad);
+      return { ...l, cantidad: r.cantidad, unidad: r.unidad, yaComprado, descontado };
     })
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }

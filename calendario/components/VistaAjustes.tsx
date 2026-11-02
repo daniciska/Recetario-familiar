@@ -3,7 +3,10 @@
 import { useRef, useState } from "react";
 import { useDatos } from "@/lib/store";
 import type { EstadoApp, Miembro, Tema } from "@/lib/datos/tipos";
+import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
+import { hoy } from "@/lib/fechas";
+import { useModoPared } from "@/lib/hooks";
 import { Avatar, Boton, Campo, Entrada, Modal, Segmentos, Selector, SelectorHora, cx } from "./ui";
 
 const CIUDADES: { nombre: string; lat: number; lon: number }[] = [
@@ -32,6 +35,7 @@ export default function VistaAjustes() {
   const [editando, setEditando] = useState<Miembro | "nuevo" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmarReset, setConfirmarReset] = useState(false);
+  const [modoPared, setModoPared] = useModoPared();
   const archivo = useRef<HTMLInputElement>(null);
   const a = estado.ajustes;
   const setA = (cambios: Partial<EstadoApp["ajustes"]>) => actualizar("ajustes", (p) => ({ ...p, ...cambios }));
@@ -41,20 +45,26 @@ export default function VistaAjustes() {
     const url = URL.createObjectURL(blob);
     const enlace = document.createElement("a");
     enlace.href = url;
-    enlace.download = `calendario-familiar-${new Date().toISOString().slice(0, 10)}.json`;
+    enlace.download = `calendario-familiar-${hoy()}.json`;
     enlace.click();
     URL.revokeObjectURL(url);
   };
 
   const importar = async (f: File) => {
+    let crudo: unknown;
     try {
-      const datos = JSON.parse(await f.text()) as EstadoApp;
-      if (!datos.miembros || !datos.eventos || !datos.recetas) throw new Error("formato");
-      reemplazarTodo({ ...estadoEjemplo(), ...datos });
-      setMsg("✓ Respaldo cargado.");
+      crudo = JSON.parse(await f.text());
     } catch {
-      setMsg("Ese archivo no parece un respaldo de esta app.");
+      return setMsg("Ese archivo no parece un respaldo de esta app.");
     }
+    const r = normalizarRespaldo(crudo, estadoEjemplo().ajustes);
+    if ("error" in r) return setMsg(r.error);
+    const ok = await reemplazarTodo(r.estado);
+    setMsg(
+      ok
+        ? "✓ Respaldo cargado."
+        : "No se pudo cargar: no cabe en el almacenamiento de este equipo (las fotos ocupan mucho). Tus datos siguen como estaban.",
+    );
   };
 
   return (
@@ -121,6 +131,21 @@ export default function VistaAjustes() {
               ]}
             />
           </div>
+          <div className="md:col-span-2">
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave">Este equipo</span>
+            <Segmentos<"pared" | "normal">
+              valor={modoPared ? "pared" : "normal"}
+              alCambiar={(v) => setModoPared(v === "pared")}
+              opciones={[
+                { valor: "pared", texto: "🖼️ Pared" },
+                { valor: "normal", texto: "📱 Teléfono u otro" },
+              ]}
+            />
+            <p className="mt-1.5 text-base text-tinta-suave">
+              Si este equipo es la pantalla de la pared y nadie la toca en 5 minutos, vuelve sola al calendario de esta semana
+              (salvo que haya una ventana abierta). Este ajuste es sólo de este equipo.
+            </p>
+          </div>
           {a.tema === "auto" && (
             <div className="grid grid-cols-2 gap-3 md:col-span-2">
               <div>
@@ -143,22 +168,33 @@ export default function VistaAjustes() {
           </p>
           <div className="flex flex-wrap gap-2">
             <Boton onClick={exportar}>⬇️ Descargar respaldo</Boton>
-            <Boton onClick={() => archivo.current?.click()}>⬆️ Cargar respaldo</Boton>
+            <Boton
+              onClick={() => {
+                setMsg(null);
+                archivo.current?.click();
+              }}
+            >
+              ⬆️ Cargar respaldo
+            </Boton>
             <input
               ref={archivo}
               type="file"
               accept="application/json,.json"
               className="hidden"
-              onChange={(e) => e.target.files?.[0] && importar(e.target.files[0])}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = ""; // así se puede volver a elegir el mismo archivo
+                if (f) importar(f);
+              }}
             />
             {confirmarReset ? (
               <>
                 <Boton
                   variante="peligro"
-                  onClick={() => {
-                    reemplazarTodo(estadoEjemplo());
+                  onClick={async () => {
+                    const ok = await reemplazarTodo(estadoEjemplo());
                     setConfirmarReset(false);
-                    setMsg("✓ Datos de ejemplo restaurados.");
+                    setMsg(ok ? "✓ Datos de ejemplo restaurados." : "No se pudo guardar en este equipo.");
                   }}
                 >
                   Sí, borrar todo
@@ -195,11 +231,13 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
       },
   );
   const [confirmar, setConfirmar] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const guardar = () => {
+  const guardar = async () => {
     const limpio = { ...m, nombre: m.nombre.trim() };
-    actualizar("miembros", (l) => (miembro ? l.map((x) => (x.id === m.id ? limpio : x)) : [...l, limpio]));
-    alCerrar();
+    const ok = await actualizar("miembros", (l) => (miembro ? l.map((x) => (x.id === m.id ? limpio : x)) : [...l, limpio]));
+    if (ok) alCerrar();
+    else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };
 
   const borrar = () => {
@@ -244,6 +282,7 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
       }
     >
       <div className="space-y-5">
+        {error && <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300">{error}</p>}
         <div className="flex items-center gap-4">
           <Avatar miembro={m} tam="lg" />
           <Campo etiqueta="Nombre">

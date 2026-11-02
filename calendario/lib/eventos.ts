@@ -1,5 +1,5 @@
 import type { Evento, Ocurrencia } from "./datos/tipos";
-import { diaSemana, diferenciaDias, partes, sumarDias } from "./fechas";
+import { diaSemana, diferenciaDias, partes, sumarDias, ultimoDiaDelMes } from "./fechas";
 
 /** ¿Ocurre el evento en la fecha dada? */
 export function ocurreEn(ev: Evento, f: string): boolean {
@@ -13,9 +13,13 @@ export function ocurreEn(ev: Evento, f: string): boolean {
       return true;
     case "semanal":
       return diaSemana(f) === diaSemana(ev.fecha);
-    case "mensual":
-      // Si el mes no tiene ese día (p. ej. 31), no ocurre ese mes.
-      return partes(f).dia === partes(ev.fecha).dia;
+    case "mensual": {
+      // Si el mes no tiene ese día (p. ej. 31 en abril), se muestra el último día del mes.
+      const dia = partes(f).dia;
+      const inicio = partes(ev.fecha).dia;
+      const ultimo = ultimoDiaDelMes(f);
+      return dia === inicio || (inicio > ultimo && dia === ultimo);
+    }
   }
 }
 

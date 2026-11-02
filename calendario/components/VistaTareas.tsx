@@ -25,6 +25,13 @@ export default function VistaTareas() {
       ...l,
     ]);
     setTexto("");
+    // Que la tarea recién agregada no quede escondida por el filtro.
+    if (filtro !== "todos" && para !== filtro) setFiltro(para ?? "todos");
+  };
+  /** Al filtrar por una persona, las tareas nuevas son para ella. */
+  const filtrar = (id: string | "todos") => {
+    setFiltro(id);
+    setPara(id === "todos" ? undefined : id);
   };
 
   const alternar = (id: string) => actualizar("tareas", (l) => l.map((t) => (t.id === id ? { ...t, hecha: !t.hecha } : t)));
@@ -39,11 +46,11 @@ export default function VistaTareas() {
           Tareas de la casa <span className="num text-tinta-suave">· {estado.tareas.filter((t) => !t.hecha).length}</span>
         </h1>
         <div className="flex flex-wrap gap-1.5 md:ml-auto">
-          <FiltroBtn activo={filtro === "todos"} onClick={() => setFiltro("todos")}>
+          <FiltroBtn activo={filtro === "todos"} onClick={() => filtrar("todos")}>
             Todos
           </FiltroBtn>
           {estado.miembros.map((m) => (
-            <FiltroBtn key={m.id} activo={filtro === m.id} color={m.color} onClick={() => setFiltro(m.id)}>
+            <FiltroBtn key={m.id} activo={filtro === m.id} color={m.color} onClick={() => filtrar(m.id)}>
               {m.emoji} {m.nombre}
             </FiltroBtn>
           ))}
@@ -156,7 +163,12 @@ function FilaTarea({
         <Casilla marcada={t.hecha} color={m?.color} />
         <span className={cx("text-xl font-extrabold leading-tight md:text-2xl", t.hecha && "line-through")}>{t.titulo}</span>
       </button>
-      <button type="button" onClick={siguiente} aria-label="Cambiar persona" className="flex items-center gap-1.5 rounded-full bg-superficie-2 py-1 pl-1 pr-3">
+      <button
+        type="button"
+        onClick={siguiente}
+        aria-label="Cambiar persona"
+        className="flex min-h-12 shrink-0 items-center gap-1.5 rounded-full bg-superficie-2 py-1 pl-2 pr-3"
+      >
         {m ? <Avatar miembro={m} tam="sm" /> : <span className="flex size-7 items-center justify-center text-lg">👥</span>}
         <span className="hidden text-base font-bold sm:inline">{m?.nombre ?? "Cualquiera"}</span>
       </button>

@@ -23,9 +23,26 @@ export const viewport: Viewport = {
   themeColor: "#fbf6ee",
 };
 
+/**
+ * Pone el tema (claro / noche) antes de pintar nada, para que la recarga nocturna no
+ * destelle en claro. Repite la regla de `esDeNoche` (lib/hooks.ts) con los ajustes guardados.
+ */
+const TEMA_INICIAL = `(function(){try{
+var a={};try{a=JSON.parse(localStorage.getItem("calendario-familiar:v1:ajustes")||"{}")||{}}catch(e){}
+var t=a.tema||"auto",d=a.nocheDesde||"20:30",h=a.nocheHasta||"07:00";
+var o={};new Intl.DateTimeFormat("en-GB",{timeZone:"America/Santiago",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).forEach(function(x){o[x.type]=x.value});
+var m=(+o.hour%24)*60+(+o.minute);function n(s){var q=String(s).split(":");return +q[0]*60+ +q[1]}var D=n(d),H=n(h);
+var noche=t==="noche"||(t==="auto"&&(D>H?(m>=D||m<H):(m>=D&&m<H)));
+document.documentElement.dataset.tema=noche?"noche":"claro";
+if(noche){var mt=document.querySelector('meta[name="theme-color"]');if(mt)mt.setAttribute("content","#1b1714")}
+}catch(e){}})();`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es-CL" data-tema="claro" className={`${texto.variable} ${titulo.variable}`}>
+    <html lang="es-CL" data-tema="claro" className={`${texto.variable} ${titulo.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: TEMA_INICIAL }} />
+      </head>
       <body>{children}</body>
     </html>
   );
