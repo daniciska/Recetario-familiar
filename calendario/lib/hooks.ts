@@ -60,8 +60,9 @@ export function useWakeLock(activo = true) {
  *
  * Sólo recarga si el servidor responde (sin internet, recargar dejaría la pantalla de error
  * del navegador), si nadie tocó la pantalla en los últimos 2 minutos y si no hay cambios que
- * vivan sólo en memoria. Una ventana abierta la frena sólo si alguien la tocó en la última hora
- * (una olvidada se limpia como antes). Si no se puede, lo reintenta cada 5 minutos; si el equipo
+ * vivan sólo en memoria. Una ventana abierta la frena siempre, salvo de madrugada (entre `hora` y
+ * las 06:00) si nadie la toca hace una hora: esa se da por olvidada y se limpia. `hora` debe ser
+ * anterior a las 06:00. Si no se puede, lo reintenta cada 5 minutos; si el equipo
  * estaba suspendido a esa hora, lo intenta al despertar, cuando se cumplan esas condiciones.
  */
 export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false) {
@@ -97,7 +98,11 @@ export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false
     const sePuede = () => {
       const quieto = Date.now() - ultimoToque.current;
       if (bloqueadaRef.current || document.hidden || quieto < 2 * 60_000) return false;
-      if (document.querySelector('[role="dialog"]') && quieto < 60 * 60_000) return false;
+      // Una ventana olvidada (1 h sin tocar) sólo se limpia de madrugada; de día, una abierta
+      // (una receta mientras se cocina, un formulario a medio llenar) siempre la frena.
+      const h = ahoraEnSantiago().hora;
+      const olvidada = h >= hora && h < "06:00" && quieto >= 60 * 60_000;
+      if (document.querySelector('[role="dialog"]') && !olvidada) return false;
       return navigator.onLine !== false;
     };
     if (`${ahora.fecha} ${ahora.hora}` < objetivo) return;
@@ -120,7 +125,7 @@ export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false
 }
 
 /** Igual que la variante `md` de globals.css: ancho de tablet y alto suficiente (un teléfono horizontal no cuenta). */
-export const MEDIA_TABLET = "(min-width: 48rem) and (min-height: 30rem)";
+export const MEDIA_TABLET = "(min-width: 48rem) and (min-height: 29rem)";
 
 // ---------- Modo pared (ajuste de este equipo, no se comparte) ----------
 
@@ -129,7 +134,7 @@ const oyentesPared = new Set<() => void>();
 
 /** Por defecto: pantalla táctil grande y apaisada (el tablet de la pared), nunca un teléfono. */
 function paredPorDefecto(): boolean {
-  return window.matchMedia("(min-width: 900px) and (min-height: 500px) and (pointer: coarse)").matches;
+  return window.matchMedia("(min-width: 900px) and (min-height: 464px) and (pointer: coarse)").matches;
 }
 
 function leerPared(): boolean {

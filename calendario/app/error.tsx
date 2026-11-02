@@ -3,6 +3,8 @@
 import { useState } from "react";
 
 const PREFIJO = "calendario-familiar:v1:";
+const COMO_OBJETO = new Set(["plan", "ajustes"]);
+const COMO_LISTA = new Set(["miembros", "eventos", "recetas", "compras", "tareas"]);
 
 /** Si algo falla al dibujar la app (p. ej. datos dañados), se puede salir sin borrar el navegador. */
 export default function ErrorApp({ reset }: { error: Error; reset: () => void }) {
@@ -10,23 +12,34 @@ export default function ErrorApp({ reset }: { error: Error; reset: () => void })
 
   const descargar = () => {
     const datos: Record<string, unknown> = {};
+    const danados: Record<string, string | null> = {};
     let claves: string[] = [];
     try {
       claves = Object.keys(localStorage).filter((k) => k.startsWith(PREFIJO));
     } catch {
       /* almacenamiento bloqueado */
     }
-    // Cada clave por separado: una dañada no impide copiar las demás (se guarda su texto tal cual).
+    // Cada clave por separado: una dañada no impide copiar las demás. La dañada queda vacía pero del
+    // tipo correcto, para que la copia se pueda volver a cargar con lo sano; su texto va aparte.
     for (const k of claves) {
+      const c = k.slice(PREFIJO.length);
       let texto: string | null = null;
       try {
         texto = localStorage.getItem(k);
-        datos[k.slice(PREFIJO.length)] = JSON.parse(texto ?? "null");
+        const v: unknown = JSON.parse(texto ?? "null");
+        const esObjeto = typeof v === "object" && v !== null && !Array.isArray(v);
+        if ((COMO_OBJETO.has(c) && !esObjeto) || (COMO_LISTA.has(c) && !Array.isArray(v))) throw new Error("tipo");
+        datos[c] = v;
       } catch {
-        datos[k.slice(PREFIJO.length)] = { _textoDañado: texto };
+        if (COMO_OBJETO.has(c)) datos[c] = {};
+        else if (COMO_LISTA.has(c)) datos[c] = [];
+        danados[c] = texto;
       }
     }
-    const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 1, ...datos }, null, 2)], { type: "application/json" }));
+    // Las colecciones que falten van vacías: así el archivo siempre se puede cargar en "Cargar respaldo".
+    if (claves.length) for (const c of COMO_LISTA) if (!(c in datos)) datos[c] = [];
+    const copia = { version: 1, ...datos, ...(Object.keys(danados).length ? { _dañados: danados } : {}) };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(copia, null, 2)], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = "calendario-familiar-copia.json";

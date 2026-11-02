@@ -372,12 +372,12 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
             {r.ingredientes.map((i) => (
               <div
                 key={i.id}
-                className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2 rounded-2xl bg-superficie-2 p-2 md:grid-cols-[6rem_9rem_minmax(0,1fr)_13rem_auto]"
+                className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2 rounded-2xl bg-superficie-2 p-2 md:grid-cols-[minmax(0,1fr)_6rem_9rem_13rem_auto]"
               >
                 <Entrada
                   aria-label="Ingrediente"
                   placeholder="Ingrediente"
-                  className="col-span-2 col-start-1 row-start-1 md:col-span-1 md:col-start-3 md:row-start-1"
+                  className="col-span-2 col-start-1 row-start-1 md:col-span-1 md:col-start-1 md:row-start-1"
                   value={i.nombre}
                   onChange={(e) => {
                     const nombre = e.target.value;
@@ -388,7 +388,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 />
                 <Entrada
                   aria-label="Cantidad"
-                  className="col-start-1 row-start-2 md:col-start-1 md:row-start-1"
+                  className="col-start-1 row-start-2 md:col-start-2 md:row-start-1"
                   type="number"
                   inputMode="decimal"
                   step="any"
@@ -400,7 +400,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 />
                 <Selector
                   aria-label="Unidad"
-                  className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:col-start-2 md:row-start-1"
+                  className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:col-start-3 md:row-start-1"
                   value={i.unidad}
                   onChange={(e) => {
                     const u = e.target.value as Unidad;

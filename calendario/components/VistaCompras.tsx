@@ -5,7 +5,7 @@ import { useDatos } from "@/lib/store";
 import type { CategoriaCompra, ItemCompra, Unidad } from "@/lib/datos/tipos";
 import { CATEGORIAS, adivinarCategoria, agruparPorCategoria, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
-import { hoy, lunesDe, partes, sumarDias, MESES } from "@/lib/fechas";
+import { hoy, lunesDe, semanaCorta } from "@/lib/fechas";
 import { Boton, BotonIcono, Casilla, Entrada, Selector, Vacio, cx } from "./ui";
 
 /** Unidades que se entienden al escribir a mano ("2 kilos de papas", "1 docena de huevos"). */
@@ -69,13 +69,6 @@ export function interpretar(texto: string): Pick<ItemCompra, "nombre" | "cantida
 }
 
 /** "2–8 nov" para distinguir ítems del menú de distintas semanas. */
-function semanaCorta(lunes: string): string {
-  const a = partes(lunes);
-  const b = partes(sumarDias(lunes, 6));
-  const mes = (n: number) => MESES[n - 1].slice(0, 3);
-  return a.mes === b.mes ? `${a.dia}–${b.dia} ${mes(b.mes)}` : `${a.dia} ${mes(a.mes)}–${b.dia} ${mes(b.mes)}`;
-}
-
 export default function VistaCompras() {
   const { estado, actualizar } = useDatos();
   const [texto, setTexto] = useState("");

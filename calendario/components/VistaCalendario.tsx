@@ -272,7 +272,7 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
       className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base"
     >
       {lista.map(({ t, c }) => (
-        <span key={t.id} className="line-clamp-2 break-words font-bold leading-tight text-tinta-suave">
+        <span key={t.id} className="line-clamp-2 break-words font-bold leading-tight text-tinta-suave [@media(max-height:650px)]:line-clamp-1">
           <span aria-hidden>{t.emoji}</span> {nombreComida(c!, recetas)}
         </span>
       ))}

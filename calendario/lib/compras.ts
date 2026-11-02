@@ -129,13 +129,16 @@ const PATRONES: { cat: CategoriaCompra; largo: number; exp: RegExp; congelado: b
       const raiz = p.endsWith("*");
       const q = sinTildes(raiz ? p.slice(0, -1) : p);
       const fin = raiz ? "" : "(?:s|es)?(?=[^a-z]|$)";
-      return { cat, largo: q.length, exp: new RegExp(`(^|[^a-z])${escapar(q)}${fin}`), congelado: q === "congelad" };
+      // En las frases, la primera palabra también puede ir en plural: "clavos de olor", "ajíes de color".
+      const cuerpo = q.split(" ").map(escapar).join(" ").replace(/^(\S+) /, "$1(?:s|es)? ");
+      return { cat, largo: q.length, exp: new RegExp(`(^|[^a-z])${cuerpo}${fin}`), congelado: q === "congelad" };
     }),
 );
 
 /** Envases al comienzo del nombre: "bolsa de pan" es pan, "lata de atún" es atún. */
 const ENVASE = /^(bolsas?|bolsitas?|paquetes?|cajas?|cajitas?|mallas?|tarros?|frascos?|sobres?|latas?|botellas?|potes?|bandejas?) de (.+)$/;
-const EN_CONSERVA = / en (conserva|lata|tarro|almibar)( |$)/;
+/** "Duraznos en conserva / en almíbar" son de la despensa. "En lata" o "en tarro" no cambian nada, igual que "lata de…". */
+const EN_CONSERVA = / en (conserva|almibar)( |$)/;
 
 /**
  * Adivina la categoría por el nombre. En español el producto va primero ("yogur de frutilla",
@@ -145,7 +148,7 @@ const EN_CONSERVA = / en (conserva|lata|tarro|almibar)( |$)/;
  */
 export function adivinarCategoria(nombre: string): CategoriaCompra {
   const limpio = sinTildes(nombre);
-  if (EN_CONSERVA.test(limpio) && !/congelad/.test(limpio)) return "Despensa";
+  if (EN_CONSERVA.test(limpio) && !/congelad/.test(limpio) && categoriaPorPalabras(limpio) !== "Bebidas") return "Despensa";
   const envase = limpio.match(ENVASE);
   if (envase) {
     const cat = categoriaPorPalabras(envase[2]);
@@ -202,6 +205,7 @@ const EQUIVALENCIAS: [string, "ml" | "g", number][] = (
   ["arroz", "g", 200],
   ["harina", "g", 140],
   ["azucar flor", "g", 120],
+  ["azucar granulada", "g", 200],
   ["azucar", "g", 200],
   ["avena", "g", 90],
   ["maicena", "g", 130],
@@ -237,8 +241,10 @@ function base(u: Unidad, clave = ""): Base {
   const enCdta = MEDIDA_EN_CDTA[u];
   if (enCdta) {
     const eq = EQUIVALENCIAS.find(([p]) => clave === p || clave.startsWith(p + " "));
-    // Una coincidencia genérica ("leche") no vale para "leche en polvo" o "nuez moscada".
-    const valida = eq && (eq[0] === clave || !SIN_EQUIVALENCIA.test(clave.slice(eq[0].length)));
+    // Una coincidencia genérica ("leche") no vale para "leche en polvo" o "nuez moscada"; los
+    // "polvos de hornear" de la harina no cambian su densidad.
+    const resto = eq ? clave.slice(eq[0].length).replace(/ (con|sin) polvo de hornear/, "") : "";
+    const valida = eq && (eq[0] === clave || !SIN_EQUIVALENCIA.test(resto));
     if (eq && valida) return { unidad: eq[1], factor: (eq[2] / 48) * enCdta };
     return { unidad: "cdta", factor: enCdta };
   }

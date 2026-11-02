@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useDatos } from "@/lib/store";
 import type { ComidaPlanificada, Receta, TipoComida } from "@/lib/datos/tipos";
-import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, sumarDias } from "@/lib/fechas";
+import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, semanaCorta, sumarDias } from "@/lib/fechas";
 import {
   agruparPorCategoria,
   claveComida,
@@ -60,19 +60,22 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
           ‹
         </BotonIcono>
         <Boton onClick={() => setSemana(null)} className={cx("whitespace-nowrap", lunes === lunesDe(hoy) && "opacity-60")}>
-          Esta semana
+          {/* En el tablet angosto (iPad vertical) "Hoy" deja espacio para el rango de la semana. */}
+          <span className="md:max-[56rem]:hidden">Esta semana</span>
+          <span className="hidden md:max-[56rem]:inline">Hoy</span>
         </Boton>
         <BotonIcono etiqueta="Semana siguiente" onClick={() => setSemana(sumarDias(lunes, 7))}>
           ›
         </BotonIcono>
-        <h1 className="mx-1 min-w-0 flex-1 text-balance font-display text-2xl font-semibold leading-tight xl:text-3xl">
+        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold leading-tight md:flex-1 xl:text-3xl">
           <span className="md:max-xl:hidden">Menú </span>
           <span className="text-tinta-suave">
             <span className="md:max-xl:hidden">· </span>
-            {rangoSemana(lunes)}
+            <span className="md:max-[56rem]:hidden">{rangoSemana(lunes)}</span>
+            <span className="hidden md:max-[56rem]:inline">{semanaCorta(lunes)}</span>
           </span>
         </h1>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2 md:flex-nowrap">
+        <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-none md:flex-nowrap">
           <Boton onClick={repetirSemanaPasada} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
             ↻<span className="md:max-xl:hidden"> Repetir semana</span>
           </Boton>
@@ -205,7 +208,9 @@ function Celda({
       onClick={onClick}
       className={cx(
         "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] px-1.5 py-1 text-center transition active:scale-[0.97]",
-        enGrilla ? "min-h-0" : "min-h-20",
+        // En la grilla de un tablet bajo (Fire HD 8 con la barra de Silk) todo cabe en filas de 72 px,
+        // así se ven las 4 comidas sin tener que desplazar.
+        enGrilla ? "min-h-0 [@media(max-height:700px)]:py-0.5" : "min-h-20",
         esHoy ? "border-hoy-borde bg-hoy shadow-md" : "border-transparent bg-superficie",
         !comida && "border-dashed border-borde",
       )}
@@ -221,11 +226,13 @@ function Celda({
               className="size-9 text-3xl 2xl:size-12 2xl:text-4xl [@media(max-height:700px)]:size-6 [@media(max-height:700px)]:text-xl"
             />
           ) : (
-            <span className="text-2xl [@media(max-height:700px)]:text-xl">🍴</span>
+            <span className="text-2xl [@media(max-height:700px)]:text-xl [@media(max-height:700px)]:leading-none">🍴</span>
           )}
           <span
             className={cx(
-              "line-clamp-2 text-base font-extrabold leading-[1.15] 2xl:text-lg",
+              // Una palabra más ancha que la celda ("Charquicán" en el iPad vertical) se corta en
+              // sílabas en vez de quedar recortada por los lados.
+              "line-clamp-2 max-w-full break-words hyphens-auto text-base font-extrabold leading-[1.15] md:max-[56rem]:text-sm 2xl:text-lg",
               enGrilla && "[@media(max-height:700px)]:text-sm [@media(max-height:700px)]:leading-tight",
             )}
           >
@@ -381,6 +388,8 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
   const nDescontados = lineas.filter((l) => l.yaComprado || l.descontado).length;
 
   const elegidas = lineas.filter((l) => incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
+  // Hay algo que se podría mandar pero está desmarcado.
+  const quedaPorMandar = lineas.some((l) => !incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
   const enviar = () => {
     actualizar("compras", (lista) => [
       // Reemplaza lo que el menú de esta semana había mandado antes y aún no se compra.
@@ -404,7 +413,9 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
           <Boton variante="primario" grande disabled={elegidas.length === 0 && nPendientes === 0} onClick={enviar}>
             {elegidas.length > 0
               ? `Mandar ${elegidas.length} a la lista`
-              : `Quitar ${nPendientes} ${nPendientes === 1 ? "pendiente" : "pendientes"} de la lista`}
+              : nPendientes > 0
+                ? `Quitar ${nPendientes} ${nPendientes === 1 ? "pendiente" : "pendientes"} de la lista`
+                : "Nada que mandar"}
           </Boton>
         </>
       }
@@ -412,15 +423,16 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
       {yaHabia && (
         <p className="mb-4 rounded-2xl bg-acento-suave px-4 py-3 text-lg">
           {elegidas.length === 0 && nPendientes > 0 ? (
-            `No queda nada por mandar. Al confirmar se quitan de la lista ${nPendientes === 1 ? "el pendiente" : `los ${nPendientes} pendientes`} que había mandado el menú de esta semana.`
+            `${quedaPorMandar ? "Desmarcaste todo." : "No queda nada por mandar."} Al confirmar se quitan de la lista ${nPendientes === 1 ? "el pendiente" : `los ${nPendientes} pendientes`} que había mandado el menú de esta semana.`
           ) : (
             <>
-              Ya habías mandado la lista de esta semana. Lo pendiente se reemplaza por esta
+              Ya habías mandado la lista de esta semana.
+              {nPendientes > 0 && " Lo pendiente se reemplaza por esta."}
               {nDescontados === 1
-                ? " y a 1 ingrediente se le descontó lo que ya compraste."
+                ? " A 1 ingrediente se le descontó lo que ya compraste."
                 : nDescontados > 1
-                  ? ` y a ${nDescontados} ingredientes se les descontó lo que ya compraste.`
-                  : "."}
+                  ? ` A ${nDescontados} ingredientes se les descontó lo que ya compraste.`
+                  : ""}
             </>
           )}
         </p>

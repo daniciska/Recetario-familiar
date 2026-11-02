@@ -33,9 +33,10 @@ export default function BarraSuperior({
   ].slice(0, 2);
 
   return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:flex-nowrap md:px-4 md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
-      {/* Hora y fecha */}
-      <div className="flex min-w-0 items-baseline gap-4">
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
+      {/* Hora y fecha. Sin min-w-0: nunca se achica bajo su contenido (si no cabe, la tarjeta de
+          la comida baja a otra línea, como en el iPad vertical). */}
+      <div className="flex items-baseline gap-4">
         <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl">
           {ahora.hora}
         </span>

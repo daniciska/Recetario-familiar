@@ -108,8 +108,12 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         if (fallidas.current.delete(clave)) refrescarAviso();
         return true;
       } catch {
-        // No hay dónde guardar: el cambio sigue en memoria (el aviso permanente lo explica) y cuenta como hecho.
-        if (sinAlmacenamiento.current) return true;
+        // No hay dónde guardar: el cambio sigue en memoria y cuenta como hecho. El aviso vuelve a
+        // aparecer aunque lo hayan cerrado, para que nadie crea que quedó guardado.
+        if (sinAlmacenamiento.current) {
+          refrescarAviso();
+          return true;
+        }
         // No cupo: se deshace para no mostrar algo que se perdería al recargar.
         const guardadoAntes = persistido.current?.[clave];
         if (guardadoAntes !== undefined && estadoRef.current) {
@@ -131,8 +135,9 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         await repo.reemplazarTodo(nuevo);
       } catch {
         if (!sinAlmacenamiento.current) return false;
-        estadoRef.current = nuevo; // sólo en memoria: el aviso permanente lo explica
+        estadoRef.current = nuevo; // sólo en memoria: se vuelve a mostrar el aviso
         setEstado(nuevo);
+        refrescarAviso();
         return true;
       }
       persistido.current = nuevo;

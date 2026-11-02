@@ -141,6 +141,14 @@ export function rangoSemana(lunes: string): string {
   return `${a.dia} de ${MESES[a.mes - 1]} – ${b.dia} de ${MESES[b.mes - 1]}`;
 }
 
+/** Rango corto: "2–8 nov" o "30 nov–6 dic". */
+export function semanaCorta(lunes: string): string {
+  const a = partes(lunes);
+  const b = partes(sumarDias(lunes, 6));
+  const mes = (n: number) => MESES[n - 1].slice(0, 3);
+  return a.mes === b.mes ? `${a.dia}–${b.dia} ${mes(b.mes)}` : `${a.dia} ${mes(a.mes)}–${b.dia} ${mes(b.mes)}`;
+}
+
 export function horaAMinutos(h: string): number {
   const [hh, mm] = h.split(":").map(Number);
   return hh * 60 + mm;

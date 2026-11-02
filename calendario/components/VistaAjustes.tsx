@@ -31,7 +31,9 @@ const CIUDADES: { nombre: string; lat: number; lon: number }[] = [
 ];
 
 export default function VistaAjustes() {
-  const { estado, actualizar, reemplazarTodo } = useDatos();
+  const { estado, actualizar, reemplazarTodo, sinGuardar } = useDatos();
+  // Si este navegador no deja guardar, cada "✓" lo recuerda.
+  const noGuarda = sinGuardar ? " Ojo: este navegador no guarda datos; se perderá al cerrar o recargar." : "";
   const [editando, setEditando] = useState<Miembro | "nuevo" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmarReset, setConfirmarReset] = useState(false);
@@ -62,7 +64,7 @@ export default function VistaAjustes() {
     const ok = await reemplazarTodo(r.estado);
     setMsg(
       ok
-        ? "✓ Respaldo cargado."
+        ? "✓ Respaldo cargado." + noGuarda
         : "No se pudo cargar: no cabe en el almacenamiento de este equipo (las fotos ocupan mucho). Tus datos siguen como estaban.",
     );
   };
@@ -194,7 +196,7 @@ export default function VistaAjustes() {
                   onClick={async () => {
                     const ok = await reemplazarTodo(estadoEjemplo());
                     setConfirmarReset(false);
-                    setMsg(ok ? "✓ Datos de ejemplo restaurados." : "No se pudo guardar en este equipo.");
+                    setMsg(ok ? "✓ Datos de ejemplo restaurados." + noGuarda : "No se pudo guardar en este equipo.");
                   }}
                 >
                   Sí, borrar todo
