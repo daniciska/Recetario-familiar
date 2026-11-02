@@ -1,0 +1,4 @@
+# Sitio de Netlify independiente del recetario: en el panel, "Base directory" = calendario
+[build]
+  command = "npm run build"
+  publish = ".next"

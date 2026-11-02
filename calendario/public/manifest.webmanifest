@@ -1,0 +1,16 @@
+{
+  "name": "Calendario familiar",
+  "short_name": "Familia",
+  "lang": "es-CL",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#f6efe4",
+  "theme_color": "#f6efe4",
+  "icons": [
+    { "src": "/icono.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icono-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

@@ -17,3 +17,7 @@ Página web estática (sin compilación) que guarda las recetas de la mamá a pa
 5. Ejecuta `python herramientas/procesar.py --indice` y haz commit.
 
 La transcripción con Whisper necesita descargar el modelo desde huggingface.co; si la red del entorno lo bloquea, deja que lo haga la GitHub Action.
+
+## `calendario/` (app aparte)
+
+Panel familiar de pared (Next.js + TypeScript + Tailwind): calendario, menú semanal con recetas, lista de compras automática y tareas. Es independiente del recetario estático y se publica como un sitio aparte (Root/Base directory = `calendario`). Ver `calendario/README.md`. Para verificar cambios: `cd calendario && npx tsc --noEmit && npm run build`.

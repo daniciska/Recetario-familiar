@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@custom-variant noche (&:where([data-tema="noche"], [data-tema="noche"] *));
+
+/* Paleta cálida tipo "panel de madera y papel". Los colores se definen como variables
+   para poder cambiar a modo noche con data-tema="noche" en <html>. */
+:root {
+  --c-fondo: #f6efe4;
+  --c-superficie: #fffbf5;
+  --c-superficie-2: #f1e7d8;
+  --c-borde: #e3d5c1;
+  --c-tinta: #2b2420;
+  --c-tinta-suave: #6f6157;
+  --c-acento: #c4553a;
+  --c-acento-tinta: #ffffff;
+  --c-acento-suave: #f7dccf;
+  --c-hoy: #fff0c7;
+  --c-hoy-borde: #e9b03b;
+  --c-ok: #3f8f5a;
+  color-scheme: light;
+}
+
+:root[data-tema="noche"] {
+  --c-fondo: #15120f;
+  --c-superficie: #211c18;
+  --c-superficie-2: #2c2520;
+  --c-borde: #3d342d;
+  --c-tinta: #f5ece0;
+  --c-tinta-suave: #b6a797;
+  --c-acento: #e8795c;
+  --c-acento-tinta: #1b1714;
+  --c-acento-suave: #4a2c22;
+  --c-hoy: #3a3020;
+  --c-hoy-borde: #e9b03b;
+  --c-ok: #6cc28a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-fondo: var(--c-fondo);
+  --color-superficie: var(--c-superficie);
+  --color-superficie-2: var(--c-superficie-2);
+  --color-borde: var(--c-borde);
+  --color-tinta: var(--c-tinta);
+  --color-tinta-suave: var(--c-tinta-suave);
+  --color-acento: var(--c-acento);
+  --color-acento-tinta: var(--c-acento-tinta);
+  --color-acento-suave: var(--c-acento-suave);
+  --color-hoy: var(--c-hoy);
+  --color-hoy-borde: var(--c-hoy-borde);
+  --color-ok: var(--c-ok);
+  --font-sans: var(--fuente-texto), ui-rounded, system-ui, sans-serif;
+  --font-display: var(--fuente-titulo), Georgia, serif;
+}
+
+html,
+body {
+  background: var(--c-fondo);
+  color: var(--c-tinta);
+  transition: background-color 0.6s ease, color 0.6s ease;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Pantalla táctil: sin selección accidental de texto en botones y tarjetas. */
+button,
+[role="button"] {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Barras de desplazamiento discretas */
+.desliza {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-borde) transparent;
+}
+
+/* Tarjeta de evento: color de la persona mezclado con la superficie */
+.tarjeta-evento {
+  background: color-mix(in srgb, var(--color-persona) 20%, var(--c-superficie));
+  border-left: 7px solid var(--color-persona);
+}
+:root[data-tema="noche"] .tarjeta-evento {
+  background: color-mix(in srgb, var(--color-persona) 26%, var(--c-superficie));
+}
+.tarjeta-evento.compartido {
+  border-left: 0;
+  padding-left: calc(7px + 0.625rem);
+  background-image: linear-gradient(to bottom, var(--franjas));
+  background-size: 7px 100%;
+  background-repeat: no-repeat;
+  background-color: color-mix(in srgb, var(--color-persona) 16%, var(--c-superficie));
+}
+
+@keyframes aparecer {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.aparecer {
+  animation: aparecer 0.18s ease-out;
+}
