@@ -32,6 +32,9 @@ const NOMBRES: Record<ClaveColeccion, string> = {
   tareas: "las tareas",
 };
 
+/** Sin almacenamiento, el aviso cerrado vuelve con el primer cambio pasado este rato (no en cada toque). */
+const RECORDAR_AVISO = 10 * 60_000;
+
 const AVISO_SIN_ALMACENAMIENTO =
   "Este navegador no deja guardar datos (modo privado o almacenamiento bloqueado): los cambios se perderán al recargar.";
 
@@ -44,6 +47,8 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
   const persistido = useRef<EstadoApp | null>(null);
   const fallidas = useRef(new Set<ClaveColeccion>());
   const sinAlmacenamiento = useRef(false);
+  /** Cuándo se cerró el aviso de "no se guarda" (0: nunca). */
+  const avisoCerradoEn = useRef(0);
 
   const refrescarAviso = useCallback(() => {
     if (sinAlmacenamiento.current) return setError(AVISO_SIN_ALMACENAMIENTO);
@@ -108,10 +113,11 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         if (fallidas.current.delete(clave)) refrescarAviso();
         return true;
       } catch {
-        // No hay dónde guardar: el cambio sigue en memoria y cuenta como hecho. El aviso vuelve a
-        // aparecer aunque lo hayan cerrado, para que nadie crea que quedó guardado.
+        // No hay dónde guardar: el cambio sigue en memoria y cuenta como hecho. Si cerraron el aviso,
+        // vuelve con el primer cambio pasados unos minutos (no en cada casilla marcada, que en el
+        // teléfono taparía la lista), para que nadie crea que quedó guardado.
         if (sinAlmacenamiento.current) {
-          refrescarAviso();
+          if (Date.now() - avisoCerradoEn.current >= RECORDAR_AVISO) refrescarAviso();
           return true;
         }
         // No cupo: se deshace para no mostrar algo que se perdería al recargar.
@@ -152,6 +158,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
 
   const cerrarError = useCallback(() => {
     fallidas.current.clear();
+    if (sinAlmacenamiento.current) avisoCerradoEn.current = Date.now();
     setError(null);
   }, []);
 

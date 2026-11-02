@@ -76,7 +76,7 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "puerro", "berenjena", "haba", "rábano", "melón", "sandía", "piña", "cereza", "ciruela",
       "damasco", "zucchini", "espárrago", "jengibre", "romero", "menta", "chirimoya", "lúcuma",
       "membrillo", "alcachofa", "frambuesa", "arándano", "mora", "papaya", "ciboulette",
-      "tomillo", "hongo", "rabanito",
+      "tomillo", "hongo", "rabanito", "pimiento",
     ],
   ],
   ["Panadería", ["pan", "marraqueta", "hallulla", "pan de molde", "pan amasado", "tortilla", "masa", "dobladita"]],
@@ -89,7 +89,7 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "curry", "ajo en polvo", "ajo granulado", "clavo de olor",
     ],
   ],
-  ["Bebidas", ["jugo", "bebida", "agua", "agua mineral", "vino", "cerveza", "té", "café", "néctar", "pisco"]],
+  ["Bebidas", ["jugo", "bebida", "agua", "agua mineral", "vino", "cerveza", "té", "café", "néctar", "pisco", "nescafé", "milo"]],
   [
     "Aseo y hogar",
     [
@@ -107,6 +107,7 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "almendra", "salsa de tomate", "pasta de tomate", "conserva", "mote", "sémola", "quinoa",
       "miel", "chocolate", "maíz", "maní", "mantequilla de maní", "pan rallado", "coco rallado", "coco",
       "cacao", "granola", "endulzante", "huesillo", "cochayuyo", "pepinillo", "uva pasa", "uvas pasas",
+      "palmito", "paté", "cóctel de frutas", "coctel de frutas",
     ],
   ],
 ];
@@ -243,7 +244,9 @@ function base(u: Unidad, clave = ""): Base {
     const eq = EQUIVALENCIAS.find(([p]) => clave === p || clave.startsWith(p + " "));
     // Una coincidencia genérica ("leche") no vale para "leche en polvo" o "nuez moscada"; los
     // "polvos de hornear" de la harina no cambian su densidad.
-    const resto = eq ? clave.slice(eq[0].length).replace(/ (con|sin) polvo de hornear/, "") : "";
+    let resto = eq ? clave.slice(eq[0].length) : "";
+    // "Harina con/sin polvos (de/para hornear)": los polvos no cambian la densidad de la harina.
+    if (eq?.[0] === "harina") resto = resto.replace(/ (con|sin) polvo( (de|para) hornear)?(?= |$)/, "");
     const valida = eq && (eq[0] === clave || !SIN_EQUIVALENCIA.test(resto));
     if (eq && valida) return { unidad: eq[1], factor: (eq[2] / 48) * enCdta };
     return { unidad: "cdta", factor: enCdta };

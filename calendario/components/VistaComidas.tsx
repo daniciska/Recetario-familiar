@@ -207,10 +207,12 @@ function Celda({
       type="button"
       onClick={onClick}
       className={cx(
-        "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] px-1.5 py-1 text-center transition active:scale-[0.97]",
+        "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] py-1 text-center transition active:scale-[0.97]",
         // En la grilla de un tablet bajo (Fire HD 8 con la barra de Silk) todo cabe en filas de 72 px,
         // así se ven las 4 comidas sin tener que desplazar.
-        enGrilla ? "min-h-0 [@media(max-height:700px)]:py-0.5" : "min-h-20",
+        // En la grilla casi sin relleno lateral: el nombre usa todo el ancho y sólo se corta en sílabas
+        // cuando de verdad no cabe (iPad vertical).
+        enGrilla ? "min-h-0 px-0.5 [@media(max-height:700px)]:py-0.5" : "min-h-20 px-1.5",
         esHoy ? "border-hoy-borde bg-hoy shadow-md" : "border-transparent bg-superficie",
         !comida && "border-dashed border-borde",
       )}
@@ -373,14 +375,15 @@ function buscarReceta(lista: Receta[], id: string) {
 
 // ---------- Generar lista de compras ----------
 
+/** Al abrir, parte marcado lo que tiene cantidad y no está en el carro ("al gusto" normalmente ya está en casa). */
+const parteMarcada = (l: LineaGenerada) => l.cantidad != null && !l.yaComprado;
+
 function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: () => void; alEnviar: () => void }) {
   const { estado, actualizar } = useDatos();
   // Se calcula una vez al abrir: descuenta lo que ya está en el carro de esta semana.
   const [lineas] = useState(() => generarLista(estado.plan, estado.recetas, lunes, estado.compras));
   // Lo "al gusto" (sal, pimienta) normalmente ya está en casa, y lo ya comprado no se repite: parten desmarcados.
-  const [incluir, setIncluir] = useState<Set<string>>(
-    () => new Set(lineas.filter((l) => l.cantidad != null && !l.yaComprado).map((l) => l.clave)),
-  );
+  const [incluir, setIncluir] = useState<Set<string>>(() => new Set(lineas.filter(parteMarcada).map((l) => l.clave)));
   const grupos = agruparPorCategoria(lineas);
   const delMenu = estado.compras.filter((c) => c.origen === "menu" && c.semana === lunes);
   const yaHabia = delMenu.length > 0;
@@ -388,8 +391,8 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
   const nDescontados = lineas.filter((l) => l.yaComprado || l.descontado).length;
 
   const elegidas = lineas.filter((l) => incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
-  // Hay algo que se podría mandar pero está desmarcado.
-  const quedaPorMandar = lineas.some((l) => !incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
+  // El usuario desmarcó algo que partió marcado (lo "al gusto" y lo ya comprado parten desmarcados solos).
+  const quedaPorMandar = lineas.some((l) => parteMarcada(l) && !incluir.has(l.clave));
   const enviar = () => {
     actualizar("compras", (lista) => [
       // Reemplaza lo que el menú de esta semana había mandado antes y aún no se compra.

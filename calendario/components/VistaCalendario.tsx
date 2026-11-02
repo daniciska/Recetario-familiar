@@ -272,7 +272,15 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
       className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base"
     >
       {lista.map(({ t, c }) => (
-        <span key={t.id} className="line-clamp-2 break-words font-bold leading-tight text-tinta-suave [@media(max-height:650px)]:line-clamp-1">
+        <span
+          key={t.id}
+          className={cx(
+            "line-clamp-2 break-words font-bold leading-tight text-tinta-suave",
+            // Con almuerzo y cena en un tablet bajo, una línea cada una (cortada al final, así el
+            // nombre siempre empieza junto al emoji). Con una sola comida caben las 2 líneas.
+            lista.length > 1 && "[@media(max-height:650px)]:md:block [@media(max-height:650px)]:md:truncate",
+          )}
+        >
           <span aria-hidden>{t.emoji}</span> {nombreComida(c!, recetas)}
         </span>
       ))}
