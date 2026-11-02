@@ -42,12 +42,12 @@ export default function BarraSuperior({
     <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
       {/* Hora y fecha. Sin min-w-0: nunca se achica bajo su contenido (si no cabe, la tarjeta de
           la comida baja a otra línea, como en el iPad vertical). */}
-      <div className="flex items-baseline gap-4">
+      <div className="flex grow items-baseline gap-4">
         <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl">
           {ahora.hora}
         </span>
         {/* Sin min-w-0: el mínimo es la palabra más larga ("septiembre"), así nunca se sale de su caja. */}
-        <div className="leading-tight">
+        <div className="grow leading-tight">
           <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl">{fecha}</div>
           <LineaCuentas cuentas={cuentas} familia={estado.ajustes.nombreFamilia} />
         </div>
@@ -109,7 +109,8 @@ export default function BarraSuperior({
 
 /**
  * Bajo la fecha: las cuentas regresivas, una a la vez (rotan cada 8 s), o el nombre de la familia si no
- * hay. `w-0 min-w-full` hace que un título largo no ensanche el bloque de la hora: se corta con "…".
+ * hay. `w-0 min-w-full`: la línea ocupa el ancho de su columna (que crece hacia el espacio libre de la
+ * fila) sin ensancharla, así el encabezado no se mueve al rotar; si no cabe, se corta con "…".
  */
 function LineaCuentas({ cuentas, familia }: { cuentas: CuentaRegresiva[]; familia: string }) {
   const [i, setI] = useState(0);

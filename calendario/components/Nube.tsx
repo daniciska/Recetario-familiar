@@ -1,0 +1,362 @@
+"use client";
+
+// Compartir los datos entre equipos: crear la familia en la nube, invitar con un código (o un QR que
+// se escanea con la cámara del iPhone) y unirse.
+
+import { useEffect, useState } from "react";
+import qrcode from "qrcode-generator";
+import { useDatos } from "@/lib/store";
+import { AccesoRevocado, SinConexion, api, borrarSesion, guardarSesion, leerSesion, nombreDeEsteEquipo } from "@/lib/datos/nube";
+import { descargarRespaldo } from "@/lib/respaldo";
+import { Boton, Entrada, Modal, cx } from "./ui";
+
+const SIN_RED = "No hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.";
+const formatoCodigo = (c: string) => (c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c);
+const limpiarCodigo = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+
+function mensajeDe(e: unknown, def: string) {
+  if (e instanceof SinConexion) return SIN_RED;
+  if (e instanceof AccesoRevocado) return e.message;
+  return def;
+}
+
+/** Sección de Familia → "Compartir entre equipos". */
+export function SeccionNube() {
+  const { nube } = useDatos();
+  return (
+    <div className="rounded-3xl bg-superficie p-4">
+      <h2 className="mb-1 text-xl font-extrabold">☁️ Compartir entre equipos</h2>
+      {nube ? <FamiliaConectada /> : <Conectar />}
+    </div>
+  );
+}
+
+function Conectar() {
+  const { estado } = useDatos();
+  const [creando, setCreando] = useState(false);
+  const [codigo, setCodigo] = useState("");
+  const [uniendo, setUniendo] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const crear = async () => {
+    setOcupado(true);
+    setMsg(null);
+    try {
+      const { status, datos } = await api<{ token?: string; equipoId?: string; familia?: { id: string; nombre: string }; error?: string }>(
+        "/api/familia",
+        { metodo: "POST", cuerpo: { nombre: estado.ajustes.nombreFamilia, nombreEquipo: nombreDeEsteEquipo() } },
+      );
+      if (status !== 201 || !datos.token) {
+        setCreando(false);
+        return setMsg(datos.error ?? "No se pudo crear la familia.");
+      }
+      // Se guarda la conexión al tiro (si se corta, al volver a abrir termina de subir los datos).
+      guardarSesion({ token: datos.token, equipoId: datos.equipoId!, familia: datos.familia!, pendienteSubir: true });
+      location.reload();
+    } catch (e) {
+      setMsg(mensajeDe(e, "No se pudo crear la familia."));
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  return (
+    <>
+      <p className="mb-3 text-base text-tinta-suave">
+        Hoy los datos viven sólo en este equipo. Conéctalo a la nube para que el iPhone, el iPad y la pantalla de la pared
+        vean y cambien lo mismo.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Boton variante="primario" onClick={() => setCreando(true)}>
+          ☁️ Crear la familia en la nube
+        </Boton>
+      </div>
+      <form
+        className="mt-4 flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (limpiarCodigo(codigo).length === 8) setUniendo(limpiarCodigo(codigo));
+        }}
+      >
+        <span className="w-full text-base font-bold text-tinta-suave">¿Ya hay una familia? Únete con el código que muestra otro equipo:</span>
+        <Entrada
+          value={formatoCodigo(limpiarCodigo(codigo))}
+          onChange={(e) => setCodigo(e.target.value)}
+          placeholder="ABCD-2345"
+          aria-label="Código de invitación"
+          autoCapitalize="characters"
+          autoComplete="off"
+          className="num max-w-56 text-center text-2xl tracking-widest"
+        />
+        <Boton type="submit" disabled={limpiarCodigo(codigo).length !== 8}>
+          Unirme
+        </Boton>
+      </form>
+      {msg && <p className="mt-3 text-lg font-bold">{msg}</p>}
+
+      {creando && (
+        <Modal
+          titulo="Crear la familia en la nube"
+          alCerrar={() => setCreando(false)}
+          ancho="max-w-lg"
+          pie={
+            <>
+              <Boton variante="fantasma" onClick={() => setCreando(false)}>
+                Cancelar
+              </Boton>
+              <Boton variante="primario" disabled={ocupado} onClick={crear}>
+                {ocupado ? "Creando…" : "Crear y subir"}
+              </Boton>
+            </>
+          }
+        >
+          <div className="space-y-3 text-lg">
+            <p>
+              Se suben los datos de este equipo: integrantes, eventos, menú, recetas (con sus fotos), compras, quehaceres y
+              premios.
+            </p>
+            <p>Después, desde aquí mismo, invitas a los demás equipos con un código o un QR.</p>
+          </div>
+        </Modal>
+      )}
+      {uniendo && <UnirseModal codigo={uniendo} alCerrar={() => setUniendo(null)} />}
+    </>
+  );
+}
+
+/** Confirmar la unión a una familia (con el código escrito o desde el enlace del QR). */
+export function UnirseModal({ codigo, alCerrar }: { codigo: string; alCerrar: () => void }) {
+  const { estado, nube } = useDatos();
+  const [familia, setFamilia] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  useEffect(() => {
+    if (nube) return;
+    let vivo = true;
+    api<{ familia?: { nombre: string }; error?: string }>(`/api/unirse?codigo=${encodeURIComponent(codigo)}`)
+      .then(({ status, datos }) => vivo && (status === 200 && datos.familia ? setFamilia(datos.familia.nombre) : setMsg(datos.error ?? "Ese código no sirve.")))
+      .catch((e) => vivo && setMsg(mensajeDe(e, "Ese código no sirve.")));
+    return () => {
+      vivo = false;
+    };
+  }, [codigo, nube]);
+
+  const unirse = async () => {
+    setOcupado(true);
+    try {
+      const { status, datos } = await api<{ token?: string; equipoId?: string; familia?: { id: string; nombre: string }; error?: string }>(
+        "/api/unirse",
+        { metodo: "POST", cuerpo: { codigo, nombreEquipo: nombreDeEsteEquipo() } },
+      );
+      if (status !== 201 || !datos.token) return setMsg(datos.error ?? "No se pudo unir este equipo.");
+      guardarSesion({ token: datos.token, equipoId: datos.equipoId!, familia: datos.familia! });
+      location.reload();
+    } catch (e) {
+      setMsg(mensajeDe(e, "No se pudo unir este equipo."));
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  return (
+    <Modal
+      titulo="Unir este equipo"
+      alCerrar={alCerrar}
+      ancho="max-w-lg"
+      pie={
+        <>
+          <Boton variante="fantasma" onClick={alCerrar}>
+            {nube ? "Cerrar" : "Cancelar"}
+          </Boton>
+          {!nube && (
+            <Boton variante="primario" disabled={!familia || ocupado} onClick={unirse}>
+              {ocupado ? "Uniendo…" : "Unirme"}
+            </Boton>
+          )}
+        </>
+      }
+    >
+      {nube ? (
+        <p className="text-lg">
+          Este equipo ya está conectado a «{nube.familia.nombre}». Para unirlo a otra familia, primero desconéctalo en Familia →
+          Compartir entre equipos.
+        </p>
+      ) : msg ? (
+        <p className="text-lg font-bold">{msg}</p>
+      ) : !familia ? (
+        <p className="text-lg text-tinta-suave">Buscando la familia…</p>
+      ) : (
+        <div className="space-y-4 text-lg">
+          <p>
+            Este equipo va a ver y cambiar los datos de <strong>«{familia}»</strong>.
+          </p>
+          <p className="rounded-2xl bg-acento-suave px-4 py-3">
+            Lo que hay ahora en este equipo se reemplaza por lo de la familia. Si quieres guardarlo, descarga una copia antes.
+          </p>
+          <Boton onClick={() => descargarRespaldo(estado)}>⬇️ Descargar una copia de este equipo</Boton>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+interface EquipoLista {
+  id: string;
+  nombre: string;
+  creado: string;
+  esEste: boolean;
+}
+
+function FamiliaConectada() {
+  const { nube } = useDatos();
+  const [equipos, setEquipos] = useState<EquipoLista[] | null>(null);
+  const [invitando, setInvitando] = useState(false);
+  const [quitar, setQuitar] = useState<EquipoLista | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [vuelta, setVuelta] = useState(0);
+  const sesion = leerSesion();
+
+  useEffect(() => {
+    if (!sesion) return;
+    let vivo = true;
+    api<{ equipos: EquipoLista[] }>("/api/equipos", { token: sesion.token })
+      .then(({ status, datos }) => vivo && status === 200 && setEquipos(datos.equipos))
+      .catch((e) => vivo && setMsg(mensajeDe(e, "No se pudo ver la lista de equipos.")));
+    return () => {
+      vivo = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vuelta]);
+
+  const sacar = async (e: EquipoLista) => {
+    if (!sesion) return;
+    try {
+      const { status } = await api(`/api/equipos/${e.id}`, { metodo: "DELETE", token: sesion.token });
+      if (e.esEste || status === 200) {
+        if (e.esEste) {
+          borrarSesion();
+          location.reload();
+          return;
+        }
+        setQuitar(null);
+        setVuelta((n) => n + 1);
+      }
+    } catch (err) {
+      if (e.esEste && err instanceof AccesoRevocado) {
+        borrarSesion();
+        location.reload();
+        return;
+      }
+      setMsg(mensajeDe(err, "No se pudo quitar el acceso."));
+      setQuitar(null);
+    }
+  };
+
+  if (!nube) return null;
+  return (
+    <>
+      <p className="mb-3 text-lg">
+        Conectado a <strong>«{nube.familia.nombre}»</strong>{" "}
+        <span className={cx("ml-1 whitespace-nowrap text-base font-bold", nube.conectado ? "text-ok" : "text-tinta-suave")}>
+          {nube.conectado ? "● en línea" : "● sin conexión (se muestra la copia de este equipo)"}
+        </span>
+      </p>
+      <p className="mb-3 text-base text-tinta-suave">
+        Lo que se cambia en un equipo aparece en los demás en unos segundos. Los ajustes de “Este equipo” (pared, PIN que se
+        pide) son de cada equipo.
+      </p>
+      <Boton variante="primario" onClick={() => setInvitando(true)}>
+        📲 Invitar otro equipo
+      </Boton>
+
+      <h3 className="mb-2 mt-5 text-lg font-extrabold uppercase text-tinta-suave">Equipos conectados</h3>
+      {!equipos && !msg && <p className="text-base text-tinta-suave">Cargando…</p>}
+      <ul className="space-y-2">
+        {equipos?.map((e) => (
+          <li key={e.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-superficie-2 px-4 py-2">
+            <span className="min-w-0 flex-1 text-lg font-bold">
+              {e.nombre} {e.esEste && <span className="font-normal text-tinta-suave">(este)</span>}
+            </span>
+            <Boton variante={e.esEste ? "fantasma" : "peligro"} onClick={() => setQuitar(e)}>
+              {e.esEste ? "Desconectar este equipo" : "Quitar acceso"}
+            </Boton>
+          </li>
+        ))}
+      </ul>
+      {msg && <p className="mt-3 text-lg font-bold">{msg}</p>}
+
+      {invitando && sesion && <InvitarModal token={sesion.token} alCerrar={() => setInvitando(false)} />}
+      {quitar && (
+        <Modal
+          titulo={quitar.esEste ? "¿Desconectar este equipo?" : `¿Quitarle el acceso a “${quitar.nombre}”?`}
+          alCerrar={() => setQuitar(null)}
+          ancho="max-w-md"
+          pie={
+            <>
+              <Boton variante="fantasma" onClick={() => setQuitar(null)}>
+                Cancelar
+              </Boton>
+              <Boton variante="peligro" onClick={() => sacar(quitar)}>
+                {quitar.esEste ? "Desconectar" : "Quitar acceso"}
+              </Boton>
+            </>
+          }
+        >
+          <p className="text-lg">
+            {quitar.esEste
+              ? "Este equipo deja de ver los cambios de la familia y se queda con una copia de lo que hay ahora. Para volver, hace falta un código nuevo."
+              : "Ese equipo deja de ver y cambiar los datos de la familia (sirve si se perdió un teléfono). Se queda con una copia de lo que tenía."}
+          </p>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void }) {
+  const [inv, setInv] = useState<{ codigo: string; expira: string } | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    api<{ codigo?: string; expira?: string; error?: string }>("/api/invitar", { metodo: "POST", token })
+      .then(({ status, datos }) =>
+        vivo && (status === 201 && datos.codigo ? setInv({ codigo: datos.codigo, expira: datos.expira! }) : setMsg(datos.error ?? "No se pudo crear la invitación.")),
+      )
+      .catch((e) => vivo && setMsg(mensajeDe(e, "No se pudo crear la invitación.")));
+    return () => {
+      vivo = false;
+    };
+  }, [token]);
+
+  const enlace = inv ? `${location.origin}/#unirse=${inv.codigo}` : "";
+  const svg = (() => {
+    if (!inv) return "";
+    const q = qrcode(0, "M");
+    q.addData(enlace);
+    q.make();
+    return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+  })();
+
+  return (
+    <Modal titulo="📲 Invitar otro equipo" alCerrar={alCerrar} ancho="max-w-lg">
+      {msg ? (
+        <p className="text-lg font-bold">{msg}</p>
+      ) : !inv ? (
+        <p className="text-lg text-tinta-suave">Creando el código…</p>
+      ) : (
+        <div className="space-y-4 text-center">
+          <div className="mx-auto w-60 rounded-2xl bg-white p-2" aria-label="Código QR para unirse" dangerouslySetInnerHTML={{ __html: svg }} />
+          <p className="text-lg">
+            En el iPhone o iPad, abre la <strong>Cámara</strong> y apunta al código.
+          </p>
+          <p className="text-base text-tinta-suave">O en el otro equipo: Familia → Compartir entre equipos → escribe</p>
+          <p className="num font-display text-4xl font-semibold tracking-widest">{formatoCodigo(inv.codigo)}</p>
+          <p className="text-base text-tinta-suave">Sirve una vez y vence en 24 horas.</p>
+        </div>
+      )}
+    </Modal>
+  );
+}

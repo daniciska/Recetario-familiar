@@ -59,7 +59,7 @@ function ajustes(x: unknown, base: Ajustes): Ajustes {
     tema: x.tema === "auto" || x.tema === "claro" || x.tema === "noche" ? x.tema : base.tema,
     nocheDesde: hora(x.nocheDesde) ?? base.nocheDesde,
     nocheHasta: hora(x.nocheHasta) ?? base.nocheHasta,
-    pin: txtOpc(x.pin),
+    pin: typeof x.pin === "string" && /^fnv1a:[0-9a-f]{8}$/.test(x.pin) ? x.pin : undefined,
   };
 }
 

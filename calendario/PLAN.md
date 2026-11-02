@@ -28,7 +28,14 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 
 ## Fases
 
-### Fase 1 · Datos compartidos (Supabase)
+### Fase 1 · Datos compartidos — HECHA con Netlify Database (ver README → Datos)
+
+Lo de abajo era el plan original con Supabase; se hizo con Netlify Database + Functions + Blobs: colecciones con
+versión (sin pisarse entre equipos), sondeo cada 20 s que sólo lee Blobs, copia local para abrir sin internet,
+invitación con QR y código de un uso, lista de equipos con "quitar acceso", fotos de recetas en Blobs.
+
+<details><summary>Plan original</summary>
+
 - Proyecto en São Paulo (`sa-east-1`). Tablas por colección (miembros, eventos, recetas, plan, compras, tareas,
   premios, estrellas, ajustes) con `familia_id` y **RLS** por familia; o una tabla `documentos (familia_id, coleccion,
   id, datos jsonb, actualizado)` para calzar con la interfaz `Repositorio` actual y mezclar cambios por elemento.
@@ -38,6 +45,8 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
   internet.
 - Migración: al entrar por primera vez, se suben los datos que ya están en el equipo (con confirmación).
 - Fotos de recetas → Supabase Storage (hoy van como data URL dentro del JSON).
+
+</details>
 
 ### Fase 2 · Calendario de iCloud (CalDAV, en ambos sentidos)
 - Edge Function `icloud-calendario` (Deno) con CalDAV contra `caldav.icloud.com` usando `ICLOUD_USUARIO` +

@@ -19,9 +19,9 @@ Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al d
 
 **Vuelta sola al calendario:** en el equipo marcado como *pantalla de la pared* (Familia → Este equipo), si nadie lo toca en 5 minutos vuelve al calendario de esta semana. No lo hace si hay una ventana abierta (una receta mientras se cocina, un formulario a medio llenar). En el teléfono no ocurre nunca. Un tablet táctil grande y apaisado se marca solo como pantalla de pared; se puede cambiar a mano.
 
-**PIN:** con un PIN definido (Familia → PIN), la pantalla de la pared lo pide para crear o cambiar eventos, el menú y las recetas, administrar quehaceres y premios, canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo piden. Queda abierto 5 minutos. El teléfono no lo pide (se puede cambiar por equipo). Es un candado para la casa, no seguridad.
+**PIN:** con un PIN definido (Familia → PIN), la pantalla de la pared lo pide para crear o cambiar eventos, el menú y las recetas, administrar quehaceres y premios (también *Limpiar hechas*), canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo piden. Queda abierto 5 minutos; quitarlo o dejar de pedirlo exige ponerlo otra vez. El teléfono no lo pide (se puede cambiar por equipo). Con la familia en la nube el PIN es el mismo en todos los equipos. Si se olvida: en el teclado, *¿Olvidaste el PIN?* muestra un número; en otro equipo, *Familia → PIN → Destrabar otro equipo* con ese número da un código que lo quita. Un respaldo cargado no cambia el PIN. Es un candado para la casa, no seguridad.
 
-Lo que falta (datos compartidos entre equipos, calendario de iCloud, correo dedicado, recetas por audio con Gemini, fotos) está en [`PLAN.md`](PLAN.md).
+Lo que falta (calendario de iCloud, correo dedicado, recetas por audio con Gemini, fotos en la pared) está en [`PLAN.md`](PLAN.md).
 
 ## Correrlo
 
@@ -44,14 +44,28 @@ Para que cada cambio se publique solo: en Netlify, *Project configuration → Bu
 
 ## Datos
 
-Hoy los datos viven en el `localStorage` **de cada dispositivo**: lo que cambias en el teléfono no aparece en el tablet. Para mover los datos usa *Familia → Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída; si el almacenamiento se llena (fotos), la app avisa y no da por guardado lo que no se guardó.
+**Compartir entre equipos (Familia → ☁️ Compartir entre equipos):** el primer equipo toca *Crear la familia en la nube* y sube lo que tenía. Los demás se unen con *📲 Invitar otro equipo*: aparece un QR (en el iPhone o iPad basta apuntar la Cámara) y un código de 8 letras que sirve una vez y vence en 24 horas. Desde ahí todos ven y cambian lo mismo: lo que se cambia en un equipo aparece en los otros en unos 20 segundos. La lista de equipos conectados permite quitarle el acceso a uno (un teléfono perdido) o desconectar el propio. Sin internet, cada equipo abre con la última copia que guardó y avisa si un cambio no se pudo guardar.
 
-Para compartirlos de verdad hay que conectar una base de datos. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): se escribe otra implementación (Supabase, Firebase, una API propia) y se cambia una línea en `lib/datos/index.ts`. El método `suscribir` está pensado para recibir cambios en vivo de otros dispositivos. Si el tablet y el teléfono van a escribir a la vez, conviene que esa implementación mezcle los cambios por elemento (por `id`) en vez de reemplazar colecciones completas.
+Cómo funciona:
+- **Netlify Database** (Postgres) guarda cada colección (eventos, recetas, menú…) como un documento con número de versión. Un cambio sólo se acepta si parte de la última versión; si otro equipo guardó antes, la app vuelve a aplicar su cambio sobre lo más nuevo, así dos equipos que cambian a la vez no se pisan.
+- **Netlify Blobs** guarda los equipos con acceso (sólo la huella de su clave), las invitaciones, las versiones (los equipos preguntan cada 20 s si hubo cambios sin despertar la base) y las fotos de las recetas.
+- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/salud`. Las migraciones están en `netlify/database/migrations/` y Netlify las aplica al publicar.
+- Sólo se puede crear la primera familia del sitio; para crear otra hay que definir la variable `CLAVE_CREACION` en Netlify y mandarla en la cabecera `x-clave-creacion`.
+
+Sin conectar a la nube, los datos viven en el `localStorage` del equipo y se mueven con *Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): `RepositorioLocal` o `RepositorioNube`, elegido en `lib/datos/index.ts`.
+
+Probar la nube en local: `NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions` (después de `npm run build`) y, la primera vez, `npx netlify-cli database migrations apply`.
 
 ```
 lib/datos/tipos.ts            modelo (Miembro, Evento, Receta, ItemCompra, Tarea…)
 lib/datos/repositorio.ts      interfaz de almacenamiento
 lib/datos/repositorioLocal.ts implementación con localStorage
+lib/datos/repositorioNube.ts  implementación con la nube (versiones, sondeo, copia local)
+lib/datos/nube.ts             sesión del equipo, llamadas a /api, fotos
+components/Nube.tsx           crear familia, invitar (QR), unirse, equipos
+netlify/functions/            API (Netlify Functions)
+netlify/database/migrations/  esquema de Netlify Database
+servidor/comun.ts             base de datos, Blobs y acceso por equipo
 lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
 lib/compras.ts                categorías, unidades, suma de ingredientes
 lib/fechas.ts                 fechas en America/Santiago, semana lunes–domingo

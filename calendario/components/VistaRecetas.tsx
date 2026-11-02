@@ -6,6 +6,7 @@ import { useCandado } from "@/lib/candado";
 import type { Ingrediente, Receta, Unidad } from "@/lib/datos/tipos";
 import { CATEGORIAS, UNIDADES, adivinarCategoria, escalar, sinTildes, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
+import { subirFoto } from "@/lib/datos/nube";
 import { AreaTexto, Boton, BotonIcono, Campo, Contador, Entrada, Modal, Selector, Vacio, cx } from "./ui";
 
 export function FotoReceta({ receta, className }: { receta: Pick<Receta, "foto" | "emoji" | "nombre">; className?: string }) {
@@ -218,7 +219,7 @@ function reducirFoto(archivo: File, max = 640): Promise<string> {
 }
 
 function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => void }) {
-  const { actualizar } = useDatos();
+  const { actualizar, nube } = useDatos();
   const [r, setR] = useState<Receta>(
     () =>
       receta ?? {
@@ -240,8 +241,18 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
     );
 
   const guardar = async () => {
+    // Con la familia en la nube, la foto se sube aparte (y la receta guarda sólo su dirección).
+    let foto = r.foto;
+    if (nube && foto?.startsWith("data:")) {
+      try {
+        foto = await subirFoto(foto);
+      } catch {
+        return setError("No se pudo subir la foto: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.");
+      }
+    }
     const limpia: Receta = {
       ...r,
+      foto,
       nombre: r.nombre.trim(),
       tiempoMin: r.tiempoMin && r.tiempoMin > 0 ? Math.round(r.tiempoMin) : undefined,
       ingredientes: r.ingredientes.filter((i) => i.nombre.trim()).map((i) => ({ ...i, nombre: i.nombre.trim() })),
@@ -253,9 +264,11 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
     if (ok) alCerrar();
     else
       setError(
-        r.foto
-          ? "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba quitando la foto o borrando fotos de otras recetas."
-          : "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba borrando fotos de otras recetas.",
+        nube
+          ? "No se pudo guardar: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo."
+          : r.foto
+            ? "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba quitando la foto o borrando fotos de otras recetas."
+            : "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba borrando fotos de otras recetas.",
       );
   };
 

@@ -12,6 +12,7 @@ import VistaCompras from "./VistaCompras";
 import VistaTareas from "./VistaTareas";
 import VistaAjustes from "./VistaAjustes";
 import { cx } from "./ui";
+import { UnirseModal } from "./Nube";
 
 export type Pestana = "calendario" | "comidas" | "recetas" | "compras" | "tareas" | "ajustes";
 
@@ -50,7 +51,7 @@ function Panel() {
   useWakeLock(true);
   useRecargaDiaria(ahora, "03:30", sinGuardar);
 
-  const { proteger } = useCandado();
+  const { proteger, cerrar: cerrarCandado } = useCandado();
   const [pestana, setPestana] = useState<Pestana>("calendario");
   const ir = useCallback(
     (p: Pestana) => {
@@ -70,8 +71,17 @@ function Panel() {
   useEffect(() => {
     irRef.current = ir;
   }, [ir]);
+  // Enlace de invitación (QR): …/#unirse=CÓDIGO
+  const [unirse, setUnirse] = useState<string | null>(null);
   useEffect(() => {
     const f = () => {
+      const inv = /^#unirse=([A-Za-z0-9-]+)$/.exec(window.location.hash);
+      if (inv) {
+        history.replaceState(null, "", location.pathname);
+        setPestana("calendario");
+        setUnirse(inv[1].toUpperCase().replace(/[^A-Z0-9]/g, ""));
+        return;
+      }
       const h = leerHash();
       if (h === "ajustes") {
         history.replaceState(null, "", location.pathname);
@@ -101,6 +111,7 @@ function Panel() {
       if (yaVolvio || document.hidden || Date.now() - ultimo < INACTIVIDAD) return;
       if (document.querySelector('[role="dialog"]')) return;
       yaVolvio = true;
+      cerrarCandado(); // lo que se abrió con el PIN vuelve a quedar cerrado
       ir("calendario");
       setReinicio((n) => n + 1); // vuelve a semana / hoy / sin filtro
     }, 10_000);
@@ -116,7 +127,7 @@ function Panel() {
       window.removeEventListener("wheel", actividad, opciones);
       document.removeEventListener("visibilitychange", alVisible);
     };
-  }, [modoPared, ir]);
+  }, [modoPared, ir, cerrarCandado]);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
@@ -151,6 +162,8 @@ function Panel() {
           {pestana === "ajustes" && <VistaAjustes />}
         </main>
       </div>
+
+      {unirse && <UnirseModal codigo={unirse} alCerrar={() => setUnirse(null)} />}
 
       {/* Barra inferior (teléfono) */}
       <nav className="grid shrink-0 grid-cols-6 border-t border-borde bg-superficie pb-[env(safe-area-inset-bottom)] md:hidden">

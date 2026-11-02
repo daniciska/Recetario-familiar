@@ -5,12 +5,14 @@ import { useDatos } from "@/lib/store";
 import { useCandado } from "@/lib/candado";
 import type { Miembro, Momento, MovimientoEstrellas, Premio, Tarea } from "@/lib/datos/tipos";
 import { nuevoId } from "@/lib/ejemplo";
-import { diaSemana, hoy as hoyFecha } from "@/lib/fechas";
+import { ahoraEnSantiago, diaSemana, hoy as hoyFecha } from "@/lib/fechas";
 import { Avatar, Boton, BotonIcono, Campo, Casilla, Contador, Entrada, Modal, Segmentos, Vacio, cx } from "./ui";
 
 // ---------- Reglas de los quehaceres (puras) ----------
 
 const DIAS_LETRA = ["L", "M", "M", "J", "V", "S", "D"];
+/** En el texto de la repetición (sin la posición del botón) "M" sería martes o miércoles. */
+const DIAS_CORTO = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 const DIAS_NOMBRE = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
 const MOMENTOS: { id: Momento; texto: string; emoji: string }[] = [
   { id: "manana", texto: "Mañana", emoji: "☀️" },
@@ -37,7 +39,7 @@ export function textoRepeticion(t: Tarea): string | null {
   if (t.repetir === "diaria") return "Todos los días";
   if (t.repetir === "dias" && t.dias?.length) {
     if (t.dias.length === 5 && t.dias.every((d) => d < 5)) return "Lunes a viernes";
-    return t.dias.map((d) => DIAS_LETRA[d]).join(" · ");
+    return t.dias.map((d) => DIAS_CORTO[d]).join(" · ");
   }
   return null;
 }
@@ -64,6 +66,7 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
   const [verPremios, setVerPremios] = useState(false);
   const [quien, setQuien] = useState<Tarea | null>(null);
   const [festejo, setFestejo] = useState<string | null>(null);
+  const [confirmarLimpiar, setConfirmarLimpiar] = useState(false);
 
   const miembros = useMemo(() => new Map(estado.miembros.map((m) => [m.id, m])), [estado.miembros]);
   const saldo = useMemo(() => saldos(estado.estrellas), [estado.estrellas]);
@@ -100,10 +103,21 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
       }),
     );
     const para = quienId ?? t.miembroId;
-    if (ya) actualizar("estrellas", (l) => l.filter((m) => m.ref !== ref));
-    else if ((t.estrellas ?? 0) > 0 && para) {
+    if (ya) {
+      // Desmarcar devuelve las estrellas con un movimiento en contra (queda en el historial: se ve
+      // si alguien desmarcó lo de otro).
+      actualizar("estrellas", (l) => {
+        const neto = new Map<string, number>();
+        for (const m of l) if (m.ref === ref) neto.set(m.miembroId, (neto.get(m.miembroId) ?? 0) + m.cantidad);
+        const devolver = [...neto].filter(([, n]) => n > 0);
+        return [
+          ...l,
+          ...devolver.map(([miembroId, n]) => ({ id: nuevoId("est"), miembroId, cantidad: -n, motivo: `↩️ Desmarcó: ${t.titulo}`, fecha: new Date().toISOString(), ref })),
+        ];
+      });
+    } else if ((t.estrellas ?? 0) > 0 && para) {
       actualizar("estrellas", (l) => [
-        ...l.filter((m) => m.ref !== ref),
+        ...l,
         { id: nuevoId("est"), miembroId: para, cantidad: t.estrellas!, motivo: t.titulo, fecha: new Date().toISOString(), ref },
       ]);
       const nombre = miembros.get(para)?.nombre;
@@ -195,18 +209,31 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
           <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
               <h2 className="text-lg font-extrabold uppercase text-tinta-suave">{otrosDias.length > 0 ? "Otros días" : ""}</h2>
-              {hayHechasUnaVez && (
-                <Boton
-                  variante="fantasma"
-                  onClick={() =>
-                    actualizar("tareas", (l) =>
-                      l.filter((t) => !((!t.repetir || t.repetir === "nunca") && t.hecha && (filtro === "todos" || t.miembroId === filtro))),
-                    )
-                  }
-                >
-                  🧹 Limpiar hechas
-                </Boton>
-              )}
+              {hayHechasUnaVez &&
+                (confirmarLimpiar ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-base font-bold">¿Borrar las hechas?</span>
+                    <Boton
+                      variante="peligro"
+                      onClick={() => {
+                        setConfirmarLimpiar(false);
+                        actualizar("tareas", (l) =>
+                          l.filter((t) => !((!t.repetir || t.repetir === "nunca") && t.hecha && (filtro === "todos" || t.miembroId === filtro))),
+                        );
+                      }}
+                    >
+                      Sí, borrar
+                    </Boton>
+                    <Boton variante="fantasma" onClick={() => setConfirmarLimpiar(false)}>
+                      No
+                    </Boton>
+                  </span>
+                ) : (
+                  // Borrar es administrar: pide el PIN en la pared (marcar no).
+                  <Boton variante="fantasma" onClick={() => proteger(() => setConfirmarLimpiar(true))}>
+                    🧹 Limpiar hechas
+                  </Boton>
+                ))}
             </div>
             {otrosDias.map((t) => (
               <button
@@ -229,7 +256,7 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
           {festejo}
         </div>
       )}
-      {editando && <EditorTarea tarea={editando === "nueva" ? undefined : editando} paraInicial={filtro === "todos" ? undefined : filtro} alCerrar={() => setEditando(null)} />}
+      {editando && <EditorTarea hoy={hoy} tarea={editando === "nueva" ? undefined : editando} paraInicial={filtro === "todos" ? undefined : filtro} alCerrar={() => setEditando(null)} />}
       {verPremios && <PremiosModal alCerrar={() => setVerPremios(false)} />}
       {quien && (
         <Modal titulo="¿Quién la hizo?" alCerrar={() => setQuien(null)} ancho="max-w-md">
@@ -344,7 +371,7 @@ function FilaTarea({
 
 // ---------- Editor de quehaceres ----------
 
-function EditorTarea({ tarea, paraInicial, alCerrar }: { tarea?: Tarea; paraInicial?: string; alCerrar: () => void }) {
+function EditorTarea({ tarea, hoy, paraInicial, alCerrar }: { tarea?: Tarea; hoy: string; paraInicial?: string; alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();
   const [f, setF] = useState<Tarea>(
     () => tarea ?? { id: nuevoId("tar"), titulo: "", miembroId: paraInicial, hecha: false, creada: new Date().toISOString(), repetir: "nunca" },
@@ -363,7 +390,27 @@ function EditorTarea({ tarea, paraInicial, alCerrar }: { tarea?: Tarea; paraInic
       hechas: repetir === "nunca" ? undefined : (f.hechas ?? []),
       estrellas: f.estrellas || undefined,
     };
+    // Si pasa de "una vez" a repetirse (o al revés), lo hecho hoy sigue hecho y sus estrellas cambian
+    // de referencia; si no, aparecería pendiente y se podría cobrar dos veces.
+    let mover: [string, string] | null = null;
+    const unaVez = (t: Tarea) => !t.repetir || t.repetir === "nunca";
+    if (tarea && unaVez(tarea) !== unaVez(limpio)) {
+      const refVieja = refDe(tarea, hoy);
+      const mov = estado.estrellas.find((m) => m.ref === refVieja);
+      // Una de "una vez" no guarda cuándo se hizo: cuenta como de hoy si sus estrellas son de hoy.
+      const hechaHoy = unaVez(tarea) ? tarea.hecha && (!mov || ahoraEnSantiago(new Date(mov.fecha)).fecha === hoy) : hechaEn(tarea, hoy);
+      if (unaVez(limpio)) limpio.hecha = hechaHoy;
+      else {
+        limpio.hecha = false;
+        if (hechaHoy && tocaEn(limpio, hoy)) limpio.hechas = [...new Set([...(limpio.hechas ?? []), hoy])].sort().slice(-60);
+      }
+      if (mov && hechaEn(limpio, hoy) && tocaEn(limpio, hoy)) mover = [refVieja, refDe(limpio, hoy)];
+    }
     const ok = await actualizar("tareas", (l) => (l.some((t) => t.id === limpio.id) ? l.map((t) => (t.id === limpio.id ? limpio : t)) : [limpio, ...l]));
+    if (ok && mover) {
+      const [de, a] = mover;
+      await actualizar("estrellas", (l) => l.map((m) => (m.ref === de ? { ...m, ref: a } : m)));
+    }
     if (ok) alCerrar();
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };
@@ -470,6 +517,12 @@ function EditorTarea({ tarea, paraInicial, alCerrar }: { tarea?: Tarea; paraInic
 
 // ---------- Premios y estrellas ----------
 
+/** El último emoji escrito (los compuestos, con piel o con ZWJ, quedan enteros). */
+function ultimoGrafema(v: string): string {
+  const seg = typeof Intl !== "undefined" && "Segmenter" in Intl ? [...new Intl.Segmenter("es", { granularity: "grapheme" }).segment(v)] : [];
+  return seg.length ? seg[seg.length - 1].segment : [...v].slice(-1).join("");
+}
+
 function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();
   const { proteger } = useCandado();
@@ -498,7 +551,7 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
         <div className="space-y-6">
           <div className="grid gap-2 sm:grid-cols-2">
             {estado.miembros.map((m) => (
-              <div key={m.id} className="flex items-center gap-3 rounded-2xl bg-superficie-2 p-2 pl-3">
+              <div key={m.id} className="flex min-w-0 items-center gap-3 rounded-2xl bg-superficie-2 p-2 pl-3">
                 <Avatar miembro={m} />
                 <span className="min-w-0 flex-1 truncate text-xl font-extrabold">{m.nombre}</span>
                 <Estrellas n={saldo.get(m.id) ?? 0} />
@@ -520,7 +573,9 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
             {estado.premios.length === 0 && <Vacio emoji="🎁" texto="Agrega premios para canjear con estrellas." />}
             <div className="space-y-2">
               {estado.premios.map((p) => {
-                const para = p.miembroId ? estado.miembros.filter((m) => m.id === p.miembroId) : estado.miembros;
+                // Si la persona del premio ya no está, queda para todos (si no, nadie podría canjearlo).
+                const suyo = p.miembroId ? estado.miembros.filter((m) => m.id === p.miembroId) : [];
+                const para = suyo.length ? suyo : estado.miembros;
                 return (
                   <div key={p.id} className="rounded-2xl bg-superficie-2 p-3">
                     <div className="flex items-center gap-3">
@@ -530,7 +585,7 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
                       <span className="min-w-0 flex-1">
                         <span className="block text-xl font-extrabold leading-tight">{p.titulo}</span>
                         <span className="text-base font-bold text-tinta-suave">
-                          ⭐ {p.costo} · {p.miembroId ? `para ${miembros.get(p.miembroId)?.nombre ?? "—"}` : "para todos"}
+                          ⭐ {p.costo} · {p.miembroId && miembros.get(p.miembroId) ? `para ${miembros.get(p.miembroId)!.nombre}` : "para todos"}
                         </span>
                       </span>
                       <BotonIcono
@@ -618,7 +673,7 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
           <div className="space-y-4">
             <div className="grid grid-cols-[5rem_1fr] gap-3">
               <Campo etiqueta="Ícono">
-                <Entrada value={nuevo.emoji} maxLength={4} className="text-center text-2xl" onChange={(e) => setNuevo({ ...nuevo, emoji: e.target.value })} />
+                <Entrada value={nuevo.emoji} className="text-center text-2xl" onChange={(e) => setNuevo({ ...nuevo, emoji: ultimoGrafema(e.target.value) })} />
               </Campo>
               <Campo etiqueta="Premio">
                 <Entrada autoFocus value={nuevo.titulo} placeholder="Ej.: Helado" onChange={(e) => setNuevo({ ...nuevo, titulo: e.target.value })} />

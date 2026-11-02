@@ -2,11 +2,12 @@
 
 import { useRef, useState } from "react";
 import { useDatos } from "@/lib/store";
-import { TecladoPin, huellaPin, usePedirPinEnEquipo } from "@/lib/candado";
+import { TecladoPin, codigoDestrabe, huellaPin, useCandado, usePedirPinEnEquipo } from "@/lib/candado";
 import type { EstadoApp, Miembro, Tema } from "@/lib/datos/tipos";
 import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
-import { hoy } from "@/lib/fechas";
+import { descargarRespaldo } from "@/lib/respaldo";
+import { SeccionNube } from "./Nube";
 import { useModoPared } from "@/lib/hooks";
 import { Avatar, Boton, Campo, Entrada, Modal, Segmentos, Selector, SelectorHora, cx } from "./ui";
 
@@ -32,26 +33,19 @@ const CIUDADES: { nombre: string; lat: number; lon: number }[] = [
 ];
 
 export default function VistaAjustes() {
-  const { estado, actualizar, reemplazarTodo, sinGuardar } = useDatos();
+  const { estado, actualizar, reemplazarTodo, sinGuardar, nube } = useDatos();
   // Si este navegador no deja guardar, cada "✓" lo recuerda.
   const noGuarda = sinGuardar ? " Ojo: este navegador no guarda datos; se perderá al cerrar o recargar." : "";
   const [editando, setEditando] = useState<Miembro | "nuevo" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmarReset, setConfirmarReset] = useState(false);
   const [modoPared, setModoPared] = useModoPared();
+  const { proteger } = useCandado();
   const archivo = useRef<HTMLInputElement>(null);
   const a = estado.ajustes;
   const setA = (cambios: Partial<EstadoApp["ajustes"]>) => actualizar("ajustes", (p) => ({ ...p, ...cambios }));
 
-  const exportar = () => {
-    const blob = new Blob([JSON.stringify(estado, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const enlace = document.createElement("a");
-    enlace.href = url;
-    enlace.download = `calendario-familiar-${hoy()}.json`;
-    enlace.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportar = () => descargarRespaldo(estado);
 
   const importar = async (f: File) => {
     let crudo: unknown;
@@ -62,11 +56,14 @@ export default function VistaAjustes() {
     }
     const r = normalizarRespaldo(crudo, estadoEjemplo().ajustes);
     if ("error" in r) return setMsg(r.error);
-    const ok = await reemplazarTodo(r.estado);
+    // El PIN es de la casa, no de los datos: un respaldo no lo quita ni pone uno que nadie conoce.
+    const ok = await reemplazarTodo({ ...r.estado, ajustes: { ...r.estado.ajustes, pin: estado.ajustes.pin } });
     setMsg(
       ok
         ? "✓ Respaldo cargado." + noGuarda
-        : "No se pudo cargar: no cabe en el almacenamiento de este equipo (las fotos ocupan mucho). Tus datos siguen como estaban.",
+        : nube
+          ? "No se pudo cargar: no hay conexión con la nube. Tus datos siguen como estaban."
+          : "No se pudo cargar: no cabe en el almacenamiento de este equipo (las fotos ocupan mucho). Tus datos siguen como estaban.",
     );
   };
 
@@ -138,7 +135,9 @@ export default function VistaAjustes() {
             <span className="mb-1.5 block text-base font-bold text-tinta-suave">Este equipo</span>
             <Segmentos<"pared" | "normal">
               valor={modoPared ? "pared" : "normal"}
-              alCambiar={(v) => setModoPared(v === "pared")}
+              alCambiar={(v) =>
+                v === "normal" && estado.ajustes.pin ? proteger(() => setModoPared(false), { siempre: true }) : setModoPared(v === "pared")
+              }
               opciones={[
                 { valor: "pared", texto: "🖼️ Pared" },
                 { valor: "normal", texto: "📱 Teléfono u otro" },
@@ -162,6 +161,8 @@ export default function VistaAjustes() {
             </div>
           )}
         </div>
+
+        <SeccionNube />
 
         <SeccionPin />
 
@@ -197,7 +198,8 @@ export default function VistaAjustes() {
                 <Boton
                   variante="peligro"
                   onClick={async () => {
-                    const ok = await reemplazarTodo(estadoEjemplo());
+                    const ejemplo = estadoEjemplo();
+                    const ok = await reemplazarTodo({ ...ejemplo, ajustes: { ...ejemplo.ajustes, pin: estado.ajustes.pin } });
                     setConfirmarReset(false);
                     setMsg(ok ? "✓ Datos de ejemplo restaurados." + noGuarda : "No se pudo guardar en este equipo.");
                   }}
@@ -254,6 +256,7 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
       l.map((e) => ({ ...e, miembros: e.miembros.filter((id) => id !== m.id) })).filter((e) => e.miembros.length > 0),
     );
     actualizar("tareas", (l) => l.map((t) => (t.miembroId === m.id ? { ...t, miembroId: undefined } : t)));
+    actualizar("premios", (l) => l.map((p) => (p.miembroId === m.id ? { ...p, miembroId: undefined } : p)));
     alCerrar();
   };
 
@@ -333,18 +336,24 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
 
 /** PIN para que en la pantalla de la pared los niños puedan mirar y marcar quehaceres, pero no cambiar todo. */
 function SeccionPin() {
-  const { estado, actualizar } = useDatos();
+  const { estado, actualizar, nube } = useDatos();
+  const { proteger } = useCandado();
   const [pedir, setPedir] = usePedirPinEnEquipo();
+  const [modoPared, setModoPared] = useModoPared();
   const [paso, setPaso] = useState<null | { primero?: string }>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [numero, setNumero] = useState("");
   const tiene = !!estado.ajustes.pin;
 
   const elegido = async (pin: string) => {
     if (!paso?.primero) return setPaso({ primero: pin });
     setPaso(null);
     if (pin !== paso.primero) return setMsg("Los dos PIN no coinciden. Prueba de nuevo.");
+    // Lo que decide si este equipo pide el PIN queda anotado: así no cambia al girar el tablet.
+    setModoPared(modoPared);
+    setPedir(pedir);
     const ok = await actualizar("ajustes", (a) => ({ ...a, pin: huellaPin(pin) }));
-    setMsg(ok ? "✓ PIN guardado." : "No se pudo guardar en este equipo.");
+    setMsg(ok ? "✓ PIN guardado." : "No se pudo guardar.");
   };
 
   return (
@@ -358,13 +367,18 @@ function SeccionPin() {
       <div className="flex flex-wrap items-center gap-3">
         {tiene ? (
           <>
-            <Boton onClick={() => setPaso({})}>Cambiar PIN</Boton>
+            <Boton onClick={() => proteger(() => setPaso({}), { siempre: true })}>Cambiar PIN</Boton>
             <Boton
               variante="peligro"
-              onClick={async () => {
-                const ok = await actualizar("ajustes", (a) => ({ ...a, pin: undefined }));
-                setMsg(ok ? "PIN quitado: cualquiera puede hacer cambios." : "No se pudo guardar en este equipo.");
-              }}
+              onClick={() =>
+                proteger(
+                  async () => {
+                    const ok = await actualizar("ajustes", (a) => ({ ...a, pin: undefined }));
+                    setMsg(ok ? "PIN quitado: cualquiera puede hacer cambios." : "No se pudo guardar.");
+                  },
+                  { siempre: true },
+                )
+              }
             >
               Quitar PIN
             </Boton>
@@ -380,18 +394,37 @@ function SeccionPin() {
           <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Pedir el PIN en este equipo?</span>
           <Segmentos<"si" | "no">
             valor={pedir ? "si" : "no"}
-            alCambiar={(v) => setPedir(v === "si")}
+            alCambiar={(v) => (v === "no" ? proteger(() => setPedir(false), { siempre: true }) : setPedir(true))}
             opciones={[
               { valor: "si", texto: "Sí" },
               { valor: "no", texto: "No" },
             ]}
           />
           <p className="mt-1.5 text-base text-tinta-suave">
-            Por defecto lo pide sólo la pantalla de la pared, no el teléfono. Si olvidas el PIN, cámbialo desde un equipo que
-            no lo pida.
+            Por defecto lo pide sólo la pantalla de la pared, no el teléfono.{" "}
+            {nube
+              ? "Con la familia en la nube, el PIN es el mismo en todos los equipos: si lo olvidas, cámbialo desde el teléfono."
+              : "Cada equipo guarda su propio PIN. Si lo olvidas, toca «¿Olvidaste el PIN?» en el teclado de ese equipo."}
           </p>
         </div>
       )}
+      <div className="mt-4">
+        <span className="mb-1.5 block text-base font-bold text-tinta-suave">Destrabar otro equipo que olvidó el PIN</span>
+        <Entrada
+          inputMode="numeric"
+          autoComplete="off"
+          value={numero}
+          onChange={(e) => setNumero(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          placeholder="Número que muestra el otro equipo"
+          aria-label="Número del otro equipo"
+          className="num max-w-80"
+        />
+        {numero.length === 6 && (
+          <p className="mt-2 text-lg">
+            Escribe allá este código: <strong className="num font-display text-2xl tracking-widest">{codigoDestrabe(numero)}</strong>
+          </p>
+        )}
+      </div>
       {msg && <p className="mt-3 text-lg font-bold">{msg}</p>}
       {paso && (
         <TecladoPin

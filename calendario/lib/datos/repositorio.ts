@@ -1,6 +1,19 @@
 import type { ClaveColeccion, EstadoApp } from "./tipos";
 
 /**
+ * Otro equipo cambió esta colección antes: `datos` es lo último que hay. El store vuelve a aplicar
+ * su cambio sobre eso y guarda de nuevo.
+ */
+export class ConflictoVersion extends Error {
+  constructor(
+    public clave: ClaveColeccion,
+    public datos: unknown,
+  ) {
+    super(`Conflicto al guardar ${clave}`);
+  }
+}
+
+/**
  * Capa de datos abstracta. La app sólo habla con esta interfaz.
  *
  * Hoy se usa `RepositorioLocal` (localStorage del navegador). Para conectar una
@@ -27,4 +40,8 @@ export interface Repositorio {
    * Devuelve una función para dejar de escuchar.
    */
   suscribir(alCambiar: (estado: EstadoApp) => void): () => void;
+  /** (Opcional) avisa si se puede hablar con la nube o no. */
+  alCambiarConexion?(f: (conectado: boolean) => void): () => void;
+  /** (Opcional) la familia en la nube a la que está conectado este equipo. */
+  readonly familia?: { id: string; nombre: string };
 }
