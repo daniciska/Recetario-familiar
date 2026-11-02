@@ -244,7 +244,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
       pasos: r.pasos.map((p) => p.trim()).filter(Boolean),
     };
     const ok = await actualizar("recetas", (lista) =>
-      receta ? lista.map((x) => (x.id === receta.id ? limpia : x)) : [...lista, limpia],
+      lista.some((x) => x.id === limpia.id) ? lista.map((x) => (x.id === limpia.id ? limpia : x)) : [...lista, limpia],
     );
     if (ok) alCerrar();
     else
@@ -375,8 +375,20 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2 rounded-2xl bg-superficie-2 p-2 md:grid-cols-[6rem_9rem_minmax(0,1fr)_13rem_auto]"
               >
                 <Entrada
+                  aria-label="Ingrediente"
+                  placeholder="Ingrediente"
+                  className="col-span-2 col-start-1 row-start-1 md:col-span-1 md:col-start-3 md:row-start-1"
+                  value={i.nombre}
+                  onChange={(e) => {
+                    const nombre = e.target.value;
+                    // Mientras no se haya elegido a mano, la categoría se adivina por el nombre.
+                    const auto = i.categoria === "Otros" || i.categoria === adivinarCategoria(i.nombre);
+                    setIng(i.id, { nombre, ...(auto ? { categoria: adivinarCategoria(nombre) } : {}) });
+                  }}
+                />
+                <Entrada
                   aria-label="Cantidad"
-                  className="col-start-1 row-start-2 md:row-start-1"
+                  className="col-start-1 row-start-2 md:col-start-1 md:row-start-1"
                   type="number"
                   inputMode="decimal"
                   step="any"
@@ -388,7 +400,7 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                 />
                 <Selector
                   aria-label="Unidad"
-                  className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:row-start-1"
+                  className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:col-start-2 md:row-start-1"
                   value={i.unidad}
                   onChange={(e) => {
                     const u = e.target.value as Unidad;
@@ -401,18 +413,6 @@ function EditorReceta({ receta, alCerrar }: { receta?: Receta; alCerrar: () => v
                     </option>
                   ))}
                 </Selector>
-                <Entrada
-                  aria-label="Ingrediente"
-                  placeholder="Ingrediente"
-                  className="col-span-2 col-start-1 row-start-1 md:col-span-1 md:col-start-3"
-                  value={i.nombre}
-                  onChange={(e) => {
-                    const nombre = e.target.value;
-                    // Mientras no se haya elegido a mano, la categoría se adivina por el nombre.
-                    const auto = i.categoria === "Otros" || i.categoria === adivinarCategoria(i.nombre);
-                    setIng(i.id, { nombre, ...(auto ? { categoria: adivinarCategoria(nombre) } : {}) });
-                  }}
-                />
                 <Selector
                   aria-label="Categoría"
                   className="col-span-3 col-start-1 row-start-3 md:col-span-1 md:col-start-4 md:row-start-1"

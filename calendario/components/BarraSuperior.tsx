@@ -35,11 +35,12 @@ export default function BarraSuperior({
   return (
     <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:flex-nowrap md:px-4 md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
       {/* Hora y fecha */}
-      <div className="flex min-w-0 shrink-0 items-baseline gap-4 md:shrink">
+      <div className="flex min-w-0 items-baseline gap-4">
         <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl">
           {ahora.hora}
         </span>
-        <div className="min-w-0 leading-tight">
+        {/* Sin min-w-0: el mínimo es la palabra más larga ("septiembre"), así nunca se sale de su caja. */}
+        <div className="leading-tight">
           <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl">{fecha}</div>
           <div className="text-base font-bold text-tinta-suave md:text-xl">{estado.ajustes.nombreFamilia}</div>
         </div>
@@ -65,7 +66,7 @@ export default function BarraSuperior({
       <button
         type="button"
         onClick={alIrAMenu}
-        className="flex min-w-0 flex-[1_1_14rem] items-center gap-2 rounded-3xl bg-acento-suave px-3 py-2 text-left transition active:scale-[0.99] md:gap-3 md:px-4"
+        className="flex min-w-0 flex-[1_1_10rem] items-center gap-2 md:flex-[1_1_14rem] rounded-3xl bg-acento-suave px-3 py-2 text-left transition active:scale-[0.99] md:gap-3 md:px-4"
       >
         <span className="text-3xl md:text-4xl" aria-hidden>
           {destacadas[0]?.emoji ?? "🍳"}

@@ -2,6 +2,10 @@
 
 @custom-variant noche (&:where([data-tema="noche"], [data-tema="noche"] *));
 
+/* "md" = interfaz de tablet: ancho de tablet Y alto suficiente. Un teléfono en horizontal
+   (≈ 844×390) sigue usando la interfaz de teléfono. Igual que MEDIA_TABLET en lib/hooks.ts. */
+@custom-variant md (@media (width >= 48rem) and (height >= 30rem));
+
 /* Paleta cálida tipo "panel de madera y papel". Los colores se definen como variables
    para poder cambiar a modo noche con data-tema="noche" en <html>. */
 :root {

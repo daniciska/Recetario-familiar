@@ -30,29 +30,38 @@ function numeroCL(s: string): number {
   if (s === "¾") return 0.75;
   const fr = s.match(/^(\d+)\/(\d+)$/);
   if (fr) return Number(fr[1]) / Number(fr[2] || 1);
-  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, "");
+  // El punto separa miles sólo si no parte con 0 ("0.500" es medio, "1.000" son mil).
+  if (/^[1-9]\d{0,2}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, "");
   return Number(s.replace(",", "."));
 }
 
-/** "2 kg de papas" → { cantidad: 2, unidad: "kg", nombre: "papas" } */
+/**
+ * "2 kg de papas" → { cantidad: 2, unidad: "kg", nombre: "papas" }.
+ * El número puede ir pegado a una unidad ("2kg"), pero no a otra palabra ("7up" queda tal cual).
+ * "3x arroz" o "3 x arroz" son 3 de arroz.
+ */
 export function interpretar(texto: string): Pick<ItemCompra, "nombre" | "cantidad" | "unidad"> {
   const t = texto.trim().replace(/\s+/g, " ");
   const sin = { nombre: t, cantidad: null, unidad: "unidad" as Unidad };
-  const m = t.match(/^(\d+(?:[.,]\d+)*|\d+\/\d+|½|¼|¾)\s*(.*)$/);
-  if (!m || !m[2]) return sin;
+  // La fracción va primero en la alternancia: si no, "1" calza solo y "/2" queda en el nombre.
+  const m = t.match(/^(\d+\/\d+|\d+(?:[.,]\d+)*|½|¼|¾)(\s*)(.*)$/);
+  if (!m || !m[3]) return sin;
   let cantidad = numeroCL(m[1]);
   if (!Number.isFinite(cantidad) || cantidad <= 0) return sin;
   let unidad: Unidad = "unidad";
-  let resto = m[2];
+  let resto = m[3];
+  const pegado = m[2] === "";
   const w = resto.match(/^([a-záéíóúñ]+)\.?(?:\s+(.*))?$/i);
-  if (w) {
-    const alias = ALIAS.find(([re]) => re.test(w[1]));
-    if (alias) {
-      if (!w[2]) return sin; // "2 kg" sin decir de qué
-      unidad = alias[1];
-      cantidad *= alias[2];
-      resto = w[2];
-    }
+  const alias = w ? ALIAS.find(([re]) => re.test(w[1])) : undefined;
+  if (w && alias) {
+    if (!w[2]) return sin; // "2 kg" sin decir de qué
+    unidad = alias[1];
+    cantidad *= alias[2];
+    resto = w[2];
+  } else if (/^x(\s+|$)/i.test(resto)) {
+    resto = resto.replace(/^x\s*/i, ""); // "3x arroz"
+  } else if (pegado) {
+    return sin; // "7up", "4x4": el número es parte del nombre
   }
   resto = resto.replace(/^de\s+/i, "").trim();
   if (!resto) return sin;
@@ -100,15 +109,15 @@ export default function VistaCompras() {
   /** Un comprado del menú de esta semana o de una próxima se oculta (no se borra); lo demás se borra. */
   const lunesHoy = lunesDe(hoy());
   const seGuarda = (c: ItemCompra) => c.comprado && c.origen === "menu" && !!c.semana && c.semana >= lunesHoy;
+  /** Los ocultos de semanas pasadas ya no sirven para descontar nada: se limpian en cada cambio. */
+  const sinViejos = (l: ItemCompra[]) => l.filter((c) => !(c.oculto && (!c.semana || c.semana < lunesHoy)));
   const quitar = (id: string) =>
     actualizar("compras", (l) =>
-      l.flatMap((c) => (c.id !== id ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
+      sinViejos(l).flatMap((c) => (c.id !== id ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
     );
   const sacarComprados = () =>
     actualizar("compras", (l) =>
-      l
-        .filter((c) => !(c.oculto && c.semana && c.semana < lunesHoy)) // limpia ocultos de semanas pasadas
-        .flatMap((c) => (!c.comprado || c.oculto ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
+      sinViejos(l).flatMap((c) => (!c.comprado || c.oculto ? [c] : seGuarda(c) ? [{ ...c, oculto: true }] : [])),
     );
 
   return (

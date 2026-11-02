@@ -10,13 +10,21 @@ export default function ErrorApp({ reset }: { error: Error; reset: () => void })
 
   const descargar = () => {
     const datos: Record<string, unknown> = {};
+    let claves: string[] = [];
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k?.startsWith(PREFIJO)) datos[k.slice(PREFIJO.length)] = JSON.parse(localStorage.getItem(k) ?? "null");
-      }
+      claves = Object.keys(localStorage).filter((k) => k.startsWith(PREFIJO));
     } catch {
-      /* lo que se pueda */
+      /* almacenamiento bloqueado */
+    }
+    // Cada clave por separado: una dañada no impide copiar las demás (se guarda su texto tal cual).
+    for (const k of claves) {
+      let texto: string | null = null;
+      try {
+        texto = localStorage.getItem(k);
+        datos[k.slice(PREFIJO.length)] = JSON.parse(texto ?? "null");
+      } catch {
+        datos[k.slice(PREFIJO.length)] = { _textoDañado: texto };
+      }
     }
     const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 1, ...datos }, null, 2)], { type: "application/json" }));
     const a = document.createElement("a");

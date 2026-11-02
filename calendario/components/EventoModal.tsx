@@ -61,12 +61,15 @@ export default function EventoModal({
     setF((p) => ({ ...p, fecha: v, repetirHasta: p.repetirHasta && p.repetirHasta < v ? undefined : p.repetirHasta }));
 
   const cambiarRepeticion = (r: Repeticion) =>
-    setF((p) => ({
-      ...p,
-      repeticion: r,
+    setF((p) => {
+      const eraSerie = !!evento && evento.repeticion !== "nunca";
+      let nueva = p.fecha;
       // Una serie que pasa a "No se repite" queda en el día que se abrió, no en el primero de la serie.
-      fecha: r === "nunca" && evento && evento.repeticion !== "nunca" && p.fecha === evento.fecha ? fecha : p.fecha,
-    }));
+      if (eraSerie && r === "nunca" && p.fecha === evento.fecha) nueva = fecha;
+      // Si vuelve a repetirse sin que se haya tocado la fecha, la serie recupera su inicio original.
+      else if (eraSerie && r !== "nunca" && p.repeticion === "nunca" && p.fecha === fecha) nueva = evento.fecha;
+      return { ...p, repeticion: r, fecha: nueva };
+    });
 
   const guardar = async () => {
     if (!valido) return;
@@ -83,7 +86,7 @@ export default function EventoModal({
       excepciones: excepciones.length ? excepciones : undefined,
     };
     const ok = await actualizar("eventos", (lista) =>
-      evento ? lista.map((e) => (e.id === evento.id ? limpio : e)) : [...lista, limpio],
+      lista.some((e) => e.id === limpio.id) ? lista.map((e) => (e.id === limpio.id ? limpio : e)) : [...lista, limpio],
     );
     if (ok) alCerrar();
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");

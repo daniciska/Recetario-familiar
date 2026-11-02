@@ -59,34 +59,68 @@ export function useWakeLock(activo = true) {
  * del deploy y limpia memoria en tablets que pasan meses encendidos).
  *
  * Sólo recarga si el servidor responde (sin internet, recargar dejaría la pantalla de error
- * del navegador), si no hay una ventana abierta a medio editar y si no hay cambios sin guardar.
- * Si no se puede, lo reintenta cada 5 minutos. Si el equipo estaba suspendido a esa hora,
- * recarga apenas despierta.
+ * del navegador), si nadie tocó la pantalla en los últimos 2 minutos y si no hay cambios que
+ * vivan sólo en memoria. Una ventana abierta la frena sólo si alguien la tocó en la última hora
+ * (una olvidada se limpia como antes). Si no se puede, lo reintenta cada 5 minutos; si el equipo
+ * estaba suspendido a esa hora, lo intenta al despertar, cuando se cumplan esas condiciones.
  */
 export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false) {
   const [objetivo] = useState(() => `${ahora.hora < hora ? ahora.fecha : sumarDias(ahora.fecha, 1)} ${hora}`);
   const probando = useRef(false);
   const ultimoIntento = useRef(0);
+  const ultimoToque = useRef(0);
+  const bloqueadaRef = useRef(bloqueada);
   useEffect(() => {
+    bloqueadaRef.current = bloqueada;
+  }, [bloqueada]);
+
+  useEffect(() => {
+    ultimoToque.current = Date.now();
+    const tocar = () => {
+      ultimoToque.current = Date.now();
+    };
+    const alVisible = () => document.visibilityState === "visible" && tocar();
+    const op = { capture: true, passive: true } as const;
+    window.addEventListener("pointerdown", tocar, op);
+    window.addEventListener("keydown", tocar, op);
+    window.addEventListener("wheel", tocar, op);
+    document.addEventListener("visibilitychange", alVisible);
+    return () => {
+      window.removeEventListener("pointerdown", tocar, op);
+      window.removeEventListener("keydown", tocar, op);
+      window.removeEventListener("wheel", tocar, op);
+      document.removeEventListener("visibilitychange", alVisible);
+    };
+  }, []);
+
+  useEffect(() => {
+    const sePuede = () => {
+      const quieto = Date.now() - ultimoToque.current;
+      if (bloqueadaRef.current || document.hidden || quieto < 2 * 60_000) return false;
+      if (document.querySelector('[role="dialog"]') && quieto < 60 * 60_000) return false;
+      return navigator.onLine !== false;
+    };
     if (`${ahora.fecha} ${ahora.hora}` < objetivo) return;
-    if (bloqueada || probando.current || Date.now() - ultimoIntento.current < 5 * 60_000) return;
-    if (document.querySelector('[role="dialog"]')) return;
-    if (navigator.onLine === false) return;
+    if (probando.current || Date.now() - ultimoIntento.current < 5 * 60_000 || !sePuede()) return;
     probando.current = true;
     ultimoIntento.current = Date.now();
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 10_000);
     fetch(location.pathname, { method: "HEAD", cache: "no-store", signal: ctrl.signal })
       .then((r) => {
-        if (r.ok) window.location.reload();
+        // Se vuelve a revisar: alguien pudo tocar la pantalla mientras se esperaba la respuesta.
+        if (r.ok && sePuede()) window.location.reload();
       })
       .catch(() => {})
       .finally(() => {
         clearTimeout(t);
         probando.current = false;
       });
-  }, [ahora, objetivo, bloqueada]);
+  }, [ahora, objetivo]);
 }
+
+/** Igual que la variante `md` de globals.css: ancho de tablet y alto suficiente (un teléfono horizontal no cuenta). */
+export const MEDIA_TABLET = "(min-width: 48rem) and (min-height: 30rem)";
 
 // ---------- Modo pared (ajuste de este equipo, no se comparte) ----------
 
@@ -206,7 +240,7 @@ export function useClima(lat: number, lon: number): Clima | null {
 /** En el teléfono, lleva la lista de días hasta "hoy" al abrir la vista. */
 export function useIrAHoyEnMovil(dependencia: unknown) {
   useEffect(() => {
-    if (window.matchMedia("(min-width: 48rem)").matches) return;
+    if (window.matchMedia(MEDIA_TABLET).matches) return;
     document.querySelector("[data-hoy-movil]")?.scrollIntoView({ block: "start" });
   }, [dependencia]);
 }

@@ -44,11 +44,11 @@ export const UNIDADES: { valor: Unidad; nombre: string }[] = [
  * Con "*" al final calza como raíz ("congelad*" → congelado, congeladas…).
  */
 const DICCIONARIO: [CategoriaCompra, string[]][] = [
-  ["Congelados", ["congelad*", "helado", "arvejas congeladas"]],
+  ["Congelados", ["congelad*", "helado", "arvejas congeladas", "humita", "hielo"]],
   [
     "Lácteos y huevos",
     [
-      "leche", "queso", "quesillo", "mantequilla", "crema", "yogur", "yogurt", "manjar", "huevo",
+      "leche", "queso", "quesillo", "mantequilla", "crema", "yogur", "yogurt", "yoghurt", "manjar", "huevo",
       "margarina", "mozzarella", "ricotta", "leche condensada", "leche evaporada",
     ],
   ],
@@ -61,13 +61,14 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "trutro", "pechuga", "vacuno", "congrio", "corvina", "chorito", "macha", "almeja", "ostión",
       "jaiba", "loco", "pulpo", "calamar", "marisco", "pavo", "asiento", "tapapecho",
       "sobrecostilla", "huachalomo", "malaya", "pernil", "prieta", "panceta", "salame",
-      "hamburguesa", "filete", "abastero", "punta de ganso", "lomo vetado",
+      "hamburguesa", "filete", "abastero", "punta de ganso", "lomo vetado", "sardina", "entraña",
+      "palanca", "punta de picana",
     ],
   ],
   [
     "Verduras y frutas",
     [
-      "cebolla", "ajo", "tomate", "lechuga", "papa", "zapallo", "zapallo italiano", "choclo",
+      "cebolla", "ajo", "tomate", "lechuga", "papa", "zapallo", "zapallito", "choclo",
       "zanahoria", "pimentón", "ají", "cilantro", "perejil", "albahaca", "apio", "porotos verdes",
       "poroto verde", "acelga", "espinaca", "betarraga", "palta", "limón", "plátano", "manzana",
       "naranja", "frutilla", "pepino", "repollo", "brócoli", "coliflor", "champiñón", "camote",
@@ -75,7 +76,7 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "puerro", "berenjena", "haba", "rábano", "melón", "sandía", "piña", "cereza", "ciruela",
       "damasco", "zucchini", "espárrago", "jengibre", "romero", "menta", "chirimoya", "lúcuma",
       "membrillo", "alcachofa", "frambuesa", "arándano", "mora", "papaya", "ciboulette",
-      "tomillo",
+      "tomillo", "hongo", "rabanito",
     ],
   ],
   ["Panadería", ["pan", "marraqueta", "hallulla", "pan de molde", "pan amasado", "tortilla", "masa", "dobladita"]],
@@ -85,7 +86,7 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "sal", "pimienta", "comino", "orégano", "merkén", "paprika", "ají de color", "laurel",
       "canela", "nuez moscada", "caldo", "vinagre", "mostaza", "mayonesa", "ketchup", "salsa",
       "chancho en piedra", "pebre", "vainilla", "esencia de vainilla", "azúcar flor", "aliño",
-      "curry", "ajo en polvo", "ajo granulado",
+      "curry", "ajo en polvo", "ajo granulado", "clavo de olor",
     ],
   ],
   ["Bebidas", ["jugo", "bebida", "agua", "agua mineral", "vino", "cerveza", "té", "café", "néctar", "pisco"]],
@@ -93,7 +94,8 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
     "Aseo y hogar",
     [
       "detergente", "lavaloza", "papel higiénico", "toalla", "toalla de papel", "cloro", "esponja",
-      "bolsa", "jabón", "suavizante", "servilleta", "lavalozas",
+      "bolsa", "bolsa de basura", "jabón", "suavizante", "servilleta", "lavalozas", "papel aluminio",
+      "papel de aluminio", "pañal", "shampoo", "champú",
     ],
   ],
   [
@@ -103,7 +105,8 @@ const DICCIONARIO: [CategoriaCompra, string[]][] = [
       "lenteja", "garbanzo", "avena", "chuño", "maicena", "polvos de hornear", "polvo de hornear",
       "levadura", "chancaca", "mermelada", "galleta", "cereal", "aceituna", "pasas", "nuez", "nueces",
       "almendra", "salsa de tomate", "pasta de tomate", "conserva", "mote", "sémola", "quinoa",
-      "miel", "chocolate", "maíz", "maní", "mantequilla de maní", "pan rallado", "coco rallado",
+      "miel", "chocolate", "maíz", "maní", "mantequilla de maní", "pan rallado", "coco rallado", "coco",
+      "cacao", "granola", "endulzante", "huesillo", "cochayuyo", "pepinillo", "uva pasa", "uvas pasas",
     ],
   ],
 ];
@@ -130,13 +133,29 @@ const PATRONES: { cat: CategoriaCompra; largo: number; exp: RegExp; congelado: b
     }),
 );
 
+/** Envases al comienzo del nombre: "bolsa de pan" es pan, "lata de atún" es atún. */
+const ENVASE = /^(bolsas?|bolsitas?|paquetes?|cajas?|cajitas?|mallas?|tarros?|frascos?|sobres?|latas?|botellas?|potes?|bandejas?) de (.+)$/;
+const EN_CONSERVA = / en (conserva|lata|tarro|almibar)( |$)/;
+
 /**
  * Adivina la categoría por el nombre. En español el producto va primero ("yogur de frutilla",
  * "caldo de pollo"), así que gana la palabra que aparece antes; si empatan, la más larga
- * ("porotos verdes" le gana a "poroto"). "Congelado" en cualquier parte manda a Congelados.
+ * ("porotos verdes" le gana a "poroto"). "Congelado" en cualquier parte manda a Congelados y
+ * "en conserva" a Despensa. Un envase al comienzo ("bolsa de…") no cuenta como producto.
  */
 export function adivinarCategoria(nombre: string): CategoriaCompra {
-  const n = ` ${sinTildes(nombre)} `;
+  const limpio = sinTildes(nombre);
+  if (EN_CONSERVA.test(limpio) && !/congelad/.test(limpio)) return "Despensa";
+  const envase = limpio.match(ENVASE);
+  if (envase) {
+    const cat = categoriaPorPalabras(envase[2]);
+    if (cat !== "Otros") return cat;
+  }
+  return categoriaPorPalabras(limpio);
+}
+
+function categoriaPorPalabras(limpio: string): CategoriaCompra {
+  const n = ` ${limpio} `;
   let mejor: { cat: CategoriaCompra; largo: number; pos: number } | null = null;
   for (const p of PATRONES) {
     const m = p.exp.exec(n);
@@ -198,8 +217,14 @@ const EQUIVALENCIAS: [string, "ml" | "g", number][] = (
   ["mote", "g", 180],
   ["nueces", "g", 120],
   ["pasas", "g", 150],
+  ["leche en polvo", "g", 130],
   ] as [string, "ml" | "g", number][]
-).map(([p, u, n]) => [claveIngrediente(p), u, n]);
+)
+  .map(([p, u, n]) => [claveIngrediente(p), u, n] as [string, "ml" | "g", number])
+  .sort((a, b) => b[0].length - a[0].length); // la coincidencia más larga primero
+
+/** Polvos, cubos, condensada, moscada…: no tienen la densidad del ingrediente base. */
+const SIN_EQUIVALENCIA = /(^| )(polvo|cubo|condensad|moscad|granulad)/;
 
 const MEDIDA_EN_CDTA: Partial<Record<Unidad, number>> = { taza: 48, cda: 3, cdta: 1 };
 
@@ -212,7 +237,9 @@ function base(u: Unidad, clave = ""): Base {
   const enCdta = MEDIDA_EN_CDTA[u];
   if (enCdta) {
     const eq = EQUIVALENCIAS.find(([p]) => clave === p || clave.startsWith(p + " "));
-    if (eq) return { unidad: eq[1], factor: (eq[2] / 48) * enCdta };
+    // Una coincidencia genérica ("leche") no vale para "leche en polvo" o "nuez moscada".
+    const valida = eq && (eq[0] === clave || !SIN_EQUIVALENCIA.test(clave.slice(eq[0].length)));
+    if (eq && valida) return { unidad: eq[1], factor: (eq[2] / 48) * enCdta };
     return { unidad: "cdta", factor: enCdta };
   }
   return { unidad: u, factor: 1 };
@@ -226,6 +253,20 @@ export function legible(cantidad: number | null, unidad: Unidad): { cantidad: nu
   if (unidad === "cdta" && cantidad >= 48) return { cantidad: cantidad / 48, unidad: "taza" };
   if (unidad === "cdta" && cantidad >= 3) return { cantidad: cantidad / 3, unidad: "cda" };
   return { cantidad, unidad };
+}
+
+/**
+ * Cantidad para mostrar a partir de la unidad base, redondeada. Gramos y ml se redondean antes de
+ * pasar a kg/l (así 990 g da "1 kg" y no "1.000 g"); cucharaditas, después de pasar a cda o taza
+ * (así sale "1,5 cdas." y no "1,58 cdas.").
+ */
+function paraMostrar(cantidad: number | null, unidad: Unidad): { cantidad: number | null; unidad: Unidad } {
+  if (cantidad == null) return { cantidad, unidad };
+  if (unidad === "cdta") {
+    const r = legible(cantidad, unidad);
+    return { cantidad: redondear(r.cantidad!, r.unidad), unidad: r.unidad };
+  }
+  return legible(redondear(cantidad, unidad), unidad);
 }
 
 /** Redondeo amable para la lista de compras (siempre hacia arriba: mejor que sobre). */
@@ -361,7 +402,7 @@ export function generarLista(
         const ya = comprado.get(l.clave);
         if (cantidad == null || ya == null) yaComprado = true;
         else {
-          const r = legible(redondear(ya, l.unidad), l.unidad);
+          const r = paraMostrar(ya, l.unidad);
           descontado = textoCantidad(r.cantidad, r.unidad);
           cantidad = cantidad - ya;
           if (cantidad <= 1e-9) {
@@ -370,7 +411,7 @@ export function generarLista(
           }
         }
       }
-      const r = legible(cantidad == null ? null : redondear(cantidad, l.unidad), l.unidad);
+      const r = paraMostrar(cantidad, l.unidad);
       return { ...l, cantidad: r.cantidad, unidad: r.unidad, yaComprado, descontado };
     })
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));

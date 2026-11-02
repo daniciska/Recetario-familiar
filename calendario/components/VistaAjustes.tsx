@@ -235,7 +235,9 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
 
   const guardar = async () => {
     const limpio = { ...m, nombre: m.nombre.trim() };
-    const ok = await actualizar("miembros", (l) => (miembro ? l.map((x) => (x.id === m.id ? limpio : x)) : [...l, limpio]));
+    const ok = await actualizar("miembros", (l) =>
+      l.some((x) => x.id === limpio.id) ? l.map((x) => (x.id === limpio.id ? limpio : x)) : [...l, limpio],
+    );
     if (ok) alCerrar();
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };

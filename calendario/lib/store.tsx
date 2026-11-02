@@ -7,13 +7,16 @@ import { estadoEjemplo } from "./ejemplo";
 
 interface Contexto {
   estado: EstadoApp;
-  /** Cambia una colección y la guarda. Devuelve false si no se pudo guardar (el cambio se deshace). */
+  /**
+   * Cambia una colección y la guarda. Devuelve true si el cambio quedó aplicado (guardado, o sólo en
+   * memoria si el navegador no deja guardar: eso ya lo avisa el banner) y false si no cupo (se deshace).
+   */
   actualizar: <K extends ClaveColeccion>(clave: K, fn: (previo: EstadoApp[K]) => EstadoApp[K]) => Promise<boolean>;
-  /** Reemplaza todo. Devuelve false si no se pudo guardar (queda todo como estaba). */
+  /** Reemplaza todo. Devuelve false si no cupo (queda todo como estaba); true si quedó aplicado. */
   reemplazarTodo: (estado: EstadoApp) => Promise<boolean>;
   errorGuardado: string | null;
   cerrarError: () => void;
-  /** Hay cambios que no se pudieron guardar o el navegador no guarda nada. */
+  /** Hay cambios que viven sólo en memoria (el navegador no guarda nada): recargar los perdería. */
   sinGuardar: boolean;
 }
 
@@ -63,7 +66,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
       } catch {
         sinAlmacenamiento.current = true;
       }
-      const final = guardado ? normalizarGuardado(guardado, base) : base;
+      const final = guardado ? normalizarGuardado(guardado, base.ajustes) : base;
       if (!vivo) return;
       // Primero se muestra la app; guardar no puede dejarla en "Cargando…".
       estadoRef.current = final;
@@ -80,8 +83,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
       if (vivo) refrescarAviso();
     })();
     const desuscribir = repo.suscribir((nuevo) => {
-      const base = estadoEjemplo();
-      const n = normalizarGuardado(nuevo, base);
+      const n = normalizarGuardado(nuevo, estadoEjemplo().ajustes);
       persistido.current = n;
       estadoRef.current = n;
       setEstado(n);
@@ -106,7 +108,8 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         if (fallidas.current.delete(clave)) refrescarAviso();
         return true;
       } catch {
-        if (sinAlmacenamiento.current) return false; // no hay dónde guardar: se sigue en memoria
+        // No hay dónde guardar: el cambio sigue en memoria (el aviso permanente lo explica) y cuenta como hecho.
+        if (sinAlmacenamiento.current) return true;
         // No cupo: se deshace para no mostrar algo que se perdería al recargar.
         const guardadoAntes = persistido.current?.[clave];
         if (guardadoAntes !== undefined && estadoRef.current) {
@@ -127,11 +130,10 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
       try {
         await repo.reemplazarTodo(nuevo);
       } catch {
-        if (sinAlmacenamiento.current) {
-          estadoRef.current = nuevo;
-          setEstado(nuevo);
-        }
-        return false;
+        if (!sinAlmacenamiento.current) return false;
+        estadoRef.current = nuevo; // sólo en memoria: el aviso permanente lo explica
+        setEstado(nuevo);
+        return true;
       }
       persistido.current = nuevo;
       estadoRef.current = nuevo;
@@ -160,7 +162,8 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         reemplazarTodo,
         errorGuardado,
         cerrarError,
-        sinGuardar: sinAlmacenamiento.current || fallidas.current.size > 0,
+        // Un guardado que no cupo ya se deshizo: en memoria queda lo mismo que en el equipo.
+        sinGuardar: sinAlmacenamiento.current,
       }}
     >
       {children}

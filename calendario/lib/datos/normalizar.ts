@@ -168,21 +168,20 @@ function tarea(x: unknown): Tarea | null {
 }
 
 /**
- * Lo que está guardado en este equipo: cada colección que falte o esté dañada se reemplaza por la
- * de `base`, el resto se repara elemento por elemento.
+ * Lo que está guardado en este equipo, reparado elemento por elemento. Una colección que falte o
+ * esté dañada queda vacía (nunca se mezcla con los datos de ejemplo); los ajustes toman los valores
+ * por defecto que falten.
  */
-export function normalizarGuardado(crudo: Partial<Record<keyof EstadoApp, unknown>>, base: EstadoApp): EstadoApp {
-  const o = <T>(clave: keyof EstadoApp, f: (y: unknown) => T | null, def: T[]) =>
-    Array.isArray(crudo[clave]) ? lista(crudo[clave], f) : def;
+export function normalizarGuardado(crudo: Partial<Record<keyof EstadoApp, unknown>>, ajustesBase: Ajustes): EstadoApp {
   return {
     version: 1,
-    ajustes: ajustes(crudo.ajustes, base.ajustes),
-    miembros: o("miembros", miembro, base.miembros),
-    eventos: o("eventos", evento, base.eventos),
-    recetas: o("recetas", receta, base.recetas),
-    plan: esObj(crudo.plan) ? plan(crudo.plan) : base.plan,
-    compras: o("compras", itemCompra, base.compras),
-    tareas: o("tareas", tarea, base.tareas),
+    ajustes: ajustes(crudo.ajustes, ajustesBase),
+    miembros: lista(crudo.miembros, miembro),
+    eventos: lista(crudo.eventos, evento),
+    recetas: lista(crudo.recetas, receta),
+    plan: plan(crudo.plan),
+    compras: lista(crudo.compras, itemCompra),
+    tareas: lista(crudo.tareas, tarea),
   };
 }
 

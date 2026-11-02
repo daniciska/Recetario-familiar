@@ -26,7 +26,8 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   const [semana, setSemana] = useState<string | null>(null);
   const lunes = semana ?? lunesDe(hoy);
   const [celda, setCelda] = useState<{ fecha: string; tipo: TipoComida } | null>(null);
-  const [generando, setGenerando] = useState(false);
+  // Lunes de la semana para la que se abrió "Generar lista" (fijo aunque pase la medianoche del domingo).
+  const [generando, setGenerando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const dias = diasDeSemana(lunes);
   const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
@@ -64,20 +65,20 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
         <BotonIcono etiqueta="Semana siguiente" onClick={() => setSemana(sumarDias(lunes, 7))}>
           ›
         </BotonIcono>
-        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold md:whitespace-nowrap xl:text-3xl">
+        <h1 className="mx-1 min-w-0 flex-1 text-balance font-display text-2xl font-semibold leading-tight xl:text-3xl">
           <span className="md:max-xl:hidden">Menú </span>
           <span className="text-tinta-suave">
             <span className="md:max-xl:hidden">· </span>
             {rangoSemana(lunes)}
           </span>
         </h1>
-        <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-nowrap">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 md:flex-nowrap">
           <Boton onClick={repetirSemanaPasada} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
             ↻<span className="md:max-xl:hidden"> Repetir semana</span>
           </Boton>
-          <Boton variante="primario" className="whitespace-nowrap" onClick={() => setGenerando(true)} disabled={nComidas === 0}>
+          <Boton variante="primario" className="whitespace-nowrap" onClick={() => setGenerando(lunes)} disabled={nComidas === 0}>
             🛒 <span className="md:max-xl:hidden">Generar lista de compras</span>
-            <span className="max-md:hidden xl:hidden">Lista de compras</span>
+            <span className="hidden md:max-xl:inline">Lista de compras</span>
           </Boton>
         </div>
       </div>
@@ -131,10 +132,10 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
       {celda && <AsignarComida {...celda} alCerrar={() => setCelda(null)} />}
       {generando && (
         <GenerarLista
-          lunes={lunes}
-          alCerrar={() => setGenerando(false)}
+          lunes={generando}
+          alCerrar={() => setGenerando(null)}
           alEnviar={() => {
-            setGenerando(false);
+            setGenerando(null);
             alIrACompras();
           }}
         />
@@ -222,7 +223,14 @@ function Celda({
           ) : (
             <span className="text-2xl [@media(max-height:700px)]:text-xl">🍴</span>
           )}
-          <span className="line-clamp-2 text-base font-extrabold leading-[1.15] 2xl:text-lg">{nombre}</span>
+          <span
+            className={cx(
+              "line-clamp-2 text-base font-extrabold leading-[1.15] 2xl:text-lg",
+              enGrilla && "[@media(max-height:700px)]:text-sm [@media(max-height:700px)]:leading-tight",
+            )}
+          >
+            {nombre}
+          </span>
           {receta && (
             <span className="num absolute right-1.5 top-1 text-xs font-bold text-tinta-suave">👥{comida.porciones}</span>
           )}
@@ -369,6 +377,7 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
   const grupos = agruparPorCategoria(lineas);
   const delMenu = estado.compras.filter((c) => c.origen === "menu" && c.semana === lunes);
   const yaHabia = delMenu.length > 0;
+  const nPendientes = delMenu.filter((c) => !c.comprado).length;
   const nDescontados = lineas.filter((l) => l.yaComprado || l.descontado).length;
 
   const elegidas = lineas.filter((l) => incluir.has(l.clave) && !(l.yaComprado && l.cantidad === 0));
@@ -392,20 +401,28 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
           <Boton variante="fantasma" onClick={alCerrar}>
             Cancelar
           </Boton>
-          <Boton variante="primario" grande disabled={elegidas.length === 0} onClick={enviar}>
-            Mandar {elegidas.length} a la lista
+          <Boton variante="primario" grande disabled={elegidas.length === 0 && nPendientes === 0} onClick={enviar}>
+            {elegidas.length > 0
+              ? `Mandar ${elegidas.length} a la lista`
+              : `Quitar ${nPendientes} ${nPendientes === 1 ? "pendiente" : "pendientes"} de la lista`}
           </Boton>
         </>
       }
     >
       {yaHabia && (
         <p className="mb-4 rounded-2xl bg-acento-suave px-4 py-3 text-lg">
-          Ya habías mandado la lista de esta semana. Lo pendiente se reemplaza por esta
-          {nDescontados === 1
-            ? " y a 1 ingrediente se le descontó lo que ya compraste."
-            : nDescontados > 1
-              ? ` y a ${nDescontados} ingredientes se les descontó lo que ya compraste.`
-              : "."}
+          {elegidas.length === 0 && nPendientes > 0 ? (
+            `No queda nada por mandar. Al confirmar se quitan de la lista ${nPendientes === 1 ? "el pendiente" : `los ${nPendientes} pendientes`} que había mandado el menú de esta semana.`
+          ) : (
+            <>
+              Ya habías mandado la lista de esta semana. Lo pendiente se reemplaza por esta
+              {nDescontados === 1
+                ? " y a 1 ingrediente se le descontó lo que ya compraste."
+                : nDescontados > 1
+                  ? ` y a ${nDescontados} ingredientes se les descontó lo que ya compraste.`
+                  : "."}
+            </>
+          )}
         </p>
       )}
       <div className="space-y-5">
@@ -418,10 +435,13 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
               {g.items.map((l) => {
                 const marcado = incluir.has(l.clave);
                 const todoComprado = l.yaComprado && (l.cantidad === 0 || l.cantidad == null);
+                // Lo que ya está entero en el carro no se puede volver a mandar (no queda cantidad).
+                const fijo = l.yaComprado && l.cantidad === 0;
                 return (
                   <button
                     key={l.clave}
                     type="button"
+                    disabled={fijo}
                     onClick={() =>
                       setIncluir((s) => {
                         const n = new Set(s);

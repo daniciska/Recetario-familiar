@@ -106,8 +106,8 @@ export default function VistaCalendario({
               { valor: "mes", texto: "Mes" },
             ]}
           />
-          <Boton variante="primario" onClick={() => setEditando({ fecha: a })}>
-            ＋ Evento
+          <Boton variante="primario" aria-label="Nuevo evento" onClick={() => setEditando({ fecha: a })}>
+            ＋<span className="max-sm:hidden">Evento</span>
           </Boton>
         </div>
       </div>
@@ -264,17 +264,17 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
   return (
     <button
       type="button"
-      aria-label="Ver el menú"
+      title="Ver el menú"
       onClick={(e) => {
         e.stopPropagation();
         alTocar();
       }}
-      className="block w-full space-y-0.5 border-t border-dashed border-borde pt-1.5 text-left text-base transition active:scale-[0.98]"
+      className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base"
     >
       {lista.map(({ t, c }) => (
-        <div key={t.id} className="truncate font-bold text-tinta-suave">
+        <span key={t.id} className="line-clamp-2 break-words font-bold leading-tight text-tinta-suave">
           <span aria-hidden>{t.emoji}</span> {nombreComida(c!, recetas)}
-        </div>
+        </span>
       ))}
     </button>
   );
@@ -421,7 +421,8 @@ function Mes({
           </div>
         ))}
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1.5">
+      {/* En el teléfono cada fila tiene un alto mínimo (el número y los puntos) y la grilla hace scroll. */}
+      <div className="desliza grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(3.25rem,1fr))] gap-1.5 overflow-y-auto md:grid-rows-6 md:overflow-visible">
         {dias.map((f) => {
           const lista = ocs.get(f)!;
           const fuera = partes(f).mes !== mes;
