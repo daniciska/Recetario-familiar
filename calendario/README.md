@@ -25,14 +25,18 @@ Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al d
 cd calendario
 npm install
 npm run dev        # http://localhost:3000
-npm run build && npm start   # versión de producción
+npm run build      # versión de producción en out/ (archivos estáticos)
 ```
 
 ## Publicarlo
 
-**Vercel:** *Add New → Project*, elige este repositorio y en **Root Directory** pon `calendario`. Nada más.
+**Publicado en Netlify:** https://calendario-familiar-pared.netlify.app (proyecto `calendario-familiar-pared`, sitio aparte del recetario, oculto para buscadores).
 
-**Netlify:** *Add new site → Import from Git*, este repositorio, y en **Base directory** pon `calendario` (el `netlify.toml` de esta carpeta ya trae el comando). Es un sitio distinto al del recetario.
+La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`): no necesita servidor ni funciones.
+
+Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, **Base directory** = `calendario` y la rama que quieras publicar (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Sin eso, se vuelve a publicar a mano.
+
+**Vercel** (alternativa): *Add New → Project*, elige este repositorio y en **Root Directory** pon `calendario`.
 
 ## Datos
 
@@ -56,7 +60,7 @@ components/                   las vistas
 
 Pasos comunes, en cualquier tablet:
 
-1. Publica la app (Vercel o Netlify) y abre la dirección en el tablet.
+1. Abre https://calendario-familiar-pared.netlify.app en el tablet.
 2. Configúrala **en ese tablet** (integrantes, recetas): los datos quedan guardados ahí. En *Familia → Este equipo* revisa que diga **Pantalla de la pared**.
 3. Deja el tablet **enchufado** siempre y en **horizontal**.
 4. Desactiva las actualizaciones automáticas de sistema en horario nocturno si el tablet se reinicia solo.

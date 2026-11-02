@@ -1,4 +1,18 @@
-# Sitio de Netlify independiente del recetario: en el panel, "Base directory" = calendario
+# Sitio de Netlify independiente del recetario (proyecto "calendario-familiar-pared").
+# Si se conecta el repositorio en el panel, "Base directory" = calendario.
+# Exportación estática (output: "export" en next.config.ts): se publica la carpeta out/.
 [build]
   command = "npm run build"
-  publish = ".next"
+  publish = "out"
+
+# Es un panel privado de la familia: que no aparezca en buscadores.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+
+# Para "Agregar a pantalla de inicio" / "Instalar app".
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
