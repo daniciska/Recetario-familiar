@@ -10,7 +10,8 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 |---|---|
 | Equipos | Todo Apple: iPhone, iPad, Mac, iCloud. |
 | Correo y calendario dedicados | **Apple ID nuevo sólo para el panel** (p. ej. `familia.apellido.panel@icloud.com`). Tiene el correo dedicado y el calendario "Familia", que se comparte con los iPhone de la familia. La app sólo accede a esa cuenta, nunca a las personales. |
-| Base de datos compartida | Supabase, **en otra cuenta** (no la de "Dale Contacto"). Hay que conectarla como conector en https://claude.ai/customize/connectors y abrir una sesión nueva. |
+| Base de datos compartida | **No Supabase** (la familia lo descartó). Por decidir: **Netlify Database** (Postgres en el mismo Netlify donde ya está publicada la app, con Netlify Functions y Blobs; recomendado) o **Firebase** (Firestore en tiempo real). Las fases de abajo dicen "Supabase" en algunos nombres: se traducen al proveedor elegido (tabla de documentos por familia, funciones programadas cada 5 min, almacenamiento de fotos y audios, secretos del proveedor). |
+| Diseño | Pastel, parecido a Skylight (hecho): fondo claro lavanda, tarjetas blancas, eventos con relleno pastel del color de cada persona, letra redondeada (Fredoka) en títulos y reloj. |
 | Recetas | **Separadas** del "Recetario familiar" de la mamá (`/recetas`). El calendario tiene su propio recetario. |
 | IA | **Gemini, plan gratis** (Google AI Studio). Ojo: en el plan gratis Google puede usar lo que se le manda para mejorar sus productos; si después se quiere más privacidad, se cambia a pago por uso sin tocar el código. |
 
@@ -21,10 +22,9 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 2. **Calendario "Familia"**: con ese Apple ID, en iCloud.com → Calendario, crear "Familia" y compartirlo (con permiso
    de edición) con el Apple ID de cada integrante. Así se edita desde el Calendario del iPhone y avisa con sus alertas.
 3. **Contraseña de app**: en https://account.apple.com → Inicio de sesión y seguridad → Contraseñas de app → crear una
-   llamada "Panel". Se guarda directo en los secretos de Supabase (`ICLOUD_USUARIO`, `ICLOUD_CLAVE_APP`), nunca en el
-   repositorio ni en el chat.
-4. **Clave de Gemini**: en https://aistudio.google.com → Get API key. Se guarda en los secretos de Supabase (`GEMINI_API_KEY`).
-5. **Supabase**: conectar la cuenta elegida en claude.ai (Connectors) y abrir una sesión nueva en este repositorio.
+   llamada "Panel". Se guarda directo en los secretos del proveedor (en Netlify: Project configuration → Environment
+   variables, marcadas como secretas: `ICLOUD_USUARIO`, `ICLOUD_CLAVE_APP`), nunca en el repositorio ni en el chat.
+4. **Clave de Gemini**: en https://aistudio.google.com → Get API key. Se guarda igual, como `GEMINI_API_KEY`.
 
 ## Fases
 

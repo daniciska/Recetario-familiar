@@ -2,6 +2,7 @@
 // mal formado o de otra versión nunca deje la app caída.
 
 import { CATEGORIAS, UNIDADES } from "../compras";
+import { colorPastel } from "../colores";
 import type {
   Ajustes,
   CategoriaCompra,
@@ -67,7 +68,8 @@ function miembro(x: unknown): Miembro | null {
   return {
     id: x.id,
     nombre: txt(x.nombre, "Sin nombre"),
-    color: /^#[0-9a-f]{6}$/i.test(txt(x.color)) ? (x.color as string) : "#999999",
+    // Los colores de la paleta anterior pasan a su versión pastel.
+    color: /^#[0-9a-f]{6}$/i.test(txt(x.color)) ? colorPastel(x.color as string) : "#C9C3D9",
     emoji: txt(x.emoji, "🙂") || "🙂",
   };
 }

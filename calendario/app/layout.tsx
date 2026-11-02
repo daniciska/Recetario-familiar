@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Nunito } from "next/font/google";
+import { Fredoka, Nunito } from "next/font/google";
 import "./globals.css";
 
 const texto = Nunito({ subsets: ["latin"], variable: "--fuente-texto", display: "swap" });
-const titulo = Fraunces({ subsets: ["latin"], variable: "--fuente-titulo", display: "swap" });
+// Títulos y reloj en una letra redondeada y amable (estilo Skylight).
+const titulo = Fredoka({ subsets: ["latin"], variable: "--fuente-titulo", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Calendario familiar",
@@ -20,7 +21,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
-  themeColor: "#fbf6ee",
+  themeColor: "#f6f5fb",
 };
 
 /**
@@ -34,7 +35,7 @@ var o={};new Intl.DateTimeFormat("en-GB",{timeZone:"America/Santiago",hour:"2-di
 var m=(+o.hour%24)*60+(+o.minute);function n(s){var q=String(s).split(":");return +q[0]*60+ +q[1]}var D=n(d),H=n(h);
 var noche=t==="noche"||(t==="auto"&&(D>H?(m>=D||m<H):(m>=D&&m<H)));
 document.documentElement.dataset.tema=noche?"noche":"claro";
-if(noche){var mt=document.querySelector('meta[name="theme-color"]');if(mt)mt.setAttribute("content","#1b1714")}
+if(noche){var mt=document.querySelector('meta[name="theme-color"]');if(mt)mt.setAttribute("content","#13121b")}
 }catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

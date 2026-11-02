@@ -212,7 +212,7 @@ export function ChipMiembro({
         "inline-flex min-h-12 items-center gap-2 rounded-full border-[3px] py-1 pl-1 pr-4 text-lg font-bold transition active:scale-95",
         activo ? "text-tinta" : "border-transparent bg-superficie-2 text-tinta-suave opacity-70",
       )}
-      style={activo ? { borderColor: miembro.color, background: `color-mix(in srgb, ${miembro.color} 18%, var(--c-superficie))` } : undefined}
+      style={activo ? { borderColor: miembro.color, background: `color-mix(in srgb, ${miembro.color} 30%, var(--c-superficie))` } : undefined}
     >
       <Avatar miembro={miembro} tam="sm" />
       {miembro.nombre}

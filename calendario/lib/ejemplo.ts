@@ -1,6 +1,7 @@
 import type { EstadoApp, Ingrediente, Receta, Unidad, CategoriaCompra } from "./datos/tipos";
 import { adivinarCategoria, claveComida } from "./compras";
 import { hoy, lunesDe, sumarDias } from "./fechas";
+import { COLORES_MIEMBRO } from "./colores";
 
 let n = 0;
 export function nuevoId(prefijo = "id"): string {
@@ -16,16 +17,7 @@ function ing(cantidad: number | null, unidad: Unidad, nombre: string, categoria?
   return { id: nuevoId("ing"), cantidad, unidad, nombre, categoria: categoria ?? adivinarCategoria(nombre) };
 }
 
-export const COLORES_MIEMBRO = [
-  "#E76F51", // coral
-  "#2A9D8F", // verde agua
-  "#E9B03B", // mostaza
-  "#7C6CF2", // lavanda
-  "#E86A92", // frambuesa
-  "#3D8BD9", // azul
-  "#5FAE4E", // verde
-  "#9C6B4E", // canela
-];
+export { COLORES_MIEMBRO };
 
 export const EMOJIS_MIEMBRO = ["👩", "👨", "👧", "👦", "👵", "👴", "🧒", "👶", "🐶", "🐱", "⭐", "🌻", "⚽", "🎸", "📚", "🦄"];
 

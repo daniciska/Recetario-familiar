@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#c4553a"/>
-  <rect x="96" y="128" width="320" height="288" rx="40" fill="#fffbf5"/>
-  <rect x="96" y="128" width="320" height="76" rx="40" fill="#f7dccf"/>
-  <rect x="96" y="168" width="320" height="36" fill="#f7dccf"/>
-  <rect x="160" y="92" width="28" height="72" rx="14" fill="#2b2420"/>
-  <rect x="324" y="92" width="28" height="72" rx="14" fill="#2b2420"/>
-  <path d="M256 372c-52-34-84-62-84-96a42 42 0 0 1 84-12 42 42 0 0 1 84 12c0 34-32 62-84 96z" fill="#e76f51"/>
+  <rect width="512" height="512" rx="112" fill="#b7acff"/>
+  <rect x="96" y="128" width="320" height="288" rx="40" fill="#ffffff"/>
+  <rect x="96" y="128" width="320" height="76" rx="40" fill="#ebe8ff"/>
+  <rect x="96" y="168" width="320" height="36" fill="#ebe8ff"/>
+  <rect x="160" y="92" width="28" height="72" rx="14" fill="#2d2a3e"/>
+  <rect x="324" y="92" width="28" height="72" rx="14" fill="#2d2a3e"/>
+  <path d="M256 372c-52-34-84-62-84-96a42 42 0 0 1 84-12 42 42 0 0 1 84 12c0 34-32 62-84 96z" fill="#f59ab5"/>
 </svg>

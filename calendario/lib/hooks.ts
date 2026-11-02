@@ -27,7 +27,7 @@ export function useTema(ajustes: Ajustes, minutos: number) {
     document.documentElement.dataset.tema = noche ? "noche" : "claro";
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", noche ? "#1b1714" : "#fbf6ee");
+      ?.setAttribute("content", noche ? "#13121b" : "#f6f5fb");
   }, [noche]);
   return noche;
 }
