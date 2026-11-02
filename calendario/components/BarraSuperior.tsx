@@ -4,9 +4,12 @@ import { useEffect, useState } from "react";
 import { useDatos } from "@/lib/store";
 import { fechaLarga, type Ahora } from "@/lib/fechas";
 import { iconoClima, type Clima } from "@/lib/hooks";
-import { claveComida } from "@/lib/compras";
-import { TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import { claveComida, sinTildes } from "@/lib/compras";
+import { SIN_COLACION, TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import type { TipoComida } from "@/lib/datos/tipos";
 import { BotonIcono } from "./ui";
+
+const PRIORIDAD: TipoComida[] = ["almuerzo", "cena", "desayuno", "once", "colacion"];
 
 export default function BarraSuperior({
   ahora,
@@ -21,16 +24,17 @@ export default function BarraSuperior({
   const fecha = fechaLarga(ahora.fecha);
   const ci = clima ? iconoClima(clima.codigo) : null;
 
-  // Qué se cocina hoy: almuerzo y cena primero (lo que más importa en la casa).
+  // Qué se cocina hoy: almuerzo y cena primero (lo que más importa en la casa), después desayuno y
+  // once, y la colación al último (a media mañana, casi nunca se cocina). "Sin colación" no cuenta: si
+  // no, sería el titular o le quitaría el lugar a la once.
   const recetas = new Map(estado.recetas.map((r) => [r.id, r]));
-  const hoyComidas = TIPOS_COMIDA.map((t) => {
-    const c = estado.plan[claveComida(ahora.fecha, t.id)];
-    return c ? { tipo: t, nombre: nombreComida(c, recetas), emoji: c.recetaId ? recetas.get(c.recetaId)?.emoji : "🍴" } : null;
+  const hoyComidas = PRIORIDAD.map((id) => {
+    const t = TIPOS_COMIDA.find((x) => x.id === id)!;
+    const c = estado.plan[claveComida(ahora.fecha, id)];
+    if (!c || (!c.recetaId && sinTildes(c.texto ?? "") === sinTildes(SIN_COLACION))) return null;
+    return { tipo: t, nombre: nombreComida(c, recetas), emoji: c.recetaId ? recetas.get(c.recetaId)?.emoji : "🍴" };
   }).filter((x): x is NonNullable<typeof x> => !!x && !!x.nombre);
-  const destacadas = [
-    ...hoyComidas.filter((c) => c.tipo.id === "almuerzo" || c.tipo.id === "cena"),
-    ...hoyComidas.filter((c) => c.tipo.id !== "almuerzo" && c.tipo.id !== "cena"),
-  ].slice(0, 2);
+  const destacadas = hoyComidas.slice(0, 2);
 
   return (
     <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">

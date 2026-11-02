@@ -14,7 +14,7 @@ import {
   textoCantidad,
   type LineaGenerada,
 } from "@/lib/compras";
-import { TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import { SIN_COLACION, TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
 import { useIrAHoyEnMovil } from "@/lib/hooks";
 import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, cx } from "./ui";
@@ -157,6 +157,18 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
 const ICONO_BAJO =
   "[@container(max-height:4.75rem)]:size-5 [@container(max-height:4.75rem)]:text-lg [@container(max-height:4.75rem)]:leading-none [@container(max-height:3.5rem)]:hidden";
 const NOMBRE_BAJO = "[@container(max-height:4.75rem)]:text-sm [@container(max-height:4.75rem)]:leading-tight";
+/**
+ * En pantallas 2xl el ícono (48 px) y el nombre (text-lg) crecen sólo si la celda tiene alto para los dos
+ * (48 + 2 líneas de 20,7 px ≈ 92 px); si no, quedan del tamaño normal (≈ 75 px) y nada se corta.
+ */
+const ICONO_GRANDE = "2xl:[@container(min-height:5.75rem)]:size-12 2xl:[@container(min-height:5.75rem)]:text-4xl";
+const NOMBRE_GRANDE = "2xl:[@container(min-height:5.75rem)]:text-lg";
+/**
+ * En una celda angosta y no muy alta (iPad de 1024 px apaisado) la foto de 36 px queda a la altura del 👥,
+ * y "👥12" se montaría sobre su esquina: con 2 dígitos de porciones la foto baja a 24 px.
+ */
+const ICONO_ANGOSTO =
+  "[@container(max-width:6.4rem)_and_(min-height:4.76rem)_and_(max-height:6.9rem)]:size-6 [@container(max-width:6.4rem)_and_(min-height:4.76rem)_and_(max-height:6.9rem)]:text-xl [@container(max-width:6.4rem)_and_(min-height:4.76rem)_and_(max-height:6.9rem)]:leading-none";
 
 function FilaComida({
   tipo,
@@ -234,7 +246,15 @@ function Celda({
       ) : (
         <>
           {receta ? (
-            <FotoReceta receta={receta} className={cx("size-9 text-3xl 2xl:size-12 2xl:text-4xl", enGrilla && ICONO_BAJO)} />
+            <FotoReceta
+              receta={receta}
+              className={cx(
+                "size-9 text-3xl",
+                enGrilla && ICONO_GRANDE,
+                enGrilla && ICONO_BAJO,
+                enGrilla && comida.porciones >= 10 && ICONO_ANGOSTO,
+              )}
+            />
           ) : (
             <span className={cx("text-2xl", enGrilla && ICONO_BAJO)}>🍴</span>
           )}
@@ -242,7 +262,8 @@ function Celda({
             className={cx(
               // Una palabra más ancha que la celda ("Charquicán" en el iPad vertical) se corta en
               // sílabas en vez de quedar recortada por los lados.
-              "line-clamp-2 max-w-full break-words hyphens-auto text-base font-extrabold leading-[1.15] md:max-[56rem]:text-sm 2xl:text-lg",
+              "line-clamp-2 max-w-full break-words hyphens-auto text-base font-extrabold leading-[1.15] md:max-[56rem]:text-sm",
+              enGrilla && NOMBRE_GRANDE,
               enGrilla && NOMBRE_BAJO,
             )}
           >
@@ -269,7 +290,7 @@ function Celda({
 
 const ATAJOS = ["Sobras", "Comemos fuera", "Delivery", "Cada uno se las arregla", "Pan con palta"];
 /** La colación casi nunca es una receta: atajos propios. */
-const ATAJOS_COLACION = ["Fruta", "Yogur", "Sándwich", "Barra de cereal", "Galletas", "Sin colación"];
+const ATAJOS_COLACION = ["Fruta", "Yogur", "Sándwich", "Barra de cereal", "Galletas", SIN_COLACION];
 
 function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoComida; alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();

@@ -9,6 +9,9 @@ export const TIPOS_COMIDA: { id: TipoComida; nombre: string; emoji: string }[] =
   { id: "cena", nombre: "Cena", emoji: "🌙" },
 ];
 
+/** Atajo de la colación que deja el día vacío a propósito: no es algo que "se cocina". */
+export const SIN_COLACION = "Sin colación";
+
 export function nombreComida(c: ComidaPlanificada, recetas: Map<string, Receta>): string {
   if (c.recetaId) return recetas.get(c.recetaId)?.nombre ?? c.texto ?? "";
   return c.texto ?? "";
