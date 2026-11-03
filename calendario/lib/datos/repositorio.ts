@@ -46,6 +46,8 @@ export interface Repositorio {
   readonly familia?: { id: string; nombre: string };
   /** (Opcional) avisa qué calendarios externos (iCloud) tiene conectados la familia. */
   alCambiarCalendarios?(f: (calendarios: CalendarioConectado[]) => void): () => void;
+  /** (Opcional) revisa ya si hubo cambios (p. ej. después de conectar un calendario). */
+  revisar?(): void;
 }
 
 /** Un calendario de afuera (iCloud) que la familia conectó al panel. */

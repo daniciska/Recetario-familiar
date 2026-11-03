@@ -47,6 +47,10 @@ export class RepositorioNube implements Repositorio {
     return () => this.oyentesConexion.delete(f);
   }
 
+  revisar() {
+    this.revisarAhora?.();
+  }
+
   alCambiarCalendarios(f: (c: CalendarioConectado[]) => void) {
     this.oyentesCalendarios.add(f);
     f(this.calendarios);

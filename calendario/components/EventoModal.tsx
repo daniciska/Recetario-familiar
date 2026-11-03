@@ -44,22 +44,30 @@ export default function EventoModal({
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof Evento>(k: K, v: Evento[K]) => setF((p) => ({ ...p, [k]: v }));
 
-  const hastaAntes = f.repeticion !== "nunca" && !!f.repetirHasta && f.repetirHasta < f.fecha;
+  /** Día en que de verdad empieza (en una semanal, el primer día elegido desde la fecha). */
+  const inicioReal = f.repeticion === "semanal" ? canonico({ ...f, fechaFin: undefined, repetirHasta: undefined }).fecha : f.fecha;
+  const hastaAntes = f.repeticion !== "nunca" && !!f.repetirHasta && f.repetirHasta < inicioReal;
   const variosDias = f.fechaFin !== undefined;
   const finDiaAntes = variosDias && f.fechaFin! <= f.fecha;
   const finAntes = !variosDias && !f.todoElDia && !!f.horaInicio && !!f.horaFin && f.horaFin <= f.horaInicio;
   /** Repetición que viene del iPhone y la app no sabe escribir (p. ej. "el segundo martes"): se cambia allá. */
   const repeticionDeAfuera = !!f.fechas;
-  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes && !finDiaAntes;
+  /** Un día de una serie de iCloud que se cambió sólo ese día: no tiene repetición propia. */
+  const diaDeSerie = !!f.externo?.recurrencia;
+  /** Si dura más de lo que tarda en repetirse, las ocurrencias se pisan (y "borrar sólo este día" no se notaría). */
+  const periodo = { nunca: Infinity, diaria: 1, semanal: 7, mensual: 28, anual: 365 }[f.repeticion] * (f.intervalo ?? 1);
+  const seSolapa = !repeticionDeAfuera && variosDias && !finDiaAntes && duracionDias(f) > periodo;
+  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes && !finDiaAntes && !seSolapa;
 
-  /** Al mover la hora de inicio, el término se mueve con ella (se mantiene la duración). */
+  /** Al mover la hora de inicio, el término se mueve con ella (se mantiene la duración) si es de un día. */
   const cambiarInicio = (v: string | undefined) =>
     setF((p) => {
       if (!v) return p;
-      if (!p.horaFin || !p.horaInicio) return { ...p, horaInicio: v };
+      // Varios días: la hora de término es la del último día, no se toca.
+      if (!p.horaFin || !p.horaInicio || p.fechaFin !== undefined) return { ...p, horaInicio: v };
       const dur = horaAMinutos(p.horaFin) - horaAMinutos(p.horaInicio);
       const fin = horaAMinutos(v) + (dur > 0 ? dur : 60);
-      // Si se pasa de medianoche, se deja sin término (los eventos no cruzan de día).
+      // Si se pasa de medianoche, se deja sin término (para cruzar de día está "Dura varios días").
       return { ...p, horaInicio: v, horaFin: fin < 24 * 60 ? minutosAHora(fin) : undefined };
     });
 
@@ -90,7 +98,9 @@ export default function EventoModal({
       if (eraSerie && r === "nunca" && p.fecha === evento.fecha) nueva = fecha;
       // Si vuelve a repetirse sin que se haya tocado la fecha, la serie recupera su inicio original.
       else if (eraSerie && r !== "nunca" && p.repeticion === "nunca" && p.fecha === fecha) nueva = evento.fecha;
-      return { ...p, repeticion: r, fecha: nueva };
+      // Si dura varios días, el último día se mueve con el primero.
+      const fechaFin = p.fechaFin !== undefined && nueva !== p.fecha ? sumarDias(nueva, Math.max(1, diferenciaDias(p.fecha, p.fechaFin))) : p.fechaFin;
+      return { ...p, repeticion: r, fecha: nueva, fechaFin };
     });
 
   const guardar = async () => {
@@ -105,19 +115,28 @@ export default function EventoModal({
       lugar: f.lugar?.trim() || undefined,
       actualizado: new Date().toISOString(),
     });
-    const ok = await actualizar("eventos", (lista) =>
-      lista.some((e) => e.id === limpio.id) ? lista.map((e) => (e.id === limpio.id ? limpio : e)) : [...lista, limpio],
-    );
+    // El vínculo con iCloud lo maneja el servidor: se toma del evento como está ahora en la lista (el
+    // formulario pudo abrirse antes de que se vinculara). "Sólo en el panel", si no se tocó, también.
+    const tocoSoloPanel = !!f.soloPanel !== !!evento?.soloPanel;
+    const ok = await actualizar("eventos", (lista) => {
+      const actual = lista.find((e) => e.id === limpio.id);
+      if (!actual) return [...lista, limpio];
+      const final: Evento = { ...limpio, externo: actual.externo, soloPanel: tocoSoloPanel ? limpio.soloPanel : actual.soloPanel };
+      if (!final.externo) delete final.externo;
+      if (!final.soloPanel) delete final.soloPanel;
+      return lista.map((e) => (e.id === limpio.id ? final : e));
+    });
     if (ok) alCerrar();
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };
 
   /** Borra el evento; si es una serie de iCloud, también los días que se cambiaron sólo esa vez. */
   const borrarTodo = () => {
-    const serie = f.externo && !f.externo.recurrencia ? f.externo : null;
-    actualizar("eventos", (lista) =>
-      lista.filter((e) => e.id !== f.id && !(serie && e.externo?.uid === serie.uid && e.externo.conexion === serie.conexion)),
-    );
+    actualizar("eventos", (lista) => {
+      const actual = lista.find((e) => e.id === f.id);
+      const serie = actual?.externo && !actual.externo.recurrencia ? actual.externo : null;
+      return lista.filter((e) => e.id !== f.id && !(serie && e.externo?.uid === serie.uid && e.externo.conexion === serie.conexion));
+    });
     alCerrar();
   };
 
@@ -287,7 +306,14 @@ export default function EventoModal({
           </div>
         )}
 
-        {repeticionDeAfuera ? (
+        {diaDeSerie ? (
+          <div className="rounded-2xl bg-superficie-2 px-4 py-3">
+            <span className="block text-lg font-bold">↻ Cambio de un solo día de una serie</span>
+            <span className="block text-base text-tinta-suave">
+              En el iPhone se cambió sólo este día; el resto de la serie sigue igual. Aquí puedes moverlo o cambiarlo.
+            </span>
+          </div>
+        ) : repeticionDeAfuera ? (
           <div className="rounded-2xl bg-superficie-2 px-4 py-3">
             <span className="block text-lg font-bold">↻ {textoRepeticion(f)}</span>
             <span className="block text-base text-tinta-suave">
@@ -315,7 +341,7 @@ export default function EventoModal({
           </div>
         )}
 
-        {!repeticionDeAfuera && f.repeticion !== "nunca" && (
+        {!repeticionDeAfuera && !diaDeSerie && f.repeticion !== "nunca" && (
           <div className="-mt-1 space-y-3 rounded-2xl bg-superficie-2 px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-lg font-bold">Cada</span>
@@ -364,15 +390,23 @@ export default function EventoModal({
           </p>
         )}
 
-        {!repeticionDeAfuera && f.repeticion !== "nunca" && (
+        {!repeticionDeAfuera && !diaDeSerie && f.repeticion !== "nunca" && (
           <Campo etiqueta="Hasta (déjalo vacío si no termina)">
-            <Entrada type="date" value={f.repetirHasta ?? ""} min={f.fecha} onChange={(e) => set("repetirHasta", e.target.value)} />
+            <Entrada type="date" value={f.repetirHasta ?? ""} min={inicioReal} onChange={(e) => set("repetirHasta", e.target.value)} />
             {hastaAntes && (
               <span className="mt-1 block text-base font-bold text-red-700 noche:text-red-300">
-                Tiene que ser el {fechaLarga(f.fecha)} o después.
+                {inicioReal !== f.fecha
+                  ? `Con esos días empieza el ${fechaLarga(inicioReal)}: el “hasta” tiene que ser ese día o después.`
+                  : `Tiene que ser el ${fechaLarga(f.fecha)} o después.`}
               </span>
             )}
           </Campo>
+        )}
+
+        {seSolapa && (
+          <p className="-mt-2 text-base font-bold text-red-700 noche:text-red-300">
+            Dura {duracionDias(f)} días pero se repite antes de terminar: acorta el “Último día” o repítelo menos seguido.
+          </p>
         )}
 
         <button
@@ -397,7 +431,7 @@ export default function EventoModal({
           <AreaTexto value={f.nota ?? ""} onChange={(e) => set("nota", e.target.value)} placeholder="Ej.: llevar la carpeta" />
         </Campo>
 
-        {calendarios.length > 0 && (
+        {calendarios.length > 0 && !diaDeSerie && (
           <button
             type="button"
             role="switch"

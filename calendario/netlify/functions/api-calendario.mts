@@ -22,6 +22,7 @@ import { CalDAV, ErrorCalDAV } from "../../servidor/caldav";
 import {
   CLAVE_DUENO_ICLOUD,
   borrarEstado,
+  conCandado,
   credencialesICloud,
   guardarEstado,
   leerEstado,
@@ -34,10 +35,17 @@ import type { Evento } from "../../lib/datos/tipos";
 /** Las funciones normales tienen 10 s (contados desde que llega el pedido): se deja margen para responder. */
 const LIMITE_MS = 6500;
 
+// 424 (y no 5xx): los equipos toman cualquier 5xx como "sin conexión" y mostrarían "revisa el wifi".
 const errorCalDAV = (e: unknown) =>
   e instanceof ErrorCalDAV
-    ? json({ error: e.message, codigo: e.codigo }, e.codigo === "CLAVE" ? 400 : 502)
-    : error("No se pudo hablar con iCloud: " + (e as Error).message, 502);
+    ? json({ error: e.message, codigo: e.codigo }, e.codigo === "CLAVE" ? 400 : 424)
+    : json({ error: "No se pudo hablar con iCloud: " + (e as Error).message }, 424);
+
+/** ¿La cuenta de iCloud del sitio está tomada por otra familia? */
+async function deOtraFamilia(familiaId: string) {
+  const dueno = (await almacen().get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
+  return !!dueno && dueno.familiaId !== familiaId;
+}
 
 /** Cambia la lista de eventos sin pisar lo que otro equipo guardó entre medio. */
 async function cambiarEventos(familiaId: string, fn: (l: Evento[]) => Evento[]) {
@@ -61,14 +69,15 @@ export default async (req: Request, context: Context) => {
   const conexiones = s.acceso.calendarios ?? [];
 
   if (req.method === "GET" && !accion) {
-    const dueno = (await almacen().get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
+    const otraFamilia = !conexiones.length && (await deOtraFamilia(s.familiaId));
     const col = await leerColeccion(s.familiaId, "eventos");
     const lista = (Array.isArray(col?.datos) ? col!.datos : []) as Evento[];
     return json({
       servidor: {
         icloud: !!cred,
-        usuario: cred ? usuarioOculto(cred.usuario) : undefined,
-        otraFamilia: !!dueno && dueno.familiaId !== s.familiaId && !conexiones.length,
+        // El usuario (aunque oculto) sólo lo ve la familia que usa la cuenta, o cualquiera mientras nadie la usa.
+        usuario: cred && !otraFamilia ? usuarioOculto(cred.usuario) : undefined,
+        otraFamilia,
       },
       conexiones: await Promise.all(
         conexiones.map(async (c) => {
@@ -94,8 +103,9 @@ export default async (req: Request, context: Context) => {
 
   if (accion === "calendarios") {
     if (!cred) return json({ error: "Falta configurar la cuenta de iCloud en el servidor", codigo: "SIN_CUENTA" }, 400);
+    if (await deOtraFamilia(s.familiaId)) return error("La cuenta de iCloud del panel ya está conectada a otra familia", 409);
     try {
-      const cals = await new CalDAV(cred.usuario, cred.clave, cred.base).calendarios();
+      const cals = await new CalDAV(cred.usuario, cred.clave, cred.base, 4000, limite).calendarios();
       return json({ calendarios: cals.map(({ url, nombre, color }) => ({ url, nombre, color })) });
     } catch (e) {
       return errorCalDAV(e);
@@ -109,7 +119,7 @@ export default async (req: Request, context: Context) => {
     let elegido;
     try {
       // Sólo se acepta un calendario de la propia cuenta (nunca una dirección cualquiera).
-      elegido = (await new CalDAV(cred.usuario, cred.clave, cred.base).calendarios()).find((c) => c.url === url);
+      elegido = (await new CalDAV(cred.usuario, cred.clave, cred.base, 4000, limite - 3000).calendarios()).find((c) => c.url === url);
     } catch (e) {
       return errorCalDAV(e);
     }
@@ -118,10 +128,7 @@ export default async (req: Request, context: Context) => {
     // La cuenta de iCloud del sitio es de una sola familia.
     const store = almacen();
     const r = await store.setJSON(CLAVE_DUENO_ICLOUD, { familiaId: s.familiaId }, { onlyIfNew: true });
-    if (!r.modified) {
-      const dueno = (await store.get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
-      if (dueno && dueno.familiaId !== s.familiaId) return error("La cuenta de iCloud del panel ya está conectada a otra familia", 409);
-    }
+    if (!r.modified && (await deOtraFamilia(s.familiaId))) return error("La cuenta de iCloud del panel ya está conectada a otra familia", 409);
 
     const conexion: ConexionCalendario = {
       id: idAzar(10),
@@ -131,15 +138,24 @@ export default async (req: Request, context: Context) => {
       color: elegido.color,
       creada: new Date().toISOString(),
     };
+    // Primero se anota la conexión, revisando dentro de la escritura condicional que no haya otra: dos
+    // "conectar" a la vez (dos equipos, un doble toque) no pueden crear dos.
+    await guardarEstado(s.familiaId, conexion.id, { recursos: {} });
+    try {
+      await cambiarAcceso(s.familiaId, (a) => {
+        if (!a) throw new Error("Familia sin acceso");
+        if ((a.calendarios ?? []).some((c) => c.proveedor === "icloud")) throw new Error("YA_CONECTADO");
+        return { ...a, calendarios: [...(a.calendarios ?? []), conexion] };
+      });
+    } catch (e) {
+      await borrarEstado(s.familiaId, conexion.id);
+      if ((e as Error).message === "YA_CONECTADO") return error("Ya hay un calendario de iCloud conectado", 409);
+      throw e;
+    }
     // Si no se quieren subir los eventos que ya están, quedan "sólo en el panel".
     if (body.subirExistentes === false) {
       await cambiarEventos(s.familiaId, (l) => l.map((e) => (e.externo || e.soloPanel ? e : { ...e, soloPanel: true })));
     }
-    await guardarEstado(s.familiaId, conexion.id, { recursos: {} });
-    await cambiarAcceso(s.familiaId, (a) => {
-      if (!a) throw new Error("Familia sin acceso");
-      return { ...a, calendarios: [...(a.calendarios ?? []).filter((c) => c.proveedor !== "icloud"), conexion] };
-    });
     const resultado = await sincronizar(s.familiaId, conexion, { limite });
     return json({ conexion: { id: conexion.id, nombre: conexion.nombre }, resultado });
   }
@@ -155,22 +171,31 @@ export default async (req: Request, context: Context) => {
   if (accion === "desconectar") {
     const c = conexiones.find((x) => x.id === body.id);
     if (!c) return error("Ese calendario no está conectado", 404);
-    await cambiarAcceso(s.familiaId, (a) => {
-      if (!a) throw new Error("Familia sin acceso");
-      return { ...a, calendarios: (a.calendarios ?? []).filter((x) => x.id !== c.id) };
-    });
-    // Los eventos quedan en el panel, sin vínculo (si se vuelve a conectar, se reconocen por su id).
-    await cambiarEventos(s.familiaId, (l) =>
-      l.map((e) => {
-        if (e.externo?.conexion !== c.id) return e;
-        const { externo: _, ...resto } = e;
-        return resto;
-      }),
+    // Con el mismo candado que la sincronización: una que esté corriendo termina antes.
+    const r = await conCandado(
+      s.familiaId,
+      c.id,
+      async () => {
+        await cambiarAcceso(s.familiaId, (a) => {
+          if (!a) throw new Error("Familia sin acceso");
+          return { ...a, calendarios: (a.calendarios ?? []).filter((x) => x.id !== c.id) };
+        });
+        // Los eventos quedan en el panel, sin vínculo (si se vuelve a conectar, se reconocen por su id).
+        await cambiarEventos(s.familiaId, (l) =>
+          l.map((e) => {
+            if (e.externo?.conexion !== c.id) return e;
+            const { externo: _, ...resto } = e;
+            return resto;
+          }),
+        );
+        await borrarEstado(s.familiaId, c.id);
+        const store = almacen();
+        const dueno = (await store.get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
+        if (dueno?.familiaId === s.familiaId && c.proveedor === "icloud") await store.delete(CLAVE_DUENO_ICLOUD);
+      },
+      Math.max(0, limite - Date.now() - 2000),
     );
-    await borrarEstado(s.familiaId, c.id);
-    const store = almacen();
-    const dueno = (await store.get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
-    if (dueno?.familiaId === s.familiaId && c.proveedor === "icloud") await store.delete(CLAVE_DUENO_ICLOUD);
+    if (r === "ocupado") return error("Se está sincronizando con iCloud: inténtalo de nuevo en unos segundos", 409);
     return json({ ok: true });
   }
 

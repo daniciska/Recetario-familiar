@@ -245,9 +245,17 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
 
   const guardar = async () => {
     const limpio = { ...m, nombre: m.nombre.trim() };
+    const nueva = !estado.miembros.some((x) => x.id === limpio.id);
+    const anteriores = estado.miembros.map((x) => x.id);
     const ok = await actualizar("miembros", (l) =>
       l.some((x) => x.id === limpio.id) ? l.map((x) => (x.id === limpio.id ? limpio : x)) : [...l, limpio],
     );
+    // Una persona nueva también es parte de los eventos "para todos" (si no, pasarían a ser de los demás
+    // y en iCloud se les agregarían emojis a todos).
+    if (ok && nueva && anteriores.length > 1)
+      await actualizar("eventos", (l) =>
+        l.map((e) => (anteriores.every((id) => e.miembros.includes(id)) && !e.miembros.includes(limpio.id) ? { ...e, miembros: [...e.miembros, limpio.id] } : e)),
+      );
     if (ok) alCerrar();
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };

@@ -10,7 +10,7 @@ export class ErrorCalDAV extends Error {
   constructor(
     mensaje: string,
     public status: number,
-    public codigo: "CLAVE" | "RED" | "SERVIDOR" | "NO_ENCONTRADO" | "PERMISO" = "SERVIDOR",
+    public codigo: "CLAVE" | "RED" | "SERVIDOR" | "NO_ENCONTRADO" | "PERMISO" | "TIEMPO" = "SERVIDOR",
   ) {
     super(mensaje);
   }
@@ -29,6 +29,8 @@ const parser = new XMLParser({
   attributeNamePrefix: "@",
   parseTagValue: false,
   parseAttributeValue: false,
+  // Referencias numéricas (&#13;, &#241;): un calendar-data que no venga en CDATA las trae.
+  htmlEntities: true,
   trimValues: true,
   isArray: (nombre) => ["response", "propstat", "comp", "href"].includes(nombre),
 });
@@ -63,12 +65,28 @@ const XML = '<?xml version="1.0" encoding="utf-8"?>';
 const NS = 'xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:ic="http://apple.com/ns/ical/"';
 
 export class CalDAV {
+  /**
+   * @param espera máximo por pedido (ms)
+   * @param hasta  plazo total (Date.now()): ningún pedido pasa de ahí (las funciones de Netlify se cortan)
+   */
   constructor(
     private usuario: string,
     private clave: string,
     private base = URL_ICLOUD,
     private espera = 9000,
+    private hasta = Infinity,
   ) {}
+
+  /** Cuánto queda del plazo total. */
+  queda() {
+    return this.hasta - Date.now();
+  }
+
+  /** Una dirección que devolvió el servidor sólo se usa si es del mismo sitio (la clave no sale de ahí). */
+  private propia(url: string): string {
+    if (!mismoSitio(new URL(url), new URL(this.base))) throw new ErrorCalDAV("iCloud devolvió una dirección de otro sitio", 0);
+    return url;
+  }
 
   private async pedir(
     metodo: string,
@@ -77,8 +95,10 @@ export class CalDAV {
   ): Promise<Response> {
     let actual = url;
     for (let saltos = 0; saltos < 5; saltos++) {
+      const espera = Math.min(this.espera, this.queda() - 300);
+      if (espera <= 0) throw new ErrorCalDAV("Se acabó el tiempo para hablar con iCloud", 0, "TIEMPO");
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), this.espera);
+      const t = setTimeout(() => ctrl.abort(), espera);
       let r: Response;
       try {
         r = await fetch(actual, {
@@ -157,7 +177,7 @@ export class CalDAV {
     );
     const principal = raiz.map((x) => this.hrefProp(x.props, "current-user-principal")).find(Boolean);
     if (!principal) throw new ErrorCalDAV("iCloud no dijo cuál es la cuenta", 0);
-    const urlPrincipal = new URL(principal, this.base).toString();
+    const urlPrincipal = this.propia(new URL(principal, this.base).toString());
     const p = await this.multistatus(
       "PROPFIND",
       urlPrincipal,
@@ -166,7 +186,7 @@ export class CalDAV {
     );
     const casa = p.map((x) => this.hrefProp(x.props, "calendar-home-set")).find(Boolean);
     if (!casa) throw new ErrorCalDAV("iCloud no dijo dónde están los calendarios", 0);
-    const urlCasa = new URL(casa, urlPrincipal).toString();
+    const urlCasa = this.propia(new URL(casa, urlPrincipal).toString());
     const lista = await this.multistatus(
       "PROPFIND",
       urlCasa,
@@ -181,7 +201,7 @@ export class CalDAV {
         return !comps.length || comps.some((c) => String(c["@name"]).toUpperCase() === "VEVENT");
       })
       .map((x) => ({
-        url: new URL(x.href, urlCasa).toString(),
+        url: this.propia(new URL(x.href, urlCasa).toString()),
         nombre: textoDe(x.props.displayname) || "Sin nombre",
         color: textoDe(x.props["calendar-color"]).slice(0, 7) || undefined,
         ctag: textoDe(x.props.getctag) || null,
@@ -202,6 +222,12 @@ export class CalDAV {
   /** Recursos del calendario: ruta → ETag (con sync-collection, confirmado en iCloud; si no, PROPFIND). */
   async listar(url: string): Promise<{ ctag: string | null; recursos: Map<string, string> }> {
     const propio = ruta(url, url).replace(/\/?$/, "/");
+    // El CTag se lee ANTES de listar: si algo cambia entre medio, el CTag guardado es el viejo y la
+    // próxima vuelta lo ve (al revés, el cambio quedaría escondido detrás del atajo).
+    const ctag = await this.ctag(url).catch((e) => {
+      if (e instanceof ErrorCalDAV && (e.codigo === "CLAVE" || e.codigo === "TIEMPO")) throw e;
+      return null;
+    });
     let r: Respuesta[];
     try {
       r = await this.multistatus(
@@ -227,13 +253,21 @@ export class CalDAV {
       const etag = textoDe(x.props.getetag);
       if (etag && x.status < 300) recursos.set(x.href, etag);
     }
-    return { ctag: await this.ctag(url).catch(() => null), recursos };
+    return { ctag, recursos };
   }
 
-  /** Trae varios recursos (de a 40 por pedido). */
-  async traer(url: string, hrefs: string[]): Promise<{ href: string; etag: string; ics: string }[]> {
+  /**
+   * Trae varios recursos (de a 40 por pedido). Si el plazo se acaba entre tandas, devuelve lo que alcanzó
+   * (`completo: false`); lo demás queda para la próxima vuelta.
+   */
+  async traer(
+    url: string,
+    hrefs: string[],
+    margen = 2500,
+  ): Promise<{ leidos: { href: string; etag: string; ics: string }[]; completo: boolean }> {
     const r: { href: string; etag: string; ics: string }[] = [];
     for (let i = 0; i < hrefs.length; i += 40) {
+      if (this.queda() < margen) return { leidos: r, completo: false };
       const grupo = hrefs.slice(i, i + 40);
       const cuerpo = `${XML}<c:calendar-multiget ${NS}><d:prop><d:getetag/><c:calendar-data/></d:prop>${grupo
         .map((h) => `<d:href>${escaparXML(ruta(h, url))}</d:href>`)
@@ -245,7 +279,16 @@ export class CalDAV {
         if (ics && x.status < 300) r.push({ href: x.href, etag, ics });
       }
     }
-    return r;
+    return { leidos: r, completo: true };
+  }
+
+  /** ¿Hay un recurso con ese nombre en el calendario? */
+  async existe(url: string, nombre: string): Promise<boolean> {
+    const r = await this.pedir("PROPFIND", new URL(encodeURIComponent(nombre), url.replace(/\/?$/, "/")).toString(), {
+      cuerpo: `${XML}<d:propfind ${NS}><d:prop><d:getetag/></d:prop></d:propfind>`,
+      profundidad: "0",
+    });
+    return r.status === 207 || r.status === 200;
   }
 
   private etagDe(r: Response): string | null {
@@ -297,6 +340,7 @@ export class CalDAV {
 
 /** ¿Mismo servidor, o ambos bajo icloud.com (caldav.icloud.com → p52-caldav.icloud.com)? */
 function mismoSitio(a: URL, b: URL): boolean {
+  // Nunca de https a http; de http (sólo pruebas locales) a https, sí.
   if (a.protocol !== b.protocol && !(a.protocol === "https:" && b.protocol === "http:")) return false;
   if (a.host === b.host) return true;
   const dominio = (h: string) => h.split(".").slice(-2).join(".");

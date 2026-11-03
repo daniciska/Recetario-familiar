@@ -185,6 +185,11 @@ export const unidadRepeticion = (r: Exclude<Evento["repeticion"], "nunca">, n: n
  */
 export function canonico(ev: Evento): Evento {
   const r: Evento = { ...ev };
+  // Un día cambiado de una serie de iCloud es un evento de una vez (su repetición es la de la serie).
+  if (r.externo?.recurrencia) {
+    r.repeticion = "nunca";
+    delete r.fechas;
+  }
   if (r.fechas) {
     r.repeticion = "nunca";
     delete r.intervalo;
@@ -202,13 +207,17 @@ export function canonico(ev: Evento): Evento {
   if (r.diasSemana) {
     const dias = [...new Set(r.diasSemana)].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).sort((a, b) => a - b);
     if (dias.length) {
-      // La serie empieza el primer día elegido desde la fecha.
+      // La serie empieza el primer día elegido desde la fecha (si dura varios días, el último se mueve igual).
+      const dur = r.fechaFin && r.fechaFin > r.fecha ? diferenciaDias(r.fecha, r.fechaFin) : 0;
       for (let i = 0; i < 7 && !dias.includes(diaSemana(r.fecha)); i++) r.fecha = sumarDias(r.fecha, 1);
+      if (dur) r.fechaFin = sumarDias(r.fecha, dur);
     }
     if (!dias.length || (dias.length === 1 && dias[0] === diaSemana(r.fecha))) delete r.diasSemana;
     else r.diasSemana = dias;
   }
   if (r.fechaFin !== undefined && !(r.fechaFin > r.fecha)) delete r.fechaFin;
+  // Varios días "hasta las 23:59" es lo mismo que sin hora de término: hasta el final del último día.
+  if (r.fechaFin && !r.todoElDia && r.horaFin === "23:59") delete r.horaFin;
   if (r.repetirHasta && r.repetirHasta < r.fecha) r.repetirHasta = r.fecha;
   if (r.excepciones) {
     const ex = [...new Set(r.excepciones)].filter((x) => x >= r.fecha && (!r.repetirHasta || x <= r.repetirHasta)).sort();

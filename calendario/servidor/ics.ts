@@ -104,10 +104,12 @@ function instanteLocal(zona: string, y: number, m: number, d: number, h: number,
     const p = enZona(zona, t);
     return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000;
   };
-  let t = reloj - desfase(reloj);
-  const d2 = desfase(t);
-  if (reloj - d2 !== t) t = reloj - d2;
-  return t;
+  const t1 = reloj - desfase(reloj);
+  const d2 = desfase(t1);
+  const t2 = reloj - d2;
+  // Si la corrección no calza consigo misma, esa hora no existe (adelanto de septiembre en Chile): se
+  // queda la primera estimación, que corre la hora hacia adelante (00:00 → 01:00), como pide RFC 5545.
+  return t2 !== t1 && desfase(t2) === d2 ? t2 : t1;
 }
 
 const dosDig = (n: number) => String(n).padStart(2, "0");
@@ -244,11 +246,14 @@ function visible(ev: Evento, miembros: Miembro[]) {
   };
 }
 
-/** Eventos de una serie que van al calendario (si el principal es "sólo panel", la serie no va). */
+/**
+ * Eventos de una serie que van al calendario: todos, salvo que el principal sea "sólo panel" (entonces
+ * ninguno). Un día cambiado no se puede dejar sólo en el panel por separado (el editor no lo ofrece).
+ */
 export function enCalendario(grupo: Evento[]): Evento[] {
   const principal = grupo.find((e) => !e.externo?.recurrencia);
-  if (principal?.soloPanel) return [];
-  return grupo.filter((e) => !e.soloPanel);
+  if (principal ? principal.soloPanel : grupo.length === 1 && grupo[0].soloPanel) return [];
+  return grupo;
 }
 
 export function huellaGrupo(grupo: Evento[], miembros: Miembro[]): string {
@@ -258,7 +263,7 @@ export function huellaGrupo(grupo: Evento[], miembros: Miembro[]): string {
   return createHash("sha256").update(JSON.stringify(v)).digest("hex").slice(0, 32);
 }
 
-const idDe = (texto: string) => `ic_${createHash("sha256").update(texto).digest("hex").slice(0, 16)}`;
+export const idDe = (texto: string) => `ic_${createHash("sha256").update(texto).digest("hex").slice(0, 16)}`;
 
 /** UID que se usa en el calendario para un evento creado en el panel. */
 export const uidDe = (ev: Evento) => `${ev.id}${SUFIJO_UID}`;
@@ -290,10 +295,16 @@ function horarioDe(v: ICAL.Component): (Horario & { tzid: string | null; inicio:
   let b: EnPanel | null = null;
   if (fin && !fin.t.isDate) b = aPanel(fin.t, fin.tzid ?? ini.tzid);
   else if (dur instanceof ICAL.Duration && a.instante !== undefined) {
-    const p = enZona(ZONA, a.instante + dur.toSeconds() * 1000);
-    b = { fecha: fechaDe(p.y, p.m, p.d), hora: `${dosDig(p.h)}:${dosDig(p.mi)}` };
+    const fin = a.instante + dur.toSeconds() * 1000;
+    const p = enZona(ZONA, fin);
+    b = { fecha: fechaDe(p.y, p.m, p.d), hora: `${dosDig(p.h)}:${dosDig(p.mi)}`, instante: fin };
   }
   const h: Horario & { tzid: string | null; inicio: ICAL.Time } = { fecha: a.fecha, todoElDia: false, horaInicio: a.hora, tzid: ini.tzid, inicio: ini.t };
+  // Termina en el primer instante de un día (00:00, o 01:00 el día del adelanto de hora): medianoche.
+  if (b && b.instante !== undefined && b.fecha > a.fecha) {
+    const p = partes(b.fecha);
+    if (b.instante === instanteLocal(ZONA, p.anio, p.mes, p.dia, 0, 0)) b.hora = "00:00";
+  }
   if (b && (b.fecha > a.fecha || (b.fecha === a.fecha && b.hora! > a.hora!))) {
     if (b.hora === "00:00" && b.fecha > a.fecha) {
       // Termina a medianoche: en el panel, "hasta las 23:59" del día anterior.
@@ -312,12 +323,59 @@ function horarioDe(v: ICAL.Component): (Horario & { tzid: string | null; inicio:
 function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: string): string[] {
   const it = new ICAL.Event(v).iterator();
   const r: string[] = [];
-  for (let i = 0, n: ICAL.Time | null; i < 6000 && (n = it.next()); i++) {
+  const anioDesde = Number(desde.slice(0, 4)) - 1;
+  // Se corta por fecha; el tope sólo protege de reglas absurdas (cada minuto). Lo de años anteriores a
+  // la ventana se salta sin convertir (una serie diaria desde 2010 son miles de vueltas baratas).
+  for (let i = 0, n: ICAL.Time | null; i < 400_000 && (n = it.next()); i++) {
+    if (n.year < anioDesde) continue;
     const f = aPanel(n, tzid).fecha;
     if (f > hasta) break;
     if (f >= desde) r.push(f);
   }
   return [...new Set(r)];
+}
+
+interface Instancia {
+  t: ICAL.Time;
+  tzid: string | null;
+}
+
+/**
+ * Inicio exacto (en la zona de la serie) de la ocurrencia que empieza en cada fecha del panel, sin
+ * mirar los EXDATE. Sirve para escribir EXDATE y RECURRENCE-ID que calcen con la serie aunque esté en
+ * UTC o en otra zona.
+ */
+function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, Instancia> {
+  const buscadas = new Set(fechas);
+  const r = new Map<string, Instancia>();
+  if (!buscadas.size) return r;
+  const ini = valorDe(v.getFirstProperty("dtstart"));
+  if (!ini) return r;
+  const hasta = [...buscadas].sort().pop()!;
+  const anioDesde = Number([...buscadas].sort()[0].slice(0, 4)) - 1;
+  const copia = new ICAL.Component(JSON.parse(JSON.stringify(v.toJSON())));
+  copia.removeAllProperties("exdate");
+  if (!copia.getFirstProperty("rrule") && !copia.getFirstProperty("rdate")) {
+    const f = aPanel(ini.t, ini.tzid).fecha;
+    if (buscadas.has(f)) r.set(f, { t: ini.t.clone(), tzid: ini.tzid });
+    return r;
+  }
+  const it = new ICAL.Event(copia).iterator();
+  for (let i = 0, n: ICAL.Time | null; i < 400_000 && (n = it.next()); i++) {
+    if (n.year < anioDesde) continue;
+    const f = aPanel(n, ini.tzid).fecha;
+    if (f > hasta) break;
+    if (buscadas.has(f) && !r.has(f)) r.set(f, { t: n.clone(), tzid: ini.tzid });
+    if (r.size === buscadas.size) break;
+  }
+  return r;
+}
+
+function propInstancia(nombre: string, i: Instancia): ICAL.Property {
+  const p = new ICAL.Property(nombre);
+  p.setValue(i.t.clone());
+  if (!i.t.isDate && i.tzid && i.t.zone !== ICAL.Timezone.utcTimezone) p.setParameter("tzid", i.tzid);
+  return p;
 }
 
 type Repeticion = Pick<Evento, "repeticion" | "intervalo" | "diasSemana" | "repetirHasta"> & {
@@ -418,7 +476,13 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
     const h = horarioDe(v);
     if (!h) return null;
     const nota = texto(v, "description");
-    const p = personasDesde(texto(v, "summary") ?? "Sin título", nota, ctx.miembros);
+    const resumen = texto(v, "summary") ?? "Sin título";
+    // Si el título es el mismo que el panel escribió, se conservan sus personas (la detección por emoji
+    // o nombre es sólo para lo que se escribió en el iPhone: "Cumpleaños de Sofía" puede ser de todos).
+    const p =
+      previo && resumen === tituloExterno(previo, ctx.miembros)
+        ? { titulo: previo.titulo, miembros: previo.miembros }
+        : personasDesde(resumen, nota, ctx.miembros);
     const ev: Evento = {
       id,
       titulo: p.titulo,
@@ -464,7 +528,10 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
     if (ev && h) {
       const excluidas = [...fechasDe(principal, "exdate"), ...fechasCambiadas, ...canceladas];
       if (principal.getFirstProperty("rrule") || principal.getFirstProperty("rdate")) {
-        const simple = reglaSimple(principal, h);
+        // Sólo una serie en hora de Santiago (o de día completo, o flotante) se traduce a las opciones del
+        // panel: en UTC u otra zona la hora local cambia con el horario de verano y los días pueden correrse.
+        const enSantiago = h.inicio.isDate || h.tzid === ZONA || (!h.tzid && h.inicio.zone !== ICAL.Timezone.utcTimezone);
+        const simple = enSantiago ? reglaSimple(principal, h) : null;
         let usada = false;
         if (simple) {
           const { sinComparar, ...regla } = simple;
@@ -484,7 +551,9 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
         }
         if (!usada) {
           ev.fechas = expandir(principal, h.tzid, ventana.desde, ventana.hasta);
-          ev.excepciones = [...fechasCambiadas, ...canceladas];
+          // Todas las excluidas (también los EXDATE del iPhone) quedan como excepciones, así al
+          // escribir de vuelta no se pierde ninguna.
+          ev.excepciones = excluidas;
         }
       }
       eventos.unshift(ev);
@@ -544,12 +613,28 @@ function ponerHorario(v: ICAL.Component, ev: Evento) {
   }
 }
 
-function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>) {
-  v.removeAllProperties("exdate");
-  for (const f of ev.excepciones ?? []) {
-    if (cambiadas.has(f)) continue; // ese día está en su propio VEVENT (RECURRENCE-ID, cambiado o cancelado)
-    v.addProperty(propFecha("exdate", f, ev.todoElDia ? undefined : (ev.horaInicio ?? "09:00")));
+/**
+ * EXDATE de la serie = excepciones del panel (menos los días que tienen su propio VEVENT). Los que ya
+ * estaban se dejan tal cual; los nuevos (o todos, si cambió el inicio de la serie) se escriben con el
+ * inicio exacto de esa ocurrencia en la zona de la serie, para que calcen aunque esté en UTC.
+ */
+function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>, rehacer: boolean) {
+  const faltan = new Set((ev.excepciones ?? []).filter((f) => !cambiadas.has(f)));
+  const previas: Instancia[] = [];
+  for (const p of v.getAllProperties("exdate")) {
+    const tzid = (p.getParameter("tzid") as string | undefined) ?? null;
+    for (const x of p.getValues()) if (x instanceof ICAL.Time) previas.push({ t: x, tzid });
   }
+  v.removeAllProperties("exdate");
+  if (!rehacer) {
+    for (const i of previas) {
+      const f = aPanel(i.t, i.tzid).fecha;
+      if (!faltan.has(f)) continue;
+      v.addProperty(propInstancia("exdate", i));
+      faltan.delete(f);
+    }
+  }
+  for (const i of instancias(v, faltan).values()) v.addProperty(propInstancia("exdate", i));
 }
 
 function tocar(v: ICAL.Component, nuevo: boolean) {
@@ -577,7 +662,8 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
     cal.updatePropertyWithValue("prodid", PRODID);
     cal.updatePropertyWithValue("calscale", "GREGORIAN");
   }
-  const previo = anterior ? leerRecurso(anterior, ctx) : null;
+  // Leído con el grupo del panel: así un título que el panel escribió se reconoce igual (ver leerRecurso).
+  const previo = anterior ? leerRecurso(anterior, ctx, grupo) : null;
   const previoDe = (rec?: string) => previo?.eventos.find((e) => (e.externo?.recurrencia ?? "") === (rec ?? ""));
   const vevents = cal.getAllSubcomponents("vevent");
   const vDe = (rec?: string) =>
@@ -601,7 +687,7 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
     }
   }
 
-  const escribir = (ev: Evento, rec?: string) => {
+  const escribir = (ev: Evento, rec?: string): boolean => {
     let v = vDe(rec);
     const nuevo = !v;
     if (!v) {
@@ -641,26 +727,35 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
         cambio = true;
       }
       if (!antes || cambioHorario || !mismo(ev.excepciones, antes.excepciones) || !mismo([...fechasCambiadas].sort(), [...cambiadasAntes].sort())) {
-        ponerExcepciones(v, ev, fechasCambiadas);
+        ponerExcepciones(v, ev, fechasCambiadas, !antes || cambioHorario);
         cambio = true;
       }
     } else if (nuevo) {
-      v.addProperty(propFecha("recurrence-id", rec, principal?.todoElDia || !principal ? undefined : (principal.horaInicio ?? "09:00")));
+      const vp = vDe();
+      const i = vp ? instancias(vp, [rec]).get(rec) : undefined;
+      v.addProperty(i ? propInstancia("recurrence-id", i) : propFecha("recurrence-id", rec, principal?.todoElDia || !principal ? undefined : (principal.horaInicio ?? "09:00")));
     }
     if (cambio) tocar(v, nuevo);
+    return cambioHorario;
   };
 
-  if (principal) escribir(principal);
+  const cambioSerie = principal ? escribir(principal) : false;
   for (const c of cambiados) escribir(c, c.externo!.recurrencia);
-  // Si cambió la hora de la serie, los días cambiados siguen apuntando a su día con la hora nueva.
+  // Si cambió el inicio de la serie, los días cambiados (y cancelados) siguen apuntando a su día, con
+  // el inicio nuevo de esa ocurrencia.
   const vPrincipal = principal ? vDe() : undefined;
-  if (principal && vPrincipal && previo && !mismo(previoDe()?.horaInicio, principal.horaInicio)) {
-    for (const v of vevents) {
-      if (v === vPrincipal || !v.getFirstProperty("recurrence-id")) continue;
+  if (vPrincipal && previo && cambioSerie) {
+    const otros = vevents.filter((v) => v !== vPrincipal && v.getFirstProperty("recurrence-id"));
+    const diaDe = (v: ICAL.Component) => {
       const rid = valorDe(v.getFirstProperty("recurrence-id"))!;
-      const rec = aPanel(rid.t, rid.tzid).fecha;
+      return aPanel(rid.t, rid.tzid).fecha;
+    };
+    const nuevas = instancias(vPrincipal, otros.map(diaDe));
+    for (const v of otros) {
+      const i = nuevas.get(diaDe(v));
+      if (!i) continue;
       v.removeAllProperties("recurrence-id");
-      v.addProperty(propFecha("recurrence-id", rec, principal.todoElDia ? undefined : (principal.horaInicio ?? "09:00")));
+      v.addProperty(propInstancia("recurrence-id", i));
       tocar(v, false);
     }
   }

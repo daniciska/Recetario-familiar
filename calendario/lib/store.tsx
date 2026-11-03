@@ -20,7 +20,7 @@ interface Contexto {
   /** Hay cambios que viven sólo en memoria (el navegador no guarda nada): recargar los perdería. */
   sinGuardar: boolean;
   /** Familia en la nube a la que está conectado este equipo (null: los datos viven sólo aquí). */
-  nube: { familia: { id: string; nombre: string }; conectado: boolean; calendarios: CalendarioConectado[] } | null;
+  nube: { familia: { id: string; nombre: string }; conectado: boolean; calendarios: CalendarioConectado[]; revisar: () => void } | null;
 }
 
 const Ctx = createContext<Contexto | null>(null);
@@ -204,7 +204,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         cerrarError,
         // Un guardado que no cupo ya se deshizo: en memoria queda lo mismo que en el equipo.
         sinGuardar: sinAlmacenamiento.current,
-        nube: repo.familia ? { familia: repo.familia, conectado, calendarios } : null,
+        nube: repo.familia ? { familia: repo.familia, conectado, calendarios, revisar: () => repo.revisar?.() } : null,
       }}
     >
       {children}

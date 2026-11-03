@@ -112,6 +112,7 @@ export function SeccionICloud() {
     );
     if (r?.status === 200 && r.datos.resultados[0]?.ocupado) setMsg("Ya se estaba sincronizando: en un momento queda al día.");
     await cargar();
+    nube?.revisar();
   };
 
   const quitar = async (c: Conexion) => {
@@ -119,6 +120,7 @@ export function SeccionICloud() {
     setDesconectar(null);
     if (r && r.status !== 200) setMsg(r.datos.error ?? "No se pudo desconectar.");
     await cargar();
+    nube?.revisar();
   };
 
   const conexion = info?.conexiones[0];
@@ -212,6 +214,7 @@ export function SeccionICloud() {
             if (r && r.status !== 200) setMsg(r.datos.error ?? "No se pudo conectar el calendario.");
             else if (r?.datos.resultado && !r.datos.resultado.ok) setMsg(r.datos.resultado.error?.mensaje ?? "La primera sincronización falló.");
             await cargar();
+            nube?.revisar();
           }}
           ocupado={ocupado}
         />
