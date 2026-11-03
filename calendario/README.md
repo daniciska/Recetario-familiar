@@ -47,14 +47,14 @@ Para que cada cambio se publique solo: en Netlify, *Project configuration → Bu
 **Compartir entre equipos (Familia → ☁️ Compartir entre equipos):** el primer equipo toca *Crear la familia en la nube* y sube lo que tenía. Los demás se unen con *📲 Invitar otro equipo*: aparece un QR (en el iPhone o iPad basta apuntar la Cámara) y un código de 8 letras que sirve una vez y vence en 24 horas. Desde ahí todos ven y cambian lo mismo: lo que se cambia en un equipo aparece en los otros en unos 20 segundos. La lista de equipos conectados permite quitarle el acceso a uno (un teléfono perdido) o desconectar el propio. Sin internet, cada equipo abre con la última copia que guardó y avisa si un cambio no se pudo guardar.
 
 Cómo funciona:
-- **Netlify Database** (Postgres) guarda cada colección (eventos, recetas, menú…) como un documento con número de versión. Un cambio sólo se acepta si parte de la última versión; si otro equipo guardó antes, la app vuelve a aplicar su cambio sobre lo más nuevo, así dos equipos que cambian a la vez no se pisan.
-- **Netlify Blobs** guarda los equipos con acceso (sólo la huella de su clave), las invitaciones, las versiones (los equipos preguntan cada 20 s si hubo cambios sin despertar la base) y las fotos de las recetas.
-- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/salud`. Las migraciones están en `netlify/database/migrations/` y Netlify las aplica al publicar.
+- **Netlify Blobs** guarda todo: cada colección (eventos, recetas, menú…) como un documento con número de versión, los equipos con acceso (sólo la huella de su clave), las invitaciones, las versiones (los equipos preguntan cada 20 s si hubo cambios) y las fotos de las recetas. Un cambio sólo se acepta si parte de la última versión (escritura condicional con ETag); si otro equipo guardó antes, la app vuelve a aplicar su cambio sobre lo más nuevo, así dos equipos que cambian a la vez no se pisan.
+- Se intentó con Netlify Database (Postgres), pero al publicar Netlify devolvió un error interno 500 al crear la base (dos veces, sin incidentes en su página de estado); la familia eligió seguir con Blobs. Pasar a Netlify Database más adelante sólo cambia `servidor/comun.ts` y `api-datos.mts`.
+- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/salud`.
 - Sólo se puede crear la primera familia del sitio; para crear otra hay que definir la variable `CLAVE_CREACION` en Netlify y mandarla en la cabecera `x-clave-creacion`.
 
 Sin conectar a la nube, los datos viven en el `localStorage` del equipo y se mueven con *Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): `RepositorioLocal` o `RepositorioNube`, elegido en `lib/datos/index.ts`.
 
-Probar la nube en local: `NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions` (después de `npm run build`) y, la primera vez, `npx netlify-cli database migrations apply`.
+Probar la nube en local: `NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions` (después de `npm run build`). Ojo: el simulador local de Blobs no entrega ETags ni hace atómica la escritura "sólo si no existe", así que los cambios simultáneos sólo se pueden probar en Netlify (con `CLAVE_CREACION`, sin ocupar la primera familia).
 
 ```
 lib/datos/tipos.ts            modelo (Miembro, Evento, Receta, ItemCompra, Tarea…)
@@ -64,8 +64,7 @@ lib/datos/repositorioNube.ts  implementación con la nube (versiones, sondeo, co
 lib/datos/nube.ts             sesión del equipo, llamadas a /api, fotos
 components/Nube.tsx           crear familia, invitar (QR), unirse, equipos
 netlify/functions/            API (Netlify Functions)
-netlify/database/migrations/  esquema de Netlify Database
-servidor/comun.ts             base de datos, Blobs y acceso por equipo
+servidor/comun.ts             Blobs: colecciones con versión, acceso por equipo, invitaciones
 lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
 lib/compras.ts                categorías, unidades, suma de ingredientes
 lib/fechas.ts                 fechas en America/Santiago, semana lunes–domingo

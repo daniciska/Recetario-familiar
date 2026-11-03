@@ -10,7 +10,7 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 |---|---|
 | Equipos | Todo Apple: iPhone, iPad, Mac, iCloud. |
 | Correo y calendario dedicados | **Apple ID nuevo sólo para el panel** (p. ej. `familia.apellido.panel@icloud.com`). Tiene el correo dedicado y el calendario "Familia", que se comparte con los iPhone de la familia. La app sólo accede a esa cuenta, nunca a las personales. |
-| Base de datos compartida | **No Supabase** (la familia lo descartó). Por decidir: **Netlify Database** (Postgres en el mismo Netlify donde ya está publicada la app, con Netlify Functions y Blobs; recomendado) o **Firebase** (Firestore en tiempo real). Las fases de abajo dicen "Supabase" en algunos nombres: se traducen al proveedor elegido (tabla de documentos por familia, funciones programadas cada 5 min, almacenamiento de fotos y audios, secretos del proveedor). |
+| Base de datos compartida | **No Supabase** (la familia lo descartó). Se eligió Netlify Database, pero Netlify falló al crearla (error interno 500, dos veces) y la familia eligió **Netlify Blobs** (Functions + Blobs, en el mismo Netlify). Las fases de abajo dicen "Supabase" en algunos nombres: se traducen a Netlify (funciones programadas cada 5 min, Blobs para fotos y audios, variables de entorno secretas). |
 | Diseño | Pastel, parecido a Skylight (hecho): fondo claro lavanda, tarjetas blancas, eventos con relleno pastel del color de cada persona, letra redondeada (Fredoka) en títulos y reloj. |
 | Recetas | **Separadas** del "Recetario familiar" de la mamá (`/recetas`). El calendario tiene su propio recetario. |
 | IA | **Gemini, plan gratis** (Google AI Studio). Ojo: en el plan gratis Google puede usar lo que se le manda para mejorar sus productos; si después se quiere más privacidad, se cambia a pago por uso sin tocar el código. |
@@ -28,9 +28,9 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 
 ## Fases
 
-### Fase 1 · Datos compartidos — HECHA con Netlify Database (ver README → Datos)
+### Fase 1 · Datos compartidos — HECHA con Netlify Blobs (ver README → Datos)
 
-Lo de abajo era el plan original con Supabase; se hizo con Netlify Database + Functions + Blobs: colecciones con
+Lo de abajo era el plan original con Supabase; se hizo con Netlify Functions + Blobs: colecciones con
 versión (sin pisarse entre equipos), sondeo cada 20 s que sólo lee Blobs, copia local para abrir sin internet,
 invitación con QR y código de un uso, lista de equipos con "quitar acceso", fotos de recetas en Blobs.
 

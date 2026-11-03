@@ -1,18 +1,17 @@
-// Piezas compartidas por las funciones de la API (/api/*). Corren en Netlify Functions.
+// Piezas compartidas por las funciones de la API (/api/*). Corren en Netlify Functions y guardan
+// todo en Netlify Blobs (lectura con consistencia fuerte y escrituras condicionales con ETag):
 //
-// - Netlify Database (Postgres): familias y colecciones (con versión).
-// - Netlify Blobs, almacén "calendario": por familia, los equipos con acceso (huella de su clave),
-//   las versiones de cada colección (para que los equipos sepan si hay cambios sin despertar la
-//   base) y las invitaciones. Almacén "fotos": las fotos de las recetas.
+// Almacén "calendario":
+//   registro/primera           → la primera familia creada en el sitio (sólo se puede crear una)
+//   acceso/<familia>           → la familia, sus equipos (huella de su clave) y la versión de cada colección
+//   datos/<familia>/<colección> → {datos, version}: un cambio sólo se acepta si parte de la última versión
+//   invitaciones/<huella>      → códigos de un uso (24 h)
+// Almacén "fotos": las fotos de las recetas.
 
-import { getDatabase } from "@netlify/database";
 import { getStore } from "@netlify/blobs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { CLAVES } from "../lib/datos/claves";
 import type { ClaveColeccion } from "../lib/datos/tipos";
-
-// Una sola conexión por instancia (nunca una por pedido).
-export const db = getDatabase();
 
 export const almacen = () => getStore({ name: "calendario", consistency: "strong" });
 export const almacenFotos = () => getStore({ name: "fotos" });
@@ -76,6 +75,29 @@ export interface Acceso {
 
 const claveAcceso = (familiaId: string) => `acceso/${familiaId}`;
 
+/**
+ * Exclusión mutua con un blob "sólo si no existe". Sirve cuando no hay ETag para la escritura
+ * condicional (el simulador local de Blobs no lo entrega al leer); en producción no se usa.
+ */
+async function conCandado<T>(clave: string, fn: () => Promise<T>): Promise<T> {
+  const store = almacen();
+  const k = `candados/${clave}`;
+  for (let i = 0; i < 80; i++) {
+    const r = await store.setJSON(k, { desde: Date.now() }, { onlyIfNew: true });
+    if (r.modified) {
+      try {
+        return await fn();
+      } finally {
+        await store.delete(k).catch(() => {});
+      }
+    }
+    const c = (await store.get(k, { type: "json" })) as { desde: number } | null;
+    if (c && Date.now() - c.desde > 10_000) await store.delete(k).catch(() => {}); // abandonado
+    await new Promise((ok) => setTimeout(ok, 50 + Math.random() * 100));
+  }
+  throw new Error("Ocupado: demasiados cambios simultáneos");
+}
+
 export async function leerAcceso(familiaId: string): Promise<Acceso | null> {
   return (await almacen().get(claveAcceso(familiaId), { type: "json" })) as Acceso | null;
 }
@@ -89,12 +111,18 @@ export async function cambiarAcceso(familiaId: string, fn: (a: Acceso | null) =>
   for (let i = 0; i < 8; i++) {
     const actual = await store.getWithMetadata(claveAcceso(familiaId), { type: "json" });
     const nuevo = fn((actual?.data as Acceso | undefined) ?? null);
+    if (actual && !actual.etag) {
+      // Sin ETag (simulador local): leer y escribir dentro de un candado.
+      return conCandado(claveAcceso(familiaId), async () => {
+        const ahora = (await store.get(claveAcceso(familiaId), { type: "json" })) as Acceso | null;
+        const n = fn(ahora);
+        await store.setJSON(claveAcceso(familiaId), n);
+        return n;
+      });
+    }
     const r = actual?.etag
       ? await store.setJSON(claveAcceso(familiaId), nuevo, { onlyIfMatch: actual.etag })
-      : actual
-        ? // Sin ETag (el simulador local de Blobs no lo entrega al leer): escritura simple.
-          await store.setJSON(claveAcceso(familiaId), nuevo)
-        : await store.setJSON(claveAcceso(familiaId), nuevo, { onlyIfNew: true });
+      : await store.setJSON(claveAcceso(familiaId), nuevo, { onlyIfNew: true });
     if (r.modified) return nuevo;
   }
   throw new Error("No se pudo actualizar el acceso (demasiados cambios simultáneos)");
@@ -108,6 +136,63 @@ export async function anotarVersiones(familiaId: string, versiones: Partial<Reco
     for (const [c, n] of Object.entries(versiones) as [ClaveColeccion, number][]) v[c] = Math.max(v[c] ?? 0, n);
     return { ...a, versiones: v };
   });
+}
+
+// ---------- Colecciones (Blobs) ----------
+
+export interface Coleccion {
+  datos: unknown;
+  version: number;
+}
+
+const claveDatos = (familiaId: string, clave: ClaveColeccion) => `datos/${familiaId}/${clave}`;
+
+export async function leerColeccion(familiaId: string, clave: ClaveColeccion): Promise<Coleccion | null> {
+  return (await almacen().get(claveDatos(familiaId, clave), { type: "json" })) as Coleccion | null;
+}
+
+/**
+ * Guarda una colección sólo si la versión guardada es `base` (escritura condicional con ETag: si
+ * otro equipo escribió entre medio, no se pisa). Si no, devuelve lo último que hay.
+ */
+export async function guardarColeccion(
+  familiaId: string,
+  clave: ClaveColeccion,
+  datos: unknown,
+  base: number,
+): Promise<{ ok: true; version: number } | { ok: false; actual: Coleccion }> {
+  const store = almacen();
+  const k = claveDatos(familiaId, clave);
+  const actual = await store.getWithMetadata(k, { type: "json" });
+  if (actual && !actual.etag) {
+    // Sin ETag (simulador local): comparar la versión y escribir dentro de un candado.
+    return conCandado(k, async () => {
+      const ahora = (await store.get(k, { type: "json" })) as Coleccion | null;
+      const v = ahora?.version ?? 0;
+      if (v !== base) return { ok: false as const, actual: ahora ?? { datos: null, version: 0 } };
+      await store.setJSON(k, { datos, version: v + 1 });
+      return { ok: true as const, version: v + 1 };
+    });
+  }
+  const previa = (actual?.data as Coleccion | undefined) ?? null;
+  const v = previa?.version ?? 0;
+  if (v !== base) return { ok: false, actual: previa ?? { datos: null, version: 0 } };
+  const nuevo: Coleccion = { datos, version: v + 1 };
+  const r = actual?.etag
+    ? await store.setJSON(k, nuevo, { onlyIfMatch: actual.etag })
+    : await store.setJSON(k, nuevo, { onlyIfNew: true });
+  if (!r.modified) return { ok: false, actual: (await leerColeccion(familiaId, clave)) ?? { datos: null, version: 0 } };
+  return { ok: true, version: v + 1 };
+}
+
+/** Reemplaza una colección (restaurar un respaldo): sube la versión sin mirar la anterior. */
+export async function reemplazarColeccion(familiaId: string, clave: ClaveColeccion, datos: unknown): Promise<number> {
+  for (let i = 0; i < 8; i++) {
+    const actual = await leerColeccion(familiaId, clave);
+    const r = await guardarColeccion(familiaId, clave, datos, actual?.version ?? 0);
+    if (r.ok) return r.version;
+  }
+  throw new Error("No se pudo reemplazar (demasiados cambios simultáneos)");
 }
 
 // ---------- Autenticación ----------
