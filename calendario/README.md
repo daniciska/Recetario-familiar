@@ -95,7 +95,8 @@ components/                   las vistas
 - Si un evento se cambió en los dos lados, gana el cambio más reciente. Si en un lado se borró y en el otro se cambió, gana el cambio (nada se pierde).
 - Si de una vez se borrarían muchos eventos (p. ej. al cargar un respaldo viejo o si iCloud devolviera el calendario vacío), no borra nada y pregunta en *Familia*: borrarlos también del otro lado o traerlos de vuelta.
 - Lo que el iPhone guarda y el panel no maneja (alertas, invitados, adjuntos, URL) se conserva: al actualizar sólo se cambia lo que se cambió en la pared.
-- Repeticiones que el panel no sabe escribir (“el segundo martes de cada mes”) se muestran bien, pero su repetición se cambia en el iPhone; en la pared se puede cambiar lo demás o borrar un día.
+- Repeticiones que el panel no sabe escribir (“el segundo martes de cada mes”, o series que vienen en otra zona horaria, como una invitación en UTC) se muestran en sus días, pero su repetición se cambia en el iPhone; en la pared se puede cambiar lo demás o borrar un día. Las que vienen en otra zona se ven con la hora de la primera vez (puede diferir en una hora entre invierno y verano).
+- Un evento “para todos” sigue siéndolo al agregar una persona nueva a la familia.
 - Cambiar “sólo este día” en el iPhone se ve en la pared como un evento aparte ese día.
 - Un evento puede quedar **sólo en la pared** (interruptor en el editor).
 - Desconectar deja los eventos en los dos lados; al volver a conectar se reconocen y no se duplican.
