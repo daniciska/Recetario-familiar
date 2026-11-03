@@ -247,17 +247,21 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
     const limpio = { ...m, nombre: m.nombre.trim() };
     const nueva = !estado.miembros.some((x) => x.id === limpio.id);
     const anteriores = estado.miembros.map((x) => x.id);
-    const ok = await actualizar("miembros", (l) =>
-      l.some((x) => x.id === limpio.id) ? l.map((x) => (x.id === limpio.id ? limpio : x)) : [...l, limpio],
-    );
     // Una persona nueva también es parte de los eventos "para todos" (si no, pasarían a ser de los demás
-    // y en iCloud se les agregarían emojis a todos).
-    if (ok && nueva && anteriores.length > 1)
-      await actualizar("eventos", (l) =>
+    // y en iCloud se les agregarían emojis a todos). Primero los eventos y después la persona: mientras
+    // no está en la familia, su id en un evento no cambia nada (ni en iCloud), así que si una
+    // sincronización cae entre los dos guardados, o falla el segundo, no se sube nada de más.
+    const okEventos =
+      !nueva ||
+      anteriores.length < 2 ||
+      (await actualizar("eventos", (l) =>
         l.map((e) => (anteriores.every((id) => e.miembros.includes(id)) && !e.miembros.includes(limpio.id) ? { ...e, miembros: [...e.miembros, limpio.id] } : e)),
-      );
+      ));
+    const ok =
+      okEventos &&
+      (await actualizar("miembros", (l) => (l.some((x) => x.id === limpio.id) ? l.map((x) => (x.id === limpio.id ? limpio : x)) : [...l, limpio])));
     if (ok) alCerrar();
-    else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
+    else setError("No se pudo guardar (sin conexión o sin espacio en este equipo). Inténtalo de nuevo.");
   };
 
   const borrar = () => {

@@ -1,5 +1,5 @@
 import type { Evento, Ocurrencia } from "./datos/tipos";
-import { diaSemana, diferenciaDias, lunesDe, partes, sumarDias, ultimoDiaDelMes } from "./fechas";
+import { diaSemana, diferenciaDias, horaAMinutos, partes, sumarDias } from "./fechas";
 
 /** ¿Se repite? (las repeticiones que vienen de iCloud con fechas sueltas también cuentan). */
 export const seRepite = (ev: Evento) => ev.repeticion !== "nunca" || !!ev.fechas;
@@ -12,36 +12,58 @@ export function duracionDias(ev: Evento): number {
 /** Días de la semana de una repetición semanal (0 = lunes). */
 export const diasDeLaSemana = (ev: Evento): number[] => (ev.diasSemana?.length ? ev.diasSemana : [diaSemana(ev.fecha)]);
 
+/** Número de día (días desde 1970-01-01) de una fecha AAAA-MM-DD. */
+const numeroDeDia = (f: string) => Date.UTC(+f.slice(0, 4), +f.slice(5, 7) - 1, +f.slice(8, 10)) / 86_400_000;
+/** Día de la semana (0 = lunes) de un número de día (el 1970-01-01 fue jueves). */
+const diaDeSemana = (n: number) => (((n + 3) % 7) + 7) % 7;
+const finDeMes = (anio: number, mes: number) => new Date(Date.UTC(anio, mes, 0)).getUTCDate();
+
+/**
+ * `empiezaEn` para un evento fijo: lo que no depende de la fecha se calcula una vez (para recorrer
+ * muchos días seguidos).
+ */
+export function probadorDeInicio(ev: Evento): (f: string) => boolean {
+  const n = Math.max(1, ev.intervalo ?? 1);
+  const i = partes(ev.fecha);
+  const ni = numeroDeDia(ev.fecha);
+  const lunesInicio = ni - diaDeSemana(ni);
+  const dias = diasDeLaSemana(ev);
+  return (f) => {
+    if (f < ev.fecha) return false;
+    if (ev.excepciones?.includes(f)) return false;
+    if (ev.fechas) return ev.fechas.includes(f);
+    if (ev.repetirHasta && f > ev.repetirHasta) return false;
+    switch (ev.repeticion) {
+      case "nunca":
+        return f === ev.fecha;
+      case "diaria":
+        return (numeroDeDia(f) - ni) % n === 0;
+      case "semanal": {
+        const nf = numeroDeDia(f);
+        const ds = diaDeSemana(nf);
+        return ((nf - ds - lunesInicio) / 7) % n === 0 && dias.includes(ds);
+      }
+      case "mensual": {
+        const a = partes(f);
+        if (((a.anio - i.anio) * 12 + a.mes - i.mes) % n !== 0) return false;
+        // Si el mes no tiene ese día (p. ej. 31 en abril), se muestra el último día del mes.
+        const ultimo = finDeMes(a.anio, a.mes);
+        return a.dia === i.dia || (i.dia > ultimo && a.dia === ultimo);
+      }
+      case "anual": {
+        // Un 29 de febrero se muestra el 28 en los años no bisiestos.
+        const a = partes(f);
+        if (a.mes !== i.mes || (a.anio - i.anio) % n !== 0) return false;
+        const ultimo = finDeMes(a.anio, a.mes);
+        return a.dia === i.dia || (i.dia > ultimo && a.dia === ultimo);
+      }
+    }
+  };
+}
+
 /** ¿Empieza una ocurrencia del evento en la fecha dada? */
 export function empiezaEn(ev: Evento, f: string): boolean {
-  if (f < ev.fecha) return false;
-  if (ev.excepciones?.includes(f)) return false;
-  if (ev.fechas) return ev.fechas.includes(f);
-  if (ev.repetirHasta && f > ev.repetirHasta) return false;
-  const n = Math.max(1, ev.intervalo ?? 1);
-  switch (ev.repeticion) {
-    case "nunca":
-      return f === ev.fecha;
-    case "diaria":
-      return diferenciaDias(ev.fecha, f) % n === 0;
-    case "semanal":
-      return (diferenciaDias(lunesDe(ev.fecha), lunesDe(f)) / 7) % n === 0 && diasDeLaSemana(ev).includes(diaSemana(f));
-    case "mensual": {
-      const a = partes(f);
-      const i = partes(ev.fecha);
-      if (((a.anio - i.anio) * 12 + a.mes - i.mes) % n !== 0) return false;
-      // Si el mes no tiene ese día (p. ej. 31 en abril), se muestra el último día del mes.
-      const ultimo = ultimoDiaDelMes(f);
-      return a.dia === i.dia || (i.dia > ultimo && a.dia === ultimo);
-    }
-    case "anual": {
-      // Un 29 de febrero se muestra el 28 en los años no bisiestos.
-      const a = partes(f);
-      const i = partes(ev.fecha);
-      if (a.mes !== i.mes || (a.anio - i.anio) % n !== 0) return false;
-      return a.dia === i.dia || (i.dia > ultimoDiaDelMes(f) && a.dia === ultimoDiaDelMes(f));
-    }
-  }
+  return probadorDeInicio(ev)(f);
 }
 
 /** Día en que empezó la ocurrencia que cubre `f` (o null si ese día no hay). */
@@ -227,4 +249,56 @@ export function canonico(ev: Evento): Evento {
   if (r.fechas) r.fechas = [...new Set(r.fechas)].sort();
   for (const k of Object.keys(r) as (keyof Evento)[]) if (r[k] === undefined) delete r[k];
   return r;
+}
+
+/** Minutos que dura cada ocurrencia (sin hora de término: un día, 0; varios días, hasta el final del último). */
+export function duracionMinutos(ev: Evento): number {
+  const dias = duracionDias(ev);
+  if (ev.todoElDia) return dias * 1440;
+  const ini = horaAMinutos(ev.horaInicio ?? "09:00");
+  const fin = ev.horaFin ? horaAMinutos(ev.horaFin) : dias > 1 ? 1440 : ini;
+  return (dias - 1) * 1440 + fin - ini;
+}
+
+/**
+ * ¿Una ocurrencia dura más que el tiempo hasta la siguiente? (entonces se pisan, y "borrar sólo este
+ * día" no se notaría). Que una termine justo cuando empieza la otra (turno de noche diario, de lunes a
+ * lunes) no es pisarse. En una semanal con varios días, cuenta el menor salto entre los días elegidos.
+ */
+export function seSolapa(ev: Evento): boolean {
+  if (ev.repeticion === "nunca" || ev.fechas) return false;
+  const n = Math.max(1, ev.intervalo ?? 1);
+  let dias: number;
+  if (ev.repeticion === "diaria") dias = n;
+  else if (ev.repeticion === "semanal") {
+    const d = [...diasDeLaSemana(ev)].sort((a, b) => a - b);
+    dias = 7 * n - (d[d.length - 1] - d[0]); // de la última de una semana a la primera de la que toca
+    for (let i = 1; i < d.length; i++) dias = Math.min(dias, d[i] - d[i - 1]);
+  } else dias = (ev.repeticion === "mensual" ? 28 : 365) * n; // el mes (o año) más corto
+  return duracionMinutos(ev) > dias * 1440;
+}
+
+/** Campos de "cuándo": si se cambió uno en el formulario, van todos juntos (si no, podría quedar un horario que no calza). */
+const CUANDO = ["fecha", "fechaFin", "todoElDia", "horaInicio", "horaFin", "repeticion", "intervalo", "diasSemana", "repetirHasta"] as const;
+/** En una repetición del iPhone (fechas sueltas) el formulario sólo cambia la hora. */
+const CUANDO_AFUERA = ["todoElDia", "horaInicio", "horaFin"] as const;
+/** Lo que no se edita en el formulario: siempre como está ahora en la lista (lo pone la sincronización o "borrar sólo este día"). */
+const NO_EDITABLES = new Set<string>(["id", "externo", "fechas", "excepciones", "actualizado"]);
+
+/**
+ * Lo que se cambió en el formulario (de `antes` a `despues`, los dos ya limpios) aplicado sobre el
+ * evento como está ahora en la lista (`actual`). Así no se pisa lo que llegó del iPhone mientras el
+ * formulario estaba abierto (un día borrado, otra hora, otro título).
+ */
+export function aplicarCambios(antes: Evento, despues: Evento, actual: Evento): Evento {
+  const igual = (k: keyof Evento) => JSON.stringify(antes[k] ?? null) === JSON.stringify(despues[k] ?? null);
+  const r: Record<string, unknown> = { ...actual };
+  const cuando: readonly (keyof Evento)[] = antes.fechas ? CUANDO_AFUERA : CUANDO;
+  if (cuando.some((k) => !igual(k))) for (const k of cuando) r[k] = despues[k];
+  const claves = new Set([...Object.keys(antes), ...Object.keys(despues)] as (keyof Evento)[]);
+  for (const k of claves) {
+    if (NO_EDITABLES.has(k) || (CUANDO as readonly string[]).includes(k) || igual(k)) continue;
+    r[k] = despues[k];
+  }
+  return canonico(r as unknown as Evento);
 }

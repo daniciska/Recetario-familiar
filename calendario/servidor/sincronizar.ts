@@ -11,7 +11,19 @@
 // reintento nunca duplica. Si de una vez se borraría mucho, se detiene y pregunta (ver `resolver`).
 
 import { CalDAV, ErrorCalDAV, URL_ICLOUD } from "./caldav";
-import { SUFIJO_UID, enCalendario, escribirRecurso, huellaGrupo, idDe, leerRecurso, uidDe, ventanaDe, type Contexto } from "./ics";
+import {
+  NoSePuedeEscribir,
+  SUFIJO_UID,
+  enCalendario,
+  escribirRecurso,
+  huellaGrupo,
+  idDe,
+  idPropioDe,
+  leerRecurso,
+  uidDe,
+  ventanaDe,
+  type Contexto,
+} from "./ics";
 import {
   almacen,
   anotarVersiones,
@@ -205,8 +217,6 @@ function miembrosDe(datos: unknown): Miembro[] {
   );
 }
 
-// TEMPORAL: pasa a ics.ts
-const idPropioDe = (uid: string) => (uid.endsWith(SUFIJO_UID) ? uid.slice(0, -SUFIJO_UID.length).replace(/\.[a-km-z2-9]{6}$/, "") : null);
 const nombreRecurso = (href: string) => decodeURIComponent(href.split("/").filter(Boolean).pop() ?? "");
 const nombreSeguro = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 120);
 
@@ -466,6 +476,13 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       try {
         nuevo = escribirRecurso(local, ctx, uid, ics);
       } catch (e) {
+        if (e instanceof NoSePuedeEscribir) {
+          // Un cambio que el panel no sabe escribir sin cambiar otra cosa en los iPhone: manda lo de iCloud.
+          ponerGrupo(uid, remoto, local.map((x) => x.id));
+          parches.set(uid, { href, etag, huella: huellaGrupo(remoto, miembros), ids: idsDe(remoto) });
+          avisos.push(e.message);
+          return;
+        }
         console.error("no se pudo escribir", uid, e);
         avisos.push(`"${local[0]?.titulo ?? ""}" no se pudo pasar a iCloud.`);
         return;

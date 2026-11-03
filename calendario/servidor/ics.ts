@@ -17,8 +17,8 @@
 import ICAL from "ical.js";
 import { createHash } from "node:crypto";
 import type { Evento, Miembro } from "../lib/datos/tipos";
-import { canonico, diasDeLaSemana, empiezaEn } from "../lib/eventos";
-import { ZONA, partes, sumarDias } from "../lib/fechas";
+import { canonico, diasDeLaSemana, probadorDeInicio } from "../lib/eventos";
+import { ZONA, diferenciaDias, partes, sumarDias } from "../lib/fechas";
 import { normalizarEvento } from "../lib/datos/normalizar";
 
 export const SUFIJO_UID = "@calendario-familiar";
@@ -104,12 +104,20 @@ function instanteLocal(zona: string, y: number, m: number, d: number, h: number,
     const p = enZona(zona, t);
     return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000;
   };
-  const t1 = reloj - desfase(reloj);
-  const d2 = desfase(t1);
-  const t2 = reloj - d2;
-  // Si la corrección no calza consigo misma, esa hora no existe (adelanto de septiembre en Chile): se
-  // queda la primera estimación, que corre la hora hacia adelante (00:00 → 01:00), como pide RFC 5545.
-  return t2 !== t1 && desfase(t2) === d2 ? t2 : t1;
+  // El desfase de un día antes y uno después: si son iguales, no hay cambio de hora cerca.
+  const antes = desfase(reloj - 86_400_000);
+  const despues = desfase(reloj + 86_400_000);
+  const ta = reloj - antes;
+  if (antes === despues) return ta;
+  const td = reloj - despues;
+  const va = desfase(ta) === antes;
+  const vd = desfase(td) === despues;
+  // Hora repetida (cuando se atrasa el reloj): la primera vez, como pide RFC 5545.
+  if (va && vd) return Math.min(ta, td);
+  if (vd && !va) return td;
+  // Hora que no existe (adelanto): con el desfase de antes del salto, que la corre hacia adelante en
+  // cualquier zona (Santiago 00:30 → 01:30, Madrid 02:30 → 03:30), como pide RFC 5545.
+  return ta;
 }
 
 const dosDig = (n: number) => String(n).padStart(2, "0");
@@ -132,6 +140,29 @@ function aPanel(t: ICAL.Time, tzid: string | null): EnPanel {
   const p = enZona(ZONA, instante);
   return { fecha: fechaDe(p.y, p.m, p.d), hora: `${dosDig(p.h)}:${dosDig(p.mi)}`, instante };
 }
+
+/**
+ * Sólo la fecha en Santiago. Si el valor ya está en hora de Santiago (o es de día completo, o
+ * flotante) es la fecha del reloj, sin convertir: así recorrer una serie larga es barato. (El adelanto
+ * de hora de Chile es a medianoche y corre la hora a la 1:00 del mismo día: la fecha no cambia).
+ */
+function fechaEnPanel(t: ICAL.Time, tzid: string | null): string {
+  if (t.isDate || (t.zone !== ICAL.Timezone.utcTimezone && (tzid === ZONA || !tzid))) return fechaDe(t.year, t.month, t.day);
+  return aPanel(t, tzid).fecha;
+}
+
+/** Hora de reloj como número (para sumar segundos sin pasar por zonas). */
+const relojMs = (t: ICAL.Time) => Date.UTC(t.year, t.month - 1, t.day, t.isDate ? 0 : t.hour, t.isDate ? 0 : t.minute, t.isDate ? 0 : t.second);
+
+function deRelojMs(ms: number, zona: ICAL.Timezone | null | undefined, esFecha = false): ICAL.Time {
+  const d = new Date(ms);
+  const datos = esFecha
+    ? { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), isDate: true }
+    : { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(), isDate: false };
+  return ICAL.Time.fromData(datos, esFecha ? undefined : (zona ?? undefined));
+}
+
+const clonar = (v: ICAL.Component) => new ICAL.Component(JSON.parse(JSON.stringify(v.toJSON())));
 
 function valorDe(prop: ICAL.Property | null): { t: ICAL.Time; tzid: string | null } | null {
   if (!prop) return null;
@@ -319,20 +350,186 @@ function horarioDe(v: ICAL.Component): (Horario & { tzid: string | null; inicio:
   return h;
 }
 
-/** Fechas (en Santiago) en que empieza la serie dentro de la ventana, según el .ics. */
-function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: string): string[] {
-  const it = new ICAL.Event(v).iterator();
+// Recorrer una serie cuesta por cada ocurrencia desde su inicio (ical.js no sabe saltar), así que:
+// - las diarias y semanales (y por horas) se adelantan hasta poco antes de lo que se busca;
+// - las por horas o minutos se recorren día por día (sólo importa qué días tienen alguna);
+// - y hay un tope de vueltas y de tiempo para reglas absurdas (no se corta la función de 10 s).
+const TOPE_VUELTAS = 100_000;
+const TOPE_MS = 400;
+const SEGUNDOS: Record<string, number> = { SECONDLY: 1, MINUTELY: 60, HOURLY: 3600 };
+
+const unaRegla = (v: ICAL.Component): ICAL.Recur | null => {
+  const rr = v.getAllProperties("rrule");
+  return rr.length === 1 ? (rr[0].getFirstValue() as ICAL.Recur) : null;
+};
+const tieneFiltros = (r: ICAL.Recur) => Object.keys(r.parts ?? {}).length > 0;
+
+/** Un valor de fecha/hora como hora de reloj (flotante) en la zona IANA `tzid`. */
+function relojFlotante(t: ICAL.Time, tzidValor: string | null, tzid: string): ICAL.Time {
+  if (t.isDate) return t;
+  let instante: number | null = null;
+  if (t.zone === ICAL.Timezone.utcTimezone) instante = Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second);
+  else if (tzidValor && tzidValor !== tzid) instante = aPanel(t, tzidValor).instante ?? null;
+  if (instante === null) return deRelojMs(relojMs(t), null);
+  const p = enZona(tzid, instante);
+  return ICAL.Time.fromData({ year: p.y, month: p.m, day: p.d, hour: p.h, minute: p.mi, second: p.s, isDate: false });
+}
+
+/**
+ * Copia de una serie con TZID (IANA) en hora flotante: las mismas horas de reloj, pero ical.js no tiene
+ * que calcular el desfase de la zona en cada paso (es lo más caro de recorrerla). UNTIL, EXDATE y RDATE
+ * se pasan a la hora de reloj de esa zona. Las ocurrencias salen con la hora de reloj de la serie.
+ */
+function flotante(v: ICAL.Component): ICAL.Component {
+  const ini = valorDe(v.getFirstProperty("dtstart"));
+  if (!ini || ini.t.isDate || !ini.tzid || ini.t.zone === ICAL.Timezone.utcTimezone || !zonaIANA(ini.tzid)) return v;
+  const tzid = ini.tzid;
+  const copia = clonar(v);
+  const dt = copia.getFirstProperty("dtstart")!;
+  dt.removeParameter("tzid");
+  dt.setValue(deRelojMs(relojMs(ini.t), null));
+  for (const k of ["dtend", "duration"]) copia.removeAllProperties(k);
+  for (const nombre of ["exdate", "rdate"]) {
+    for (const p of copia.getAllProperties(nombre)) {
+      const valores = p.getValues();
+      if (!valores.every((x) => x instanceof ICAL.Time)) continue;
+      const tz = (p.getParameter("tzid") as string | undefined) ?? null;
+      p.removeParameter("tzid");
+      p.setValues(valores.map((x) => relojFlotante(x as ICAL.Time, tz, tzid)));
+    }
+  }
+  for (const p of copia.getAllProperties("rrule")) {
+    const r = p.getFirstValue() as ICAL.Recur;
+    if (r.until && !r.until.isDate) {
+      const nr = r.clone();
+      nr.until = relojFlotante(r.until, null, tzid);
+      p.setValue(nr);
+    }
+  }
+  return copia;
+}
+
+/**
+ * Copia de la serie con el inicio adelantado un número entero de períodos, hasta unos días antes de
+ * `desde`: desde ahí tiene exactamente las mismas ocurrencias (la primera, el inicio adelantado, queda
+ * antes de lo que se busca). Sólo para una regla diaria, semanal o por horas, sin COUNT (o sin filtros:
+ * entonces se descuenta del COUNT). Si no se puede o no hace falta, la misma serie.
+ */
+function adelantar(v: ICAL.Component, desde: string): ICAL.Component {
+  const r = unaRegla(v);
+  const ini = valorDe(v.getFirstProperty("dtstart"));
+  if (!r || !ini) return v;
+  if (r.count && tieneFiltros(r)) return v;
+  const n = Math.max(1, r.interval || 1);
+  const periodo = r.freq === "DAILY" ? n * 86400 : r.freq === "WEEKLY" ? n * 7 * 86400 : SEGUNDOS[r.freq] ? n * SEGUNDOS[r.freq] : 0;
+  if (!periodo) return v;
+  const p = partes(desde);
+  // Margen de 3 días: la zona de la serie y Santiago difieren en menos de uno.
+  const meta = Date.UTC(p.anio, p.mes - 1, p.dia) - 3 * 86_400_000;
+  const k = Math.floor((meta - relojMs(ini.t)) / (periodo * 1000));
+  if (k <= 1) return v;
+  if (r.count && r.count - k < 1) return v;
+  const copia = clonar(v);
+  const prop = copia.getFirstProperty("dtstart")!;
+  const tzid = prop.getParameter("tzid") as string | undefined;
+  prop.setValue(deRelojMs(relojMs(ini.t) + k * periodo * 1000, ini.t.zone, ini.t.isDate));
+  if (tzid) prop.setParameter("tzid", tzid);
+  for (const x of ["dtend", "duration"]) copia.removeAllProperties(x);
+  if (r.count) {
+    const nr = r.clone();
+    nr.count = r.count - k;
+    copia.getFirstProperty("rrule")!.setValue(nr);
+  }
+  return copia;
+}
+
+interface PorDias {
+  diaria: ICAL.Component;
+  paso: number; // segundos entre ocurrencias
+  ini: ICAL.Time;
+  /** Última ocurrencia posible (UNTIL, o la que da el COUNT). */
+  ultima: ICAL.Time | null;
+}
+
+/**
+ * Regla por horas o minutos: la misma serie como diaria (con los filtros de día), para recorrerla día
+ * por día. null si tiene filtros de hora (BYHOUR…) o es cada más de 12 horas (son pocas por día).
+ */
+function porDias(v: ICAL.Component): PorDias | null {
+  const r = unaRegla(v);
+  const ini = valorDe(v.getFirstProperty("dtstart"));
+  if (!r || !ini || ini.t.isDate || v.getAllProperties("rdate").length || !SEGUNDOS[r.freq]) return null;
+  const paso = Math.max(1, r.interval || 1) * SEGUNDOS[r.freq];
+  if (paso > 12 * 3600) return null;
+  const p = r.parts ?? {};
+  if (["BYHOUR", "BYMINUTE", "BYSECOND", "BYSETPOS", "BYYEARDAY", "BYWEEKNO"].some((k) => k in p)) return null;
+  let ultima: ICAL.Time | null = r.until ?? null;
+  if (r.count) {
+    if (tieneFiltros(r)) return null;
+    ultima = deRelojMs(relojMs(ini.t) + (r.count - 1) * paso * 1000, ini.t.zone);
+  }
+  const diaria = clonar(v);
+  diaria.removeAllProperties("exdate"); // un EXDATE es de una hora: no saca el día entero
+  const nr = r.clone();
+  nr.freq = "DAILY";
+  nr.interval = 1;
+  nr.count = null;
+  nr.until = null;
+  diaria.getFirstProperty("rrule")!.setValue(nr);
+  return { diaria, paso, ini: ini.t, ultima };
+}
+
+interface Expansion {
+  fechas: string[];
+  /** false si se cortó por el tope (regla absurda): las fechas pueden estar incompletas. */
+  completo: boolean;
+}
+
+/** Fechas (en Santiago) en que empieza la serie dentro de la ventana, según el .ics (con sus EXDATE). */
+function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: string): Expansion {
   const r: string[] = [];
+  const limite = performance.now() + TOPE_MS;
   const anioDesde = Number(desde.slice(0, 4)) - 1;
-  // Se corta por fecha; el tope sólo protege de reglas absurdas (cada minuto). Lo de años anteriores a
-  // la ventana se salta sin convertir (una serie diaria desde 2010 son miles de vueltas baratas).
-  for (let i = 0, n: ICAL.Time | null; i < 400_000 && (n = it.next()); i++) {
+  const base = flotante(v);
+  const pd = porDias(base);
+  let completo = true;
+  if (pd) {
+    // Cada día que pasa los filtros: la primera y la última ocurrencia de ese día (en la zona de la serie).
+    // Los EXDATE no se miran: en el panel quedan como excepciones (ver leerRecurso).
+    const it = new ICAL.Event(adelantar(pd.diaria, desde)).iterator();
+    const t0 = relojMs(pd.ini);
+    for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
+      if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) {
+        completo = false;
+        break;
+      }
+      const dia = Date.UTC(n.year, n.month - 1, n.day);
+      const desdeIni = Math.max(dia, t0);
+      const primera = desdeIni + ((pd.paso * 1000 - ((desdeIni - t0) % (pd.paso * 1000))) % (pd.paso * 1000));
+      if (primera >= dia + 86_400_000) continue;
+      const a = deRelojMs(primera, pd.ini.zone);
+      if (pd.ultima && a.compare(pd.ultima) > 0) break;
+      let ultima = primera + Math.floor((dia + 86_400_000 - 1 - primera) / (pd.paso * 1000)) * pd.paso * 1000;
+      let b = deRelojMs(ultima, pd.ini.zone);
+      while (pd.ultima && ultima > primera && b.compare(pd.ultima) > 0) b = deRelojMs((ultima -= pd.paso * 1000), pd.ini.zone);
+      const fa = fechaEnPanel(a, tzid);
+      if (fa > hasta) break;
+      for (const f of [fa, fechaEnPanel(b, tzid)]) if (f >= desde && f <= hasta) r.push(f);
+    }
+    return { fechas: [...new Set(r)].sort(), completo };
+  }
+  const it = new ICAL.Event(adelantar(base, desde)).iterator();
+  for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
+    if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) {
+      completo = false;
+      break;
+    }
     if (n.year < anioDesde) continue;
-    const f = aPanel(n, tzid).fecha;
+    const f = fechaEnPanel(n, tzid);
     if (f > hasta) break;
     if (f >= desde) r.push(f);
   }
-  return [...new Set(r)];
+  return { fechas: [...new Set(r)], completo };
 }
 
 interface Instancia {
@@ -341,32 +538,38 @@ interface Instancia {
 }
 
 /**
- * Inicio exacto (en la zona de la serie) de la ocurrencia que empieza en cada fecha del panel, sin
+ * Inicio exacto (en la zona de la serie) de las ocurrencias que empiezan en cada fecha del panel, sin
  * mirar los EXDATE. Sirve para escribir EXDATE y RECURRENCE-ID que calcen con la serie aunque esté en
- * UTC o en otra zona.
+ * UTC o en otra zona. Casi siempre es una por fecha; en una serie por horas, todas las de ese día.
  */
-function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, Instancia> {
+function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, Instancia[]> {
   const buscadas = new Set(fechas);
-  const r = new Map<string, Instancia>();
+  const r = new Map<string, Instancia[]>();
   if (!buscadas.size) return r;
   const ini = valorDe(v.getFirstProperty("dtstart"));
   if (!ini) return r;
-  const hasta = [...buscadas].sort().pop()!;
-  const anioDesde = Number([...buscadas].sort()[0].slice(0, 4)) - 1;
-  const copia = new ICAL.Component(JSON.parse(JSON.stringify(v.toJSON())));
+  let copia = flotante(v);
+  if (copia === v) copia = clonar(v);
   copia.removeAllProperties("exdate");
   if (!copia.getFirstProperty("rrule") && !copia.getFirstProperty("rdate")) {
-    const f = aPanel(ini.t, ini.tzid).fecha;
-    if (buscadas.has(f)) r.set(f, { t: ini.t.clone(), tzid: ini.tzid });
+    const f = fechaEnPanel(ini.t, ini.tzid);
+    if (buscadas.has(f)) r.set(f, [{ t: ini.t.clone(), tzid: ini.tzid }]);
     return r;
   }
-  const it = new ICAL.Event(copia).iterator();
-  for (let i = 0, n: ICAL.Time | null; i < 400_000 && (n = it.next()); i++) {
-    if (n.year < anioDesde) continue;
-    const f = aPanel(n, ini.tzid).fecha;
-    if (f > hasta) break;
-    if (buscadas.has(f) && !r.has(f)) r.set(f, { t: n.clone(), tzid: ini.tzid });
-    if (r.size === buscadas.size) break;
+  const orden = [...buscadas].sort();
+  // Por horas: se busca cada fecha por separado (de una a otra pueden ser miles de ocurrencias).
+  const tramos = SEGUNDOS[unaRegla(copia)?.freq ?? ""] ? orden.map((f) => [f, f]) : [[orden[0], orden[orden.length - 1]]];
+  const limite = performance.now() + TOPE_MS;
+  for (const [desde, hasta] of tramos) {
+    const anioDesde = Number(desde.slice(0, 4)) - 1;
+    const it = new ICAL.Event(adelantar(copia, desde)).iterator();
+    for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
+      if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) return r;
+      if (n.year < anioDesde) continue;
+      const f = fechaEnPanel(n, ini.tzid);
+      if (f > hasta) break;
+      if (buscadas.has(f)) r.set(f, [...(r.get(f) ?? []), { t: n.clone(), tzid: ini.tzid }]);
+    }
   }
   return r;
 }
@@ -424,7 +627,8 @@ function reglaSimple(v: ICAL.Component, h: Horario & { tzid: string | null }): R
   if (repeticion === "diaria" && (p.BYMONTHDAY || p.BYMONTH || p.BYSETPOS)) return null;
   if (r.until) res.repetirHasta = aPanel(r.until, r.until.zone === ICAL.Timezone.utcTimezone ? null : h.tzid).fecha;
   else if (r.count) {
-    const fechas = expandir(v, h.tzid, h.fecha, "9999-12-31");
+    const { fechas, completo } = expandir(v, h.tzid, h.fecha, "9999-12-31");
+    if (!completo) return null;
     res.repetirHasta = fechas[fechas.length - 1] ?? h.fecha;
   }
   return res;
@@ -454,6 +658,67 @@ export function parsear(ics: string): ICAL.Component {
 }
 
 /**
+ * Id del panel en un UID que escribió el panel ("<id>@calendario-familiar"). Si al crearlo el UID ya
+ * existía en otro calendario de la cuenta se le agregó ".xxxxxx" (6 letras al azar): se saca.
+ * null si el UID no es del panel.
+ */
+export function idPropioDe(uid: string): string | null {
+  if (!uid.endsWith(SUFIJO_UID)) return null;
+  return uid.slice(0, -SUFIJO_UID.length).replace(/\.[a-km-z2-9]{6}$/, "") || null;
+}
+
+type RepeticionLeida = { regla: Omit<Repeticion, "sinComparar"> } | { fechas: string[] };
+
+const memo = new Map<string, RepeticionLeida>();
+function recordado(clave: string, calcular: () => RepeticionLeida): RepeticionLeida {
+  const r = memo.get(clave);
+  if (r) {
+    memo.delete(clave);
+    memo.set(clave, r);
+    return r;
+  }
+  const nuevo = calcular();
+  memo.set(clave, nuevo);
+  if (memo.size > 300) memo.delete(memo.keys().next().value!);
+  return nuevo;
+}
+
+/** Repetición del evento principal: con las opciones del panel si da exactamente los mismos días; si no, fechas sueltas. */
+function repeticionDe(
+  principal: ICAL.Component,
+  h: Horario & { tzid: string | null; inicio: ICAL.Time },
+  ev: Evento,
+  excluidas: string[],
+  fechasCambiadas: string[],
+  canceladas: string[],
+  ventana: { desde: string; hasta: string },
+): RepeticionLeida {
+  // Sólo una serie en hora de Santiago (o de día completo, o flotante) se traduce a las opciones del
+  // panel: en UTC u otra zona la hora local cambia con el horario de verano y los días pueden correrse.
+  const enSantiago = h.inicio.isDate || h.tzid === ZONA || (!h.tzid && h.inicio.zone !== ICAL.Timezone.utcTimezone);
+  const simple = enSantiago ? reglaSimple(principal, h) : null;
+  if (simple) {
+    const { sinComparar, ...regla } = simple;
+    if (sinComparar) return { regla };
+    const candidato = canonico({ ...ev, ...regla, excepciones: excluidas });
+    // Se comprueba que el panel muestre exactamente los mismos días que el iPhone.
+    const desde = h.fecha > ventana.desde ? h.fecha : ventana.desde;
+    const segun = expandir(principal, h.tzid, desde, ventana.hasta);
+    if (segun.completo) {
+      const ical = new Set(segun.fechas);
+      const fuera = new Set([...fechasCambiadas, ...canceladas]);
+      const empieza = probadorDeInicio(candidato);
+      let iguales = true;
+      for (let f = desde; f <= ventana.hasta && iguales; f = sumarDias(f, 1)) {
+        if ((ical.has(f) && !fuera.has(f)) !== empieza(f)) iguales = false;
+      }
+      if (iguales) return { regla };
+    }
+  }
+  return { fechas: expandir(principal, h.tzid, ventana.desde, ventana.hasta).fechas };
+}
+
+/**
  * Un recurso .ics → eventos del panel. `existentes`: los eventos del panel que ya están vinculados
  * a esta serie (se conservan sus id y lo que es sólo del panel). null si no tiene eventos (tareas…).
  */
@@ -470,7 +735,7 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
 
   const previoPrincipal = existentes.find((e) => !e.externo?.recurrencia);
   const previoCambiado = new Map(existentes.filter((e) => e.externo?.recurrencia).map((e) => [e.externo!.recurrencia!, e]));
-  const idPropio = uid.endsWith(SUFIJO_UID) ? uid.slice(0, -SUFIJO_UID.length) : null;
+  const idPropio = idPropioDe(uid);
 
   const base = (v: ICAL.Component, previo: Evento | undefined, id: string, recurrencia?: string): Evento | null => {
     const h = horarioDe(v);
@@ -479,9 +744,11 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
     const resumen = texto(v, "summary") ?? "Sin título";
     // Si el título es el mismo que el panel escribió, se conservan sus personas (la detección por emoji
     // o nombre es sólo para lo que se escribió en el iPhone: "Cumpleaños de Sofía" puede ser de todos).
+    // Un día que se acaba de mover en el iPhone trae el título de la serie: se compara con la serie.
+    const ref = previo ?? (recurrencia ? previoPrincipal : undefined);
     const p =
-      previo && resumen === tituloExterno(previo, ctx.miembros)
-        ? { titulo: previo.titulo, miembros: previo.miembros }
+      ref && resumen === tituloExterno(ref, ctx.miembros)
+        ? { titulo: ref.titulo, miembros: ref.miembros }
         : personasDesde(resumen, nota, ctx.miembros);
     const ev: Evento = {
       id,
@@ -528,33 +795,15 @@ export function leerRecurso(ics: string, ctx: Contexto, existentes: Evento[] = [
     if (ev && h) {
       const excluidas = [...fechasDe(principal, "exdate"), ...fechasCambiadas, ...canceladas];
       if (principal.getFirstProperty("rrule") || principal.getFirstProperty("rdate")) {
-        // Sólo una serie en hora de Santiago (o de día completo, o flotante) se traduce a las opciones del
-        // panel: en UTC u otra zona la hora local cambia con el horario de verano y los días pueden correrse.
-        const enSantiago = h.inicio.isDate || h.tzid === ZONA || (!h.tzid && h.inicio.zone !== ICAL.Timezone.utcTimezone);
-        const simple = enSantiago ? reglaSimple(principal, h) : null;
-        let usada = false;
-        if (simple) {
-          const { sinComparar, ...regla } = simple;
-          const candidato = canonico({ ...ev, ...regla, excepciones: excluidas });
-          // Se comprueba que el panel muestre exactamente los mismos días que el iPhone.
-          const desde = h.fecha > ventana.desde ? h.fecha : ventana.desde;
-          const segun = new Set(expandir(principal, h.tzid, desde, ventana.hasta));
-          let iguales = true;
-          for (let f = desde; !sinComparar && f <= ventana.hasta && iguales; f = sumarDias(f, 1)) {
-            const ical = segun.has(f) && !fechasCambiadas.includes(f) && !canceladas.includes(f);
-            if (ical !== empiezaEn(candidato, f)) iguales = false;
-          }
-          if (iguales) {
-            Object.assign(ev, regla, { excepciones: excluidas });
-            usada = true;
-          }
-        }
-        if (!usada) {
-          ev.fechas = expandir(principal, h.tzid, ventana.desde, ventana.hasta);
-          // Todas las excluidas (también los EXDATE del iPhone) quedan como excepciones, así al
-          // escribir de vuelta no se pierde ninguna.
-          ev.excepciones = excluidas;
-        }
+        // Lo caro (recorrer la serie) no depende de lo que ya hay en el panel: se recuerda por recurso,
+        // así leerlo dos veces en la misma sincronización (y al escribirlo) cuesta una sola vez.
+        const clave = `${ctx.hoy}|${createHash("sha1").update(ics).digest("base64")}`;
+        const rep = recordado(clave, () => repeticionDe(principal, h, ev, excluidas, fechasCambiadas, canceladas, ventana));
+        if ("regla" in rep) Object.assign(ev, rep.regla, rep.regla.diasSemana ? { diasSemana: [...rep.regla.diasSemana] } : {});
+        else ev.fechas = [...rep.fechas];
+        // Todas las excluidas (también los EXDATE del iPhone) quedan como excepciones, así al escribir de
+        // vuelta no se pierde ninguna.
+        ev.excepciones = excluidas;
       }
       eventos.unshift(ev);
     }
@@ -618,7 +867,11 @@ function ponerHorario(v: ICAL.Component, ev: Evento) {
  * estaban se dejan tal cual; los nuevos (o todos, si cambió el inicio de la serie) se escriben con el
  * inicio exacto de esa ocurrencia en la zona de la serie, para que calcen aunque esté en UTC.
  */
-function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>, rehacer: boolean) {
+/**
+ * `antes` (la serie como estaba, sólo en las que el panel no sabe escribir): si un día que estaba
+ * borrado ya no calza con la serie nueva, no se escribe nada (en el iPhone volvería a aparecer).
+ */
+function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>, rehacer: boolean, antes?: ICAL.Component) {
   const faltan = new Set((ev.excepciones ?? []).filter((f) => !cambiadas.has(f)));
   const previas: Instancia[] = [];
   for (const p of v.getAllProperties("exdate")) {
@@ -627,14 +880,125 @@ function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>,
   }
   v.removeAllProperties("exdate");
   if (!rehacer) {
+    const puestas = new Set<string>();
     for (const i of previas) {
       const f = aPanel(i.t, i.tzid).fecha;
       if (!faltan.has(f)) continue;
       v.addProperty(propInstancia("exdate", i));
-      faltan.delete(f);
+      puestas.add(f);
     }
+    for (const f of puestas) faltan.delete(f);
   }
-  for (const i of instancias(v, faltan).values()) v.addProperty(propInstancia("exdate", i));
+  const nuevas = instancias(v, faltan);
+  for (const lista of nuevas.values()) for (const i of lista) v.addProperty(propInstancia("exdate", i));
+  if (antes && [...instancias(antes, faltan).keys()].some((f) => !nuevas.has(f))) {
+    throw new NoSePuedeEscribir(`"${ev.titulo}": con ese cambio volverían a aparecer en el iPhone los días que se borraron de la repetición. Cámbialo en el iPhone.`);
+  }
+}
+
+/** Un cambio que el panel no puede escribir sin cambiar algo más de lo que se ve en el iPhone. El mensaje es para el aviso. */
+export class NoSePuedeEscribir extends Error {
+  constructor(mensaje: string) {
+    super(mensaje);
+    this.name = "NoSePuedeEscribir";
+  }
+}
+
+type ZonaSerie = { utc: true } | { tzid: string; tz?: ICAL.Timezone };
+
+/** Zona en que está escrita una serie, si no es Santiago (ni de día completo, ni flotante). */
+function zonaDe(ini: { t: ICAL.Time; tzid: string | null }): ZonaSerie | null {
+  if (ini.t.isDate) return null;
+  if (ini.t.zone === ICAL.Timezone.utcTimezone) return { utc: true };
+  if (!ini.tzid || ini.tzid === ZONA) return null;
+  if (zonaIANA(ini.tzid)) return { tzid: ini.tzid };
+  if (ini.t.zone && ini.t.zone !== ICAL.Timezone.localTimezone) return { tzid: ini.tzid, tz: ini.t.zone };
+  return null; // zona desconocida: se lee como hora de Santiago (ver aPanel)
+}
+
+/** Hora de reloj de un instante en esa zona. */
+function relojEn(z: ZonaSerie, instante: number): ICAL.Time {
+  if ("utc" in z) return ICAL.Time.fromJSDate(new Date(instante), true);
+  if (z.tz) {
+    const t = ICAL.Time.fromJSDate(new Date(instante), true).convertToZone(z.tz);
+    return ICAL.Time.fromData({ year: t.year, month: t.month, day: t.day, hour: t.hour, minute: t.minute, second: t.second, isDate: false }, z.tz);
+  }
+  const p = enZona(z.tzid, instante);
+  const tz = ICAL.TimezoneService.get(z.tzid) ?? undefined;
+  return ICAL.Time.fromData({ year: p.y, month: p.m, day: p.d, hour: p.h, minute: p.mi, second: p.s, isDate: false }, tz);
+}
+
+function propEn(nombre: string, z: ZonaSerie, t: ICAL.Time): ICAL.Property {
+  const p = new ICAL.Property(nombre);
+  p.setValue(t);
+  if (!("utc" in z)) p.setParameter("tzid", z.tzid);
+  return p;
+}
+
+const instanteSantiago = (fecha: string, hora: string) => {
+  const p = partes(fecha);
+  const [h, mi] = hora.split(":").map(Number);
+  return instanteLocal(ZONA, p.anio, p.mes, p.dia, h, mi);
+};
+
+/**
+ * Horario nuevo de una serie que el panel no sabe escribir (fechas sueltas): se cambian DTSTART y DTEND
+ * y la regla queda como está. Si la serie está en UTC u otra zona, se escribe en esa zona: su regla
+ * (BYDAY…) se cuenta en esa zona. Si con la hora nueva el día de inicio en esa zona se corre, se corren
+ * también los días de la semana de la regla; si la regla no es de ese tipo, no se escribe nada.
+ */
+function moverSerieDeAfuera(v: ICAL.Component, ev: Evento) {
+  const ini = valorDe(v.getFirstProperty("dtstart"));
+  const z = ini ? zonaDe(ini) : null;
+  if (!ini || !z || ev.todoElDia) ponerHorario(v, ev);
+  else {
+    const hi = ev.horaInicio ?? "09:00";
+    const ultimo = ev.fechaFin ?? ev.fecha;
+    const fin =
+      ev.horaFin === "23:59" || (ev.fechaFin && !ev.horaFin) ? instanteSantiago(sumarDias(ultimo, 1), "00:00") : instanteSantiago(ultimo, ev.horaFin ?? hi);
+    for (const k of ["dtstart", "dtend", "duration"]) v.removeAllProperties(k);
+    v.addProperty(propEn("dtstart", z, relojEn(z, instanteSantiago(ev.fecha, hi))));
+    v.addProperty(propEn("dtend", z, relojEn(z, fin)));
+  }
+  if (!ini) return;
+  const nuevo = valorDe(v.getFirstProperty("dtstart"))!.t;
+  const delta = diferenciaDias(fechaDe(ini.t.year, ini.t.month, ini.t.day), fechaDe(nuevo.year, nuevo.month, nuevo.day));
+  const horaDelDia = (t: ICAL.Time) => ((relojMs(t) % 86_400_000) + 86_400_000) % 86_400_000;
+  const cambioHora = ini.t.isDate !== nuevo.isDate || (!nuevo.isDate && horaDelDia(ini.t) !== horaDelDia(nuevo));
+  const no = (porque: string) => {
+    throw new NoSePuedeEscribir(`"${ev.titulo}": ${porque} Cámbialo en el iPhone.`);
+  };
+  if (delta && v.getAllProperties("rdate").length) no("con esa hora la repetición se correría de día.");
+  for (const prop of v.getAllProperties("rrule")) {
+    const r = (prop.getFirstValue() as ICAL.Recur).clone();
+    const p = (r.parts ?? {}) as Record<string, (string | number)[]>;
+    if (cambioHora && ("BYHOUR" in p || "BYMINUTE" in p || "BYSECOND" in p)) no("su repetición tiene horas fijas.");
+    if (delta) {
+      const dias = (p.BYDAY ?? []).map(String);
+      const porDiasDeSemana = r.freq === "DAILY" || r.freq === "WEEKLY" || !!SEGUNDOS[r.freq];
+      if (!porDiasDeSemana || Object.keys(p).some((k) => k !== "BYDAY") || dias.some((d) => !DIAS_ICAL.includes(d))) {
+        no("con esa hora la repetición se correría de día.");
+      }
+      const mover = (d: string) => DIAS_ICAL[(((DIAS_ICAL.indexOf(d) + delta) % 7) + 7) % 7];
+      if (dias.length) r.parts.BYDAY = dias.map(mover);
+      // Cada 2 semanas o más: la semana también empieza un día corrido, para que no cambie cuáles tocan.
+      if (r.freq === "WEEKLY" && r.interval > 1) {
+        r.wkst = ICAL.Recur.icalDayToNumericDay(mover(ICAL.Recur.numericDayToIcalDay(r.wkst || ICAL.Time.MONDAY))) as typeof r.wkst;
+      }
+      if (r.until) {
+        const u = r.until.clone();
+        u.adjust(delta, 0, 0, 0);
+        r.until = u;
+      }
+    }
+    // UNTIL tiene que ser del mismo tipo que DTSTART (RFC 5545 §3.3.10).
+    if (r.until && r.until.isDate !== nuevo.isDate) {
+      r.until = nuevo.isDate
+        ? horaReloj(aPanel(r.until, null).fecha, "00:00", true)
+        : ICAL.Time.fromJSDate(new Date(instanteLocal(ZONA, r.until.year, r.until.month, r.until.day, 23, 59, 59)), true);
+    }
+    prop.setValue(r);
+  }
 }
 
 function tocar(v: ICAL.Component, nuevo: boolean) {
@@ -678,6 +1042,8 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
     if (rid) cambiadasAntes.add(aPanel(rid.t, rid.tzid).fecha);
   }
   const usados = new Set<ICAL.Component>();
+  /** La serie como estaba (sólo si el panel no sabe escribir su repetición): para no perder días borrados. */
+  let serieAntes: ICAL.Component | undefined;
   // Los días cancelados en el iPhone (RECURRENCE-ID con STATUS:CANCELLED) quedan tal cual.
   for (const v of vevents) {
     const rid = valorDe(v.getFirstProperty("recurrence-id"));
@@ -713,8 +1079,12 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
     }
     const horario = (e: Evento) => [e.fecha, e.fechaFin, e.todoElDia, e.horaInicio, e.horaFin];
     const cambioHorario = !antes || !mismo(horario(ev), horario(antes));
+    // Repetición que el panel no sabe escribir: su regla se conserva tal cual (ver moverSerieDeAfuera).
+    const deAfuera = !rec && !!ev.fechas && !!antes;
+    if (deAfuera) serieAntes = clonar(v);
     if (cambioHorario) {
-      ponerHorario(v, ev);
+      if (deAfuera) moverSerieDeAfuera(v, ev);
+      else ponerHorario(v, ev);
       cambio = true;
     }
     if (!rec) {
@@ -727,12 +1097,12 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
         cambio = true;
       }
       if (!antes || cambioHorario || !mismo(ev.excepciones, antes.excepciones) || !mismo([...fechasCambiadas].sort(), [...cambiadasAntes].sort())) {
-        ponerExcepciones(v, ev, fechasCambiadas, !antes || cambioHorario);
+        ponerExcepciones(v, ev, fechasCambiadas, !antes || cambioHorario, deAfuera && cambioHorario ? serieAntes : undefined);
         cambio = true;
       }
     } else if (nuevo) {
       const vp = vDe();
-      const i = vp ? instancias(vp, [rec]).get(rec) : undefined;
+      const i = vp ? instancias(vp, [rec]).get(rec)?.[0] : undefined;
       v.addProperty(i ? propInstancia("recurrence-id", i) : propFecha("recurrence-id", rec, principal?.todoElDia || !principal ? undefined : (principal.horaInicio ?? "09:00")));
     }
     if (cambio) tocar(v, nuevo);
@@ -751,9 +1121,16 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
       return aPanel(rid.t, rid.tzid).fecha;
     };
     const nuevas = instancias(vPrincipal, otros.map(diaDe));
+    const viejas = serieAntes ? instancias(serieAntes, otros.map(diaDe)) : null;
     for (const v of otros) {
-      const i = nuevas.get(diaDe(v));
-      if (!i) continue;
+      const i = nuevas.get(diaDe(v))?.[0];
+      if (!i) {
+        // Era un día de la serie y con el cambio ya no lo es: quedaría suelto en el iPhone.
+        if (viejas?.has(diaDe(v))) {
+          throw new NoSePuedeEscribir(`"${principal!.titulo}": con ese cambio, los días que se cambiaron sólo una vez quedarían sueltos en el iPhone. Cámbialo en el iPhone.`);
+        }
+        continue;
+      }
       v.removeAllProperties("recurrence-id");
       v.addProperty(propInstancia("recurrence-id", i));
       tocar(v, false);

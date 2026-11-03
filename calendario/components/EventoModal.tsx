@@ -5,7 +5,7 @@ import { useDatos } from "@/lib/store";
 import { useCandado } from "@/lib/candado";
 import type { Evento, Repeticion } from "@/lib/datos/tipos";
 import { nuevoId } from "@/lib/ejemplo";
-import { DIAS_CORTOS, NOMBRE_REPETICION, canonico, diasDeLaSemana, duracionDias, seRepite, textoRepeticion, unidadRepeticion } from "@/lib/eventos";
+import { DIAS_CORTOS, NOMBRE_REPETICION, aplicarCambios, canonico, diasDeLaSemana, duracionDias, seRepite, seSolapa, textoRepeticion, unidadRepeticion } from "@/lib/eventos";
 import { diaSemana, diferenciaDias, fechaLarga, horaAMinutos, partes, sumarDias } from "@/lib/fechas";
 import { AreaTexto, Boton, Campo, Casilla, ChipMiembro, Contador, Entrada, Modal, Segmentos, SelectorHora, cx } from "./ui";
 
@@ -54,10 +54,15 @@ export default function EventoModal({
   const repeticionDeAfuera = !!f.fechas;
   /** Un día de una serie de iCloud que se cambió sólo ese día: no tiene repetición propia. */
   const diaDeSerie = !!f.externo?.recurrencia;
-  /** Si dura más de lo que tarda en repetirse, las ocurrencias se pisan (y "borrar sólo este día" no se notaría). */
-  const periodo = { nunca: Infinity, diaria: 1, semanal: 7, mensual: 28, anual: 365 }[f.repeticion] * (f.intervalo ?? 1);
-  const seSolapa = !repeticionDeAfuera && variosDias && !finDiaAntes && duracionDias(f) > periodo;
-  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes && !finDiaAntes && !seSolapa;
+  /**
+   * Si dura más de lo que tarda en repetirse, las ocurrencias se pisan (y "borrar sólo este día" no se
+   * notaría). Sólo se avisa si se cambió el horario o la repetición: una serie que ya viene así del
+   * iPhone se puede seguir editando (título, personas, nota…).
+   */
+  const forma = (e: Evento) => JSON.stringify([duracionDias(e), e.todoElDia, e.horaInicio, e.horaFin, e.repeticion, e.intervalo ?? 1, diasDeLaSemana(e)]);
+  const tocoForma = !evento || forma(f) !== forma(evento);
+  const pisa = !repeticionDeAfuera && !finDiaAntes && tocoForma && seSolapa(f);
+  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes && !finDiaAntes && !pisa;
 
   /** Al mover la hora de inicio, el término se mueve con ella (se mantiene la duración) si es de un día. */
   const cambiarInicio = (v: string | undefined) =>
@@ -105,25 +110,25 @@ export default function EventoModal({
 
   const guardar = async () => {
     if (!valido) return;
-    const limpio: Evento = canonico({
-      ...f,
-      titulo: f.titulo.trim(),
-      horaInicio: f.todoElDia ? undefined : (f.horaInicio ?? HORA_DEFECTO),
-      horaFin: f.todoElDia ? undefined : f.horaFin || undefined,
-      repetirHasta: f.repeticion === "nunca" ? undefined : f.repetirHasta || undefined,
-      nota: f.nota?.trim() || undefined,
-      lugar: f.lugar?.trim() || undefined,
-      actualizado: new Date().toISOString(),
-    });
-    // El vínculo con iCloud lo maneja el servidor: se toma del evento como está ahora en la lista (el
-    // formulario pudo abrirse antes de que se vinculara). "Sólo en el panel", si no se tocó, también.
-    const tocoSoloPanel = !!f.soloPanel !== !!evento?.soloPanel;
+    const limpiar = (x: Evento): Evento =>
+      canonico({
+        ...x,
+        titulo: x.titulo.trim(),
+        horaInicio: x.todoElDia ? undefined : (x.horaInicio ?? HORA_DEFECTO),
+        horaFin: x.todoElDia ? undefined : x.horaFin || undefined,
+        repetirHasta: x.repeticion === "nunca" ? undefined : x.repetirHasta || undefined,
+        nota: x.nota?.trim() || undefined,
+        lugar: x.lugar?.trim() || undefined,
+      });
+    const limpio = limpiar(f);
+    const ahora = new Date().toISOString();
+    // El formulario es una copia de cuando se abrió: mientras tanto la sincronización pudo traer cambios
+    // del iPhone (un día borrado, otra hora) o vincularlo con iCloud. Por eso se aplica sólo lo que se
+    // cambió aquí sobre el evento como está ahora en la lista.
     const ok = await actualizar("eventos", (lista) => {
       const actual = lista.find((e) => e.id === limpio.id);
-      if (!actual) return [...lista, limpio];
-      const final: Evento = { ...limpio, externo: actual.externo, soloPanel: tocoSoloPanel ? limpio.soloPanel : actual.soloPanel };
-      if (!final.externo) delete final.externo;
-      if (!final.soloPanel) delete final.soloPanel;
+      if (!actual) return [...lista, { ...limpio, actualizado: ahora }];
+      const final: Evento = { ...(evento ? aplicarCambios(limpiar(evento), limpio, actual) : limpio), actualizado: ahora };
       return lista.map((e) => (e.id === limpio.id ? final : e));
     });
     if (ok) alCerrar();
@@ -403,7 +408,7 @@ export default function EventoModal({
           </Campo>
         )}
 
-        {seSolapa && (
+        {pisa && (
           <p className="-mt-2 text-base font-bold text-red-700 noche:text-red-300">
             Dura {duracionDias(f)} días pero se repite antes de terminar: acorta el “Último día” o repítelo menos seguido.
           </p>
