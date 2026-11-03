@@ -115,14 +115,18 @@ export function SeccionICloud() {
       resultados: { ok: boolean; ocupado?: boolean; error?: { mensaje: string; codigo?: string }; respuesta?: "aplicada" | "anotada" | "vieja" | "sinAviso" }[];
     }>("/api/calendario/sincronizar", resolver ? { resolver, codigo: error?.codigo, uids: error?.uids } : {});
     const res = r?.status === 200 ? r.datos.resultados[0] : undefined;
-    if (res?.ocupado)
+    if (resolver && res?.respuesta === "anotada")
+      setMsg(
+        res.ocupado
+          ? "Respuesta anotada: se estaba sincronizando, así que se aplica sola en la próxima sincronización (unos minutos)."
+          : "Respuesta anotada: iCloud está lento, así que se aplica sola en la próxima sincronización (unos minutos).",
+      );
+    else if (res?.ocupado)
       setMsg(
         resolver
           ? "Se estaba sincronizando y la respuesta no alcanzó a pasar: vuelve a tocar el botón en unos segundos."
           : "Ya se estaba sincronizando: en un momento queda al día.",
       );
-    else if (resolver && res?.respuesta === "anotada")
-      setMsg("Respuesta anotada: iCloud está lento, así que se aplica sola en la próxima sincronización (unos minutos).");
     else if (resolver && res?.respuesta === "vieja" && res.error?.codigo?.startsWith("MUCHOS_BORRADOS_"))
       setMsg("Mientras tanto se borraron otros eventos, así que no se borró nada todavía: revisa el aviso de nuevo.");
     else if (resolver && res?.respuesta === "sinAviso") setMsg("Ese aviso ya se había resuelto (desde otro equipo, por ejemplo).");

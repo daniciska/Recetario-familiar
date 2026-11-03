@@ -120,6 +120,14 @@ export const usuarioOculto = (u: string) =>
   u.includes("@") ? u.replace(/^(.{1,2}).*(@.*)$/, "$1…$2") : u.length > 4 ? `${u.slice(0, 2)}…${u.slice(-2)}` : "…";
 
 const claveEstado = (familiaId: string, conexionId: string) => `externos/estado/${familiaId}/${conexionId}`;
+/** Una respuesta a un aviso que llegó mientras otra sincronización tenía el candado (la toma la siguiente). */
+const claveEnEspera = (familiaId: string, conexionId: string) => `externos/respuesta/${familiaId}/${conexionId}`;
+interface EnEspera {
+  resolver: Resolver;
+  codigo?: string;
+  uids?: string[];
+  hasta: string;
+}
 /** Qué familia usa la cuenta de iCloud del sitio (sólo puede ser una). */
 export const CLAVE_DUENO_ICLOUD = "externos/icloud";
 
@@ -133,6 +141,7 @@ export async function guardarEstado(familiaId: string, conexionId: string, e: Es
 
 export async function borrarEstado(familiaId: string, conexionId: string) {
   await almacen().delete(claveEstado(familiaId, conexionId));
+  await almacen().delete(claveEnEspera(familiaId, conexionId));
 }
 
 /**
@@ -263,14 +272,24 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
     }
     return respuesta ? { ...resultado, respuesta } : resultado;
   }, esperar);
-  return r === "ocupado" ? { ok: !op.resolver, ocupado: true } : r;
+  if (r !== "ocupado") return r;
+  if (!op.resolver) return { ok: true, ocupado: true };
+  // La que está corriendo no alcanzó a terminar: la respuesta queda en espera (fuera del estado, que es
+  // de la que tiene el candado) y la toma la próxima vuelta.
+  const enEspera: EnEspera = { resolver: op.resolver, codigo: op.codigo, uids: op.uids, hasta: new Date(Date.now() + 30 * 60_000).toISOString() };
+  await almacen().setJSON(claveEnEspera(familiaId, conexion.id), enEspera);
+  return { ok: true, ocupado: true, respuesta: "anotada" };
 }
 
 const MARGEN_BLOBS = 1500; // lo que se reserva al final para guardar en Blobs
 
 async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): Promise<Resultado> {
   const ahora = new Date().toISOString();
-  const estado: EstadoSync = (await leerEstado(familiaId, conexion.id)) ?? { recursos: {} };
+  const [leido, enEspera] = await Promise.all([
+    leerEstado(familiaId, conexion.id),
+    op.resolver ? null : (almacen().get(claveEnEspera(familiaId, conexion.id), { type: "json" }) as Promise<EnEspera | null>),
+  ]);
+  const estado: EstadoSync = leido ?? { recursos: {} };
   estado.intento = ahora;
   if (estado.decision && estado.decision.hasta < ahora) delete estado.decision;
   if (estado.respuesta && estado.respuesta.hasta < ahora) delete estado.respuesta;
@@ -278,11 +297,17 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
   // su lista. Queda anotada en el estado: si esta vuelta no alcanza a listar el calendario, la aplica la
   // próxima que sí alcance (la programada, por ejemplo).
   let respuesta: Resultado["respuesta"];
-  if (op.resolver && estado.error?.codigo?.startsWith("MUCHOS_BORRADOS_") && (!op.codigo || op.codigo === estado.error.codigo)) {
+  const pedida = op.resolver ? { ...op, resolver: op.resolver } : enEspera && enEspera.hasta > ahora ? enEspera : null;
+  if (pedida && estado.error?.codigo?.startsWith("MUCHOS_BORRADOS_") && (!pedida.codigo || pedida.codigo === estado.error.codigo)) {
     const hasta = new Date(Date.now() + 30 * 60_000).toISOString();
-    estado.respuesta = { resolver: op.resolver, codigo: estado.error.codigo, uids: op.uids ?? estado.error.uids, hasta };
+    estado.respuesta = { resolver: pedida.resolver, codigo: estado.error.codigo, uids: pedida.uids ?? estado.error.uids, hasta };
     respuesta = "anotada";
   } else if (op.resolver) respuesta = "sinAviso";
+  if (enEspera) {
+    // Primero queda en el estado y recién después se borra la espera (si la función se corta, no se pierde).
+    if (estado.respuesta) await guardarEstado(familiaId, conexion.id, estado);
+    await almacen().delete(claveEnEspera(familiaId, conexion.id));
+  }
   const fallar = async (mensaje: string, codigo?: string, cuantos?: number, uids?: string[]): Promise<Resultado> => {
     estado.error = { mensaje, codigo, cuando: ahora, cuantos, ...(uids ? { uids } : {}) };
     await guardarEstado(familiaId, conexion.id, estado);
