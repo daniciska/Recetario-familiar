@@ -106,11 +106,18 @@ export function SeccionICloud() {
   };
 
   const sincronizar = async (resolver?: "borrar" | "recuperar") => {
+    // Con la respuesta va el aviso que se estaba viendo: si mientras tanto cambió, no se aplica a ciegas.
+    const codigo = info?.conexiones[0]?.estado?.error?.codigo;
     const r = await pedir<{ resultados: { ok: boolean; ocupado?: boolean; error?: { mensaje: string } }[] }>(
       "/api/calendario/sincronizar",
-      resolver ? { resolver } : {},
+      resolver ? { resolver, codigo } : {},
     );
-    if (r?.status === 200 && r.datos.resultados[0]?.ocupado) setMsg("Ya se estaba sincronizando: en un momento queda al día.");
+    if (r?.status === 200 && r.datos.resultados[0]?.ocupado)
+      setMsg(
+        resolver
+          ? "Se estaba sincronizando y la respuesta no alcanzó a pasar: vuelve a tocar el botón en unos segundos."
+          : "Ya se estaba sincronizando: en un momento queda al día.",
+      );
     await cargar();
     nube?.revisar();
   };
@@ -206,13 +213,15 @@ export function SeccionICloud() {
           sinVincular={sinVincular}
           alCerrar={() => setEligiendo(null)}
           alConectar={async (url, subirExistentes) => {
-            const r = await pedir<{ resultado?: { ok: boolean; error?: { mensaje: string } } }>("/api/calendario/conectar", {
-              url,
-              subirExistentes,
-            });
+            const r = await pedir<{ resultado?: { ok: boolean; pendiente?: boolean; error?: { mensaje: string } } }>(
+              "/api/calendario/conectar",
+              { url, subirExistentes },
+            );
             setEligiendo(null);
             if (r && r.status !== 200) setMsg(r.datos.error ?? "No se pudo conectar el calendario.");
             else if (r?.datos.resultado && !r.datos.resultado.ok) setMsg(r.datos.resultado.error?.mensaje ?? "La primera sincronización falló.");
+            // iCloud lento: la conexión quedó, pero la primera sincronización no alcanzó; se sigue de inmediato.
+            else if (r?.datos.resultado?.pendiente) return void (await sincronizar());
             await cargar();
             nube?.revisar();
           }}

@@ -98,7 +98,10 @@ export class CalDAV {
       const espera = Math.min(this.espera, this.queda() - 300);
       if (espera <= 0) throw new ErrorCalDAV("Se acabó el tiempo para hablar con iCloud", 0, "TIEMPO");
       const ctrl = new AbortController();
+      // El plazo sigue corriendo mientras se lee el cuerpo (r.text()): no se apaga al llegar las cabeceras.
       const t = setTimeout(() => ctrl.abort(), espera);
+      (t as { unref?: () => void }).unref?.();
+      const porPlazo = espera < this.espera;
       let r: Response;
       try {
         r = await fetch(actual, {
@@ -117,22 +120,22 @@ export class CalDAV {
           body: cuerpo,
         });
       } catch (e) {
-        throw new ErrorCalDAV(
-          (e as Error).name === "AbortError" ? "iCloud no respondió a tiempo" : "No se pudo conectar con iCloud",
-          0,
-          "RED",
-        );
-      } finally {
         clearTimeout(t);
+        const abortado = (e as Error).name === "AbortError";
+        // Cortado porque se acababa el plazo total (no porque iCloud esté caído): queda para la próxima vuelta.
+        if (abortado && porPlazo) throw new ErrorCalDAV("Se acabó el tiempo para hablar con iCloud", 0, "TIEMPO");
+        throw new ErrorCalDAV(abortado ? "iCloud no respondió a tiempo" : "No se pudo conectar con iCloud", 0, "RED");
       }
       // Las redirecciones se siguen a mano (fetch borra la autorización al cambiar de servidor), pero
       // sólo dentro del mismo dominio: la clave nunca se manda a otro sitio.
       if ([301, 302, 307, 308].includes(r.status) && r.headers.get("location")) {
+        clearTimeout(t);
         const destino = new URL(r.headers.get("location")!, actual);
         if (!mismoSitio(destino, new URL(this.base))) throw new ErrorCalDAV("iCloud redirigió a otro sitio", r.status);
         actual = destino.toString();
         continue;
       }
+      if (r.status === 401 || r.status === 429 || r.status >= 500) clearTimeout(t);
       if (r.status === 401) throw new ErrorCalDAV("iCloud no aceptó el usuario o la contraseña de app", 401, "CLAVE");
       if (r.status === 429 || r.status >= 500) throw new ErrorCalDAV(`iCloud respondió ${r.status}: inténtalo en unos minutos`, r.status, "SERVIDOR");
       return r;
@@ -145,7 +148,13 @@ export class CalDAV {
     if (r.status === 404) throw new ErrorCalDAV("No se encontró el calendario en iCloud", 404, "NO_ENCONTRADO");
     if (r.status === 403) throw new ErrorCalDAV("iCloud no dio permiso para leer el calendario", 403, "PERMISO");
     if (r.status !== 207) throw new ErrorCalDAV(`Respuesta inesperada de iCloud (${r.status})`, r.status);
-    const xml = parser.parse(await r.text()) as Nodo;
+    const texto = await r.text().catch(() => {
+      // El cuerpo no terminó de llegar antes del plazo (se abortó el pedido).
+      throw this.queda() < 400
+        ? new ErrorCalDAV("Se acabó el tiempo para hablar con iCloud", 0, "TIEMPO")
+        : new ErrorCalDAV("iCloud no respondió a tiempo", 0, "RED");
+    });
+    const xml = parser.parse(texto) as Nodo;
     const ms = (xml.multistatus ?? {}) as Nodo;
     return comoArreglo(ms.response as Nodo[]).map((resp) => {
       const href = ruta(textoDe(comoArreglo(resp.href as unknown[])[0]), url);
@@ -272,7 +281,14 @@ export class CalDAV {
       const cuerpo = `${XML}<c:calendar-multiget ${NS}><d:prop><d:getetag/><c:calendar-data/></d:prop>${grupo
         .map((h) => `<d:href>${escaparXML(ruta(h, url))}</d:href>`)
         .join("")}</c:calendar-multiget>`;
-      const resp = await this.multistatus("REPORT", url, cuerpo, "1");
+      let resp: Respuesta[];
+      try {
+        resp = await this.multistatus("REPORT", url, cuerpo, "1");
+      } catch (e) {
+        // Se acabó el plazo en esta tanda: lo ya leído sirve.
+        if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") return { leidos: r, completo: false };
+        throw e;
+      }
       for (const x of resp) {
         const ics = textoDe(x.props["calendar-data"]);
         const etag = textoDe(x.props.getetag);

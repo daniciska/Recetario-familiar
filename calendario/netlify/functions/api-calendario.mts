@@ -119,7 +119,7 @@ export default async (req: Request, context: Context) => {
     let elegido;
     try {
       // Sólo se acepta un calendario de la propia cuenta (nunca una dirección cualquiera).
-      elegido = (await new CalDAV(cred.usuario, cred.clave, cred.base, 4000, limite - 3000).calendarios()).find((c) => c.url === url);
+      elegido = (await new CalDAV(cred.usuario, cred.clave, cred.base, 4000, limite).calendarios()).find((c) => c.url === url);
     } catch (e) {
       return errorCalDAV(e);
     }
@@ -138,9 +138,20 @@ export default async (req: Request, context: Context) => {
       color: elegido.color,
       creada: new Date().toISOString(),
     };
+    // Si no se quieren subir los eventos que ya están, quedan "sólo en el panel". La elección viaja en el
+    // estado de la conexión (anotado antes que la conexión misma) y la aplica la primera sincronización,
+    // con el candado: ninguna otra alcanza a subirlos antes, y si algo falla al guardar se reintenta.
+    let soloPanelInicial: string[] | undefined;
+    if (body.subirExistentes === false) {
+      const vivas = new Set(conexiones.map((c) => c.id));
+      const col = await leerColeccion(s.familiaId, "eventos");
+      soloPanelInicial = ((Array.isArray(col?.datos) ? col!.datos : []) as Evento[])
+        .filter((e) => e && typeof e.id === "string" && !e.soloPanel && !(e.externo && vivas.has(e.externo.conexion)))
+        .map((e) => e.id);
+    }
     // Primero se anota la conexión, revisando dentro de la escritura condicional que no haya otra: dos
     // "conectar" a la vez (dos equipos, un doble toque) no pueden crear dos.
-    await guardarEstado(s.familiaId, conexion.id, { recursos: {} });
+    await guardarEstado(s.familiaId, conexion.id, { recursos: {}, ...(soloPanelInicial?.length ? { soloPanelInicial } : {}) });
     try {
       await cambiarAcceso(s.familiaId, (a) => {
         if (!a) throw new Error("Familia sin acceso");
@@ -152,19 +163,19 @@ export default async (req: Request, context: Context) => {
       if ((e as Error).message === "YA_CONECTADO") return error("Ya hay un calendario de iCloud conectado", 409);
       throw e;
     }
-    // Si no se quieren subir los eventos que ya están, quedan "sólo en el panel".
-    if (body.subirExistentes === false) {
-      await cambiarEventos(s.familiaId, (l) => l.map((e) => (e.externo || e.soloPanel ? e : { ...e, soloPanel: true })));
-    }
-    const resultado = await sincronizar(s.familiaId, conexion, { limite });
+    // La primera sincronización, si queda tiempo (iCloud lento): si no, queda pendiente y el equipo la
+    // pide enseguida (con su propio plazo), o la hace la programada.
+    const resultado =
+      limite - Date.now() > 4500 ? await sincronizar(s.familiaId, conexion, { limite }) : { ok: true, pendiente: true };
     return json({ conexion: { id: conexion.id, nombre: conexion.nombre }, resultado });
   }
 
   if (accion === "sincronizar") {
     if (!conexiones.length) return json({ resultados: [] });
     const resolver = body.resolver === "borrar" || body.resolver === "recuperar" ? (body.resolver as Resolver) : undefined;
+    const codigo = typeof body.codigo === "string" ? body.codigo : undefined;
     const resultados = [];
-    for (const c of conexiones) resultados.push({ id: c.id, ...(await sincronizar(s.familiaId, c, { limite, resolver })) });
+    for (const c of conexiones) resultados.push({ id: c.id, ...(await sincronizar(s.familiaId, c, { limite, resolver, codigo })) });
     return json({ resultados });
   }
 

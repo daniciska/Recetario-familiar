@@ -52,8 +52,16 @@ export interface EstadoSync {
   error?: { mensaje: string; codigo?: string; cuando: string; cuantos?: number } | null;
   resumen?: Resumen;
   avisos?: string[];
-  /** La familia aceptó borrar muchos de una vez (vale un rato, mientras se terminan de borrar). */
-  decision?: { codigo: string; hasta: string };
+  /**
+   * La familia aceptó borrar muchos de una vez: vale sólo para esos (`uids`) y un rato, mientras se
+   * terminan de borrar. Otro borrado masivo vuelve a preguntar.
+   */
+  decision?: { codigo: string; hasta: string; uids?: string[] };
+  /**
+   * Al conectar se eligió no subir los eventos que ya estaban: sus ids. La primera vuelta (con el
+   * candado) los deja "sólo en el panel"; se borra cuando quedó guardado.
+   */
+  soloPanelInicial?: string[];
 }
 
 export interface Resumen {
@@ -197,6 +205,8 @@ function miembrosDe(datos: unknown): Miembro[] {
   );
 }
 
+// TEMPORAL: pasa a ics.ts
+const idPropioDe = (uid: string) => (uid.endsWith(SUFIJO_UID) ? uid.slice(0, -SUFIJO_UID.length).replace(/\.[a-km-z2-9]{6}$/, "") : null);
 const nombreRecurso = (href: string) => decodeURIComponent(href.split("/").filter(Boolean).pop() ?? "");
 const nombreSeguro = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 120);
 
@@ -206,9 +216,14 @@ interface Opciones {
   /** Hasta cuándo (Date.now()) se puede trabajar; lo que no alcance queda para la próxima vuelta. */
   limite: number;
   resolver?: Resolver;
+  /** El aviso que se estaba mostrando cuando se respondió (si ya cambió, la respuesta no vale). */
+  codigo?: string;
 }
 
 export async function sincronizar(familiaId: string, conexion: Conexion, op: Opciones): Promise<Resultado> {
+  // Con una respuesta de la familia (borrar / traer de vuelta) se espera a que termine la que esté
+  // corriendo: si no, la respuesta se perdería.
+  const esperar = op.resolver ? Math.max(0, op.limite - Date.now() - 3500) : 0;
   const r = await conCandado(familiaId, conexion.id, async () => {
     let resultado: Resultado = { ok: true };
     // Si quedó trabajo o mientras tanto cambió algo en el panel, se da otra vuelta (hasta 3, si alcanza el tiempo).
@@ -220,8 +235,8 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
       if (!estado || (!estado.pendiente && estado.versionEventos === (col?.version ?? 0))) break;
     }
     return resultado;
-  });
-  return r === "ocupado" ? { ok: true, ocupado: true } : r;
+  }, esperar);
+  return r === "ocupado" ? { ok: !op.resolver, ocupado: true } : r;
 }
 
 const MARGEN_BLOBS = 1500; // lo que se reserva al final para guardar en Blobs
@@ -231,8 +246,11 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
   const estado: EstadoSync = (await leerEstado(familiaId, conexion.id)) ?? { recursos: {} };
   estado.intento = ahora;
   if (estado.decision && estado.decision.hasta < ahora) delete estado.decision;
-  if (op.resolver === "borrar" && estado.error?.codigo)
-    estado.decision = { codigo: estado.error.codigo, hasta: new Date(Date.now() + 30 * 60_000).toISOString() };
+  // La respuesta vale sólo para el aviso que se respondió (y si sigue siendo el que está a la vista).
+  const respondido =
+    op.resolver && estado.error?.codigo?.startsWith("MUCHOS_BORRADOS_") && (!op.codigo || op.codigo === estado.error.codigo)
+      ? estado.error.codigo
+      : undefined;
   const fallar = async (mensaje: string, codigo?: string, cuantos?: number): Promise<Resultado> => {
     estado.error = { mensaje, codigo, cuando: ahora, cuantos };
     await guardarEstado(familiaId, conexion.id, estado);
@@ -264,6 +282,15 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       ops.push({ tipo: "limpiar", vivas });
       eventos = eventos.map((e) => (e.externo && !vivas.includes(e.externo.conexion) ? sinExterno(e) : e));
     }
+    // Al conectar se eligió que los eventos que ya estaban queden sólo en el panel (se marca aquí, con
+    // el candado: así ninguna otra sincronización alcanza a subirlos antes).
+    const inicial = new Set(estado.soloPanelInicial ?? []);
+    if (inicial.size)
+      eventos = eventos.map((e) => {
+        if (!inicial.has(e.id) || e.soloPanel || e.externo) return e;
+        ops.push({ tipo: "soloPanel", id: e.id });
+        return { ...e, soloPanel: true };
+      });
     const miembros = miembrosDe(colMiembros?.datos);
     const hoy = ahoraEnSantiago().fecha;
     const ctx: Contexto = { conexion: conexion.id, miembros, hoy };
@@ -304,8 +331,8 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     for (const [uid, r] of Object.entries(estado.recursos)) {
       if (uid.startsWith("~")) continue;
       for (const [id, rec] of r.ids ?? []) porId.set(id, rec ? { conexion: conexion.id, uid, recurrencia: rec } : { conexion: conexion.id, uid });
-      if (uid.endsWith(SUFIJO_UID) && !porId.has(uid.slice(0, -SUFIJO_UID.length)))
-        porId.set(uid.slice(0, -SUFIJO_UID.length), { conexion: conexion.id, uid });
+      const propio = idPropioDe(uid);
+      if (propio && !porId.has(propio)) porId.set(propio, { conexion: conexion.id, uid });
     }
     const idsVinculados = new Set(eventos.filter((e) => e.externo).map((e) => e.id));
     eventos = eventos.map((e) => {
@@ -362,23 +389,35 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
 
     // Lo que la familia eligió cuando se iba a borrar mucho de una vez queda anotado en el estado, así
     // vale también para lo que no alcance en esta vuelta.
-    if (op.resolver === "recuperar") {
+    // Cada respuesta toca sólo la lista de su aviso: "panel" son los borrados aquí que se borrarían en
+    // iCloud; "iCloud", los que desaparecieron allá y se borrarían aquí.
+    if (op.resolver === "recuperar" && respondido === "MUCHOS_BORRADOS_PANEL") {
       for (const uid of borrarAlla) estado.recursos[uid].etag = null; // se vuelve a traer desde iCloud
       traer.push(...borrarAlla.splice(0));
+    }
+    if (op.resolver === "recuperar" && respondido === "MUCHOS_BORRADOS_ICLOUD") {
       for (const uid of borrarAqui) estado.recursos[uid].huella = ""; // se vuelve a subir a iCloud
       recrearAlla.push(...borrarAqui.splice(0));
     }
+    if (op.resolver === "borrar" && respondido)
+      estado.decision = {
+        codigo: respondido,
+        hasta: new Date(Date.now() + 30 * 60_000).toISOString(),
+        uids: respondido === "MUCHOS_BORRADOS_PANEL" ? [...borrarAlla] : [...borrarAqui],
+      };
     // Seguro: si de una vez se borraría mucho, se pregunta antes (p. ej. al restaurar un respaldo viejo).
+    // Lo que la familia ya aceptó no cuenta.
     const total = Object.keys(estado.recursos).length;
     const muchos = (n: number) => n >= 5 && n > total * 0.3;
-    const aceptado = (codigo: string) => op.resolver === "borrar" || estado.decision?.codigo === codigo;
-    if (muchos(borrarAlla.length) && !aceptado("MUCHOS_BORRADOS_PANEL"))
+    const sinAceptar = (l: string[], codigo: string) =>
+      l.filter((u) => !(estado.decision?.codigo === codigo && estado.decision.uids?.includes(u))).length;
+    if (muchos(sinAceptar(borrarAlla, "MUCHOS_BORRADOS_PANEL")))
       return fallar(
         `Se borraron del panel ${borrarAlla.length} eventos que están en iCloud. ¿Se borran también de los iPhone?`,
         "MUCHOS_BORRADOS_PANEL",
         borrarAlla.length,
       );
-    if (muchos(borrarAqui.length) && !aceptado("MUCHOS_BORRADOS_ICLOUD"))
+    if (muchos(sinAceptar(borrarAqui, "MUCHOS_BORRADOS_ICLOUD")))
       return fallar(
         `Desaparecieron de iCloud ${borrarAqui.length} eventos. ¿Se borran también del panel?`,
         "MUCHOS_BORRADOS_ICLOUD",
@@ -417,17 +456,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     const porLeer = new Map<string, string>(); // href → uid conocido ("" si es nuevo)
     for (const uid of [...traer, ...subir, ...conflicto]) porLeer.set(estado.recursos[uid].href, uid);
     for (const href of nuevosRemotos) porLeer.set(href, uidPorHref.get(href) ?? "");
-    let leidos: { href: string; etag: string; ics: string }[] = [];
-    if (porLeer.size) {
-      try {
-        const t = await cal.traer(conexion.url, [...porLeer.keys()]);
-        leidos = t.leidos;
-        if (!t.completo) pendiente = true;
-      } catch (e) {
-        if (!(e instanceof ErrorCalDAV) || e.codigo !== "TIEMPO") throw e;
-        pendiente = true;
-      }
-    }
+    const procesados = new Set<string>(); // href ya leídos y resueltos en esta vuelta
 
     const subirGrupo = async (uid: string, href: string, etag: string, ics: string, local: Evento[], remoto: Evento[]) => {
       const h = huellaGrupo(local, miembros);
@@ -459,7 +488,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       }
     };
 
-    for (const { href, etag, ics } of leidos) {
+    const procesar = async (href: string, etag: string, ics: string) => {
       const conocido = porLeer.get(href) ?? "";
       let previo: ReturnType<typeof leerRecurso> = null;
       try {
@@ -473,19 +502,25 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
           avisos.push(`"${grupos.get(conocido)![0].titulo}": iCloud lo devolvió de una forma que no se pudo leer; quedó como estaba.`);
           parches.set(conocido, { ...estado.recursos[conocido], etag });
           grupos.delete(conocido);
-          continue;
+          return;
         }
         if (conocido) parches.set(conocido, null);
         parches.set(`~${href}`, { href, etag, huella: "" });
-        continue;
+        return;
       }
       const uid = previo.uid;
       if (conocido && conocido !== uid) parches.set(conocido, null); // el recurso cambió de UID (raro)
       const idsRemotos = previo.eventos.map((e) => e.id);
       const existentes = sel(uid, idsRemotos);
-      // Los que habían perdido el vínculo (o se desconectó y se volvió a conectar) toman el de su par remoto.
+      // Los que habían perdido el vínculo (o se desconectó y se volvió a conectar) toman el de su par
+      // remoto. Ya están en el calendario, así que la marca "sólo en el panel" que puso "conectar" no
+      // les aplica (y así gana el cambio más reciente, también si se cambió en la pared entre medio).
       const extDe = new Map(previo.eventos.map((e) => [e.id, e.externo!]));
-      const vinculados = existentes.map((e) => (e.externo ? e : { ...e, externo: extDe.get(e.id) ?? { conexion: conexion.id, uid } }));
+      const vinculados = existentes.map((e) => {
+        if (e.externo) return e;
+        const { soloPanel: _, ...x } = e;
+        return { ...x, externo: extDe.get(e.id) ?? { conexion: conexion.id, uid } };
+      });
       const g = leerRecurso(ics, ctx, vinculados)!;
       // Un id que ya usa otro evento del panel (p. ej. una copia en otro calendario): se le da otro.
       const otrosIds = new Set(eventos.filter((e) => !existentes.includes(e)).map((e) => e.id));
@@ -514,7 +549,42 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       }
       grupos.delete(uid);
       for (const e of existentes) yaVistos.add(e.id);
+    };
+
+    // De a una tanda por pedido; cada tanda se procesa apenas llega, mirando el reloj (leer una serie
+    // repetida cuesta CPU). Lo que no alcance queda sin tocar para la próxima vuelta.
+    const hrefsPorLeer = [...porLeer.keys()];
+    let duracionTanda = 0;
+    leer: for (let i = 0; i < hrefsPorLeer.length; i += 40) {
+      const tanda = hrefsPorLeer.slice(i, i + 40);
+      const t0 = Date.now();
+      let t: Awaited<ReturnType<CalDAV["traer"]>>;
+      try {
+        t = await cal.traer(conexion.url, tanda, 2500 + duracionTanda);
+      } catch (e) {
+        if (!(e instanceof ErrorCalDAV) || e.codigo !== "TIEMPO") throw e;
+        break;
+      }
+      for (const { href, etag, ics } of t.leidos) {
+        if (queda() < 1200) break leer;
+        await procesar(href, etag, ics);
+        procesados.add(href);
+      }
+      if (!t.completo) break;
+      for (const h of tanda) procesados.add(h); // los que no vinieron ya no están
+      duracionTanda = Date.now() - t0;
     }
+    if (hrefsPorLeer.some((h) => !procesados.has(h))) pendiente = true;
+    // Hrefs nuevos que no se alcanzaron a leer: pueden ser una serie conocida que cambió de dirección o
+    // el par de un evento del panel sin vínculo. Mientras queden, no se crea ni se borra nada por
+    // ausencia (se duplicaría o se borraría algo que sí está).
+    const faltaLeer = nuevosRemotos.some((h) => !procesados.has(h));
+    /** ¿La serie que ya no está en su href se resolvió (o se puede estar resolviendo) en otro? */
+    const enOtroHref = (uid: string) => {
+      if (parches.get(uid)) return true; // el paso 1 la encontró en otro href: cambió de dirección
+      if (faltaLeer) return void (pendiente = true), true;
+      return false;
+    };
 
     // 2. Borrar en el calendario lo que se borró aquí (o se dejó "sólo en el panel").
     for (const uid of borrarAlla) {
@@ -530,12 +600,18 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
         if (grupos.get(uid)?.length) ops.push({ tipo: "desvincular", uid, soloPanel: true });
         resumen.borradosAlla++;
       } catch (e) {
-        alFallar(e);
+        if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
+          // Calendario de sólo lectura: no se puede borrar allá, así que se vuelve a traer desde iCloud.
+          rec.etag = null;
+          pendiente = true;
+          avisos.push(`El calendario «${conexion.nombre}» no deja borrar eventos desde el panel: se trajo de vuelta.`);
+        } else alFallar(e);
       }
     }
 
     // 3. Borrar en el panel lo que se borró en el calendario.
     for (const uid of borrarAqui) {
+      if (enOtroHref(uid)) continue;
       ponerGrupo(uid, []);
       parches.set(uid, null);
       resumen.borradosAqui++;
@@ -548,6 +624,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       for (let intento = 0; intento < 2; intento++) {
         if (!puedeEscribir()) return;
         const conExterno = vincular ? [{ ...vincular, externo: { conexion: conexion.id, uid } }] : local;
+        if (!enCalendario(conExterno).length) return; // nunca un recurso vacío
         let r: Awaited<ReturnType<CalDAV["crear"]>>;
         try {
           r = await cal.crear(conexion.url, nombre, escribirRecurso(conExterno, ctx, uid, null));
@@ -594,13 +671,18 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       }
       pendiente = true;
     };
-    for (const uid of recrearAlla) await crear(uid, nombreRecurso(estado.recursos[uid].href), grupos.get(uid) ?? []);
+    for (const uid of recrearAlla) {
+      if (enOtroHref(uid)) continue;
+      await crear(uid, nombreRecurso(estado.recursos[uid].href), grupos.get(uid) ?? []);
+    }
     for (const [uid, local] of grupos) {
-      if (estado.recursos[uid] || parches.has(uid) || !enCalendario(local).length) continue;
+      if (estado.recursos[uid] || parches.has(uid) || !enCalendario(local).length || enOtroHref(uid)) continue;
       await crear(uid, `${nombreSeguro(uid)}.ics`, local);
     }
-    // Los eventos nuevos del panel se suben de a 3 a la vez (al conectar pueden ser varios).
-    const nuevosPanel = eventos.filter((e) => !e.externo && !e.soloPanel && !yaVistos.has(e.id));
+    // Los eventos nuevos del panel se suben de a 3 a la vez (al conectar pueden ser varios). Si quedó
+    // algo nuevo del calendario sin leer, esperan: puede ser su par (al volver a conectar).
+    const nuevosPanel = faltaLeer ? [] : eventos.filter((e) => !e.externo && !e.soloPanel && !yaVistos.has(e.id));
+    if (faltaLeer && eventos.some((e) => !e.externo && !e.soloPanel && !yaVistos.has(e.id))) pendiente = true;
     const trabajos = await Promise.allSettled(
       Array.from({ length: 3 }, async () => {
         for (let e = nuevosPanel.shift(); e; e = nuevosPanel.shift()) await crear(uidDe(e), `${nombreSeguro(e.id)}.ics`, [], e);
@@ -614,15 +696,20 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     let versionFinal = version;
     let base = (Array.isArray(colEventos?.datos) ? colEventos!.datos : []).map(normalizarEvento).filter((e): e is Evento => !!e);
     let baseVersion = version;
+    let guardado = !ops.length;
     for (let intento = 0; ops.length && intento < 6; intento++) {
       const { eventos: nuevos, omitidos } = aplicar(base, ops, conexion.id);
       for (const uid of omitidos) {
         parches.delete(uid);
         pendiente = true;
       }
-      if (JSON.stringify(nuevos) === JSON.stringify(base)) break;
+      if (JSON.stringify(nuevos) === JSON.stringify(base)) {
+        guardado = true;
+        break;
+      }
       const g = await guardarColeccion(familiaId, "eventos", nuevos, baseVersion);
       if (g.ok) {
+        guardado = true;
         versionFinal = g.version;
         await anotarVersiones(familiaId, { eventos: g.version });
         break;
@@ -632,14 +719,22 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       baseVersion = g.actual.version;
     }
 
-    for (const [uid, rec] of parches) {
-      if (rec) estado.recursos[uid] = rec;
-      else delete estado.recursos[uid];
+    // Si el panel no quedó guardado, el estado tampoco cambia: lo escrito en iCloud en esta vuelta se
+    // reconoce en la próxima (si no, un evento nuevo del iPhone quedaría "conocido" sin estar en el
+    // panel, y la vuelta siguiente lo borraría de iCloud).
+    if (guardado) {
+      for (const [uid, rec] of parches) {
+        if (rec) estado.recursos[uid] = rec;
+        else delete estado.recursos[uid];
+      }
+      delete estado.soloPanelInicial;
     }
     estado.ctag = pendiente ? null : lista.ctag;
     estado.versionEventos = versionFinal;
     estado.huellaMiembros = huellaMiembros;
     estado.pendiente = pendiente;
+    // La decisión de borrar muchos sirve mientras queden borrados por terminar.
+    if (!pendiente) delete estado.decision;
     estado.ultima = ahora;
     const fallo = falla as ErrorCalDAV | null; // (se asigna dentro de alFallar)
     estado.error = fallo ? { mensaje: fallo.message, codigo: fallo.codigo, cuando: ahora } : null;
@@ -649,6 +744,13 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     if (rechazo) throw rechazo.reason;
     return { ok: !fallo, resumen, pendiente, error: estado.error };
   } catch (e) {
+    if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") {
+      // No alcanzó el tiempo (p. ej. iCloud lento al listar): no es un error, sigue la próxima vuelta.
+      estado.pendiente = true;
+      estado.ctag = null;
+      await guardarEstado(familiaId, conexion.id, estado);
+      return { ok: true, pendiente: true };
+    }
     if (e instanceof ErrorCalDAV) return fallar(e.message, e.codigo);
     console.error("sincronizar", e);
     return fallar("Algo falló al sincronizar con iCloud: " + (e as Error).message, "INTERNO");
