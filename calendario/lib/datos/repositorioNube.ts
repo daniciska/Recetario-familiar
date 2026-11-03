@@ -1,4 +1,4 @@
-// Datos compartidos por toda la familia (Netlify Database a través de /api/*).
+// Datos compartidos por toda la familia (Netlify Functions + Blobs a través de /api/*).
 //
 // - Cada colección tiene una versión. Un guardado sólo se acepta si parte de la última versión;
 //   si otro equipo la cambió antes, el servidor devuelve lo último (ConflictoVersion) y el store
@@ -7,7 +7,7 @@
 //   puede dormir) y se traen sólo esas colecciones.
 // - Una copia queda en el equipo (localStorage) para abrir sin internet.
 
-import type { Repositorio } from "./repositorio";
+import type { CalendarioConectado, Repositorio } from "./repositorio";
 import { ConflictoVersion } from "./repositorio";
 import { RepositorioLocal } from "./repositorioLocal";
 import { CLAVES } from "./claves";
@@ -27,6 +27,11 @@ export class RepositorioNube implements Repositorio {
   private enVuelo = 0;
   private oyentesConexion = new Set<(conectado: boolean) => void>();
   private conectado = true;
+  private calendarios: CalendarioConectado[] = [];
+  private oyentesCalendarios = new Set<(c: CalendarioConectado[]) => void>();
+  /** Revisa cambios ya (lo deja listo `suscribir`): después de sincronizar con iCloud. */
+  private revisarAhora?: () => void;
+  private sincronizarPendiente?: ReturnType<typeof setTimeout>;
 
   constructor(private sesion: SesionNube) {
     this.versiones = { ...(sesion.versiones ?? {}) };
@@ -40,6 +45,37 @@ export class RepositorioNube implements Repositorio {
     this.oyentesConexion.add(f);
     f(this.conectado);
     return () => this.oyentesConexion.delete(f);
+  }
+
+  alCambiarCalendarios(f: (c: CalendarioConectado[]) => void) {
+    this.oyentesCalendarios.add(f);
+    f(this.calendarios);
+    return () => this.oyentesCalendarios.delete(f);
+  }
+
+  private anotarCalendarios(c: unknown) {
+    if (!Array.isArray(c)) return;
+    const lista = c.filter((x): x is CalendarioConectado => !!x && typeof x.id === "string" && typeof x.nombre === "string");
+    if (JSON.stringify(lista) === JSON.stringify(this.calendarios)) return;
+    this.calendarios = lista;
+    this.oyentesCalendarios.forEach((f) => f(lista));
+  }
+
+  /**
+   * Después de cambiar eventos, se pide al servidor que los pase a iCloud (agrupando los cambios
+   * seguidos). Si falla no importa: la sincronización programada lo hace a los pocos minutos.
+   */
+  private pedirSincronizacion() {
+    if (!this.calendarios.length) return;
+    clearTimeout(this.sincronizarPendiente);
+    this.sincronizarPendiente = setTimeout(async () => {
+      try {
+        const { status } = await api("/api/calendario/sincronizar", { metodo: "POST", cuerpo: {}, token: this.sesion.token, espera: 15_000 });
+        if (status === 200) this.revisarAhora?.();
+      } catch {
+        /* lo hará la sincronización programada */
+      }
+    }, 1500);
   }
 
   private marcarConexion(c: boolean) {
@@ -103,10 +139,11 @@ export class RepositorioNube implements Repositorio {
   async cargar(): Promise<EstadoApp | null> {
     try {
       if (this.sesion.pendienteSubir) await this.subirLocal();
-      const { status, datos } = await api<{ colecciones: Colecciones }>("/api/datos", { token: this.sesion.token });
+      const { status, datos } = await api<{ colecciones: Colecciones; calendarios?: unknown }>("/api/datos", { token: this.sesion.token });
       if (status !== 200) throw new SinConexion();
       this.estado = {};
       this.aplicar(datos.colecciones);
+      this.anotarCalendarios(datos.calendarios ?? []);
       this.marcarConexion(true);
       return Object.keys(this.estado).length ? ({ version: 1, ...this.estado } as unknown as EstadoApp) : null;
     } catch (e) {
@@ -141,6 +178,7 @@ export class RepositorioNube implements Repositorio {
       this.versiones[clave] = datos.version!;
       this.recordarVersiones();
       await this.guardarCopia(clave, valor);
+      if (clave === "eventos") this.pedirSincronizacion();
     } catch (e) {
       if (e instanceof AccesoRevocado) {
         this.revocado(e);
@@ -168,6 +206,7 @@ export class RepositorioNube implements Repositorio {
       this.recordarVersiones();
       await this.copia.reemplazarTodo(estado).catch(() => {});
       this.marcarConexion(true);
+      this.pedirSincronizacion();
     } catch (e) {
       if (e instanceof AccesoRevocado) {
         this.revocado(e);
@@ -193,7 +232,8 @@ export class RepositorioNube implements Repositorio {
           claves = [...CLAVES]; // de vez en cuando se trae todo, por si algún aviso de versión se perdió
           ultimoCompleto = Date.now();
         } else {
-          const { datos } = await api<{ versiones: Versiones }>("/api/cambios", { token: this.sesion.token, espera: 10_000 });
+          const { datos } = await api<{ versiones: Versiones; calendarios?: unknown }>("/api/cambios", { token: this.sesion.token, espera: 10_000 });
+          this.anotarCalendarios(datos.calendarios ?? []);
           claves = CLAVES.filter((c) => (datos.versiones[c] ?? 0) > (this.versiones[c] ?? 0));
         }
         this.marcarConexion(true);
@@ -216,6 +256,7 @@ export class RepositorioNube implements Repositorio {
       }
     };
 
+    this.revisarAhora = () => void revisar();
     const t = setInterval(revisar, CADA);
     const alVolver = () => {
       if (document.visibilityState === "visible") void revisar();
@@ -224,6 +265,7 @@ export class RepositorioNube implements Repositorio {
     window.addEventListener("online", alVolver);
     window.addEventListener("focus", alVolver);
     return () => {
+      this.revisarAhora = undefined;
       clearInterval(t);
       document.removeEventListener("visibilitychange", alVolver);
       window.removeEventListener("online", alVolver);

@@ -8,6 +8,7 @@ import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
 import { descargarRespaldo } from "@/lib/respaldo";
 import { SeccionNube } from "./Nube";
+import { SeccionICloud } from "./CalendarioICloud";
 import { useModoPared } from "@/lib/hooks";
 import { Avatar, Boton, Campo, Entrada, Modal, Segmentos, Selector, SelectorHora, cx } from "./ui";
 
@@ -164,6 +165,8 @@ export default function VistaAjustes() {
 
         <SeccionNube />
 
+        <SeccionICloud />
+
         <SeccionPin />
 
         <div className="rounded-3xl bg-superficie p-4">
@@ -251,9 +254,18 @@ function EditorMiembro({ miembro, alCerrar }: { miembro?: Miembro; alCerrar: () 
 
   const borrar = () => {
     actualizar("miembros", (l) => l.filter((x) => x.id !== m.id));
-    // Saca a la persona de los eventos; los que quedan sin nadie se borran.
+    // Saca a la persona de los eventos; los que quedan sin nadie se borran (salvo los que también están
+    // en iCloud: esos quedan para todos, así no se borran de los iPhone).
+    const quedan = estado.miembros.filter((x) => x.id !== m.id).map((x) => x.id);
+    const ahora = new Date().toISOString();
     actualizar("eventos", (l) =>
-      l.map((e) => ({ ...e, miembros: e.miembros.filter((id) => id !== m.id) })).filter((e) => e.miembros.length > 0),
+      l
+        .map((e) => {
+          if (!e.miembros.includes(m.id)) return e;
+          const miembros = e.miembros.filter((id) => id !== m.id);
+          return { ...e, miembros: miembros.length || !e.externo ? miembros : quedan, actualizado: ahora };
+        })
+        .filter((e) => e.miembros.length > 0),
     );
     actualizar("tareas", (l) => l.map((t) => (t.miembroId === m.id ? { ...t, miembroId: undefined } : t)));
     actualizar("premios", (l) => l.map((p) => (p.miembroId === m.id ? { ...p, miembroId: undefined } : p)));

@@ -12,6 +12,6 @@ export function crearRepositorio(): Repositorio {
   return sesion ? new RepositorioNube(sesion) : new RepositorioLocal();
 }
 
-export type { Repositorio } from "./repositorio";
+export type { CalendarioConectado, Repositorio } from "./repositorio";
 export { ConflictoVersion } from "./repositorio";
 export * from "./tipos";

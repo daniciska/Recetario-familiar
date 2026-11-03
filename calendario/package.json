@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@netlify/blobs": "^11.1.7",
+    "fast-xml-parser": "^5.11.2",
+    "ical.js": "^2.2.1",
     "next": "^16.4.3",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",

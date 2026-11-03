@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ConflictoVersion, crearRepositorio, type ClaveColeccion, type EstadoApp } from "./datos";
+import { ConflictoVersion, crearRepositorio, type CalendarioConectado, type ClaveColeccion, type EstadoApp } from "./datos";
 import { SinConexion, tomarAviso } from "./datos/nube";
 import { normalizarGuardado } from "./datos/normalizar";
 import { estadoEjemplo } from "./ejemplo";
@@ -20,7 +20,7 @@ interface Contexto {
   /** Hay cambios que viven sólo en memoria (el navegador no guarda nada): recargar los perdería. */
   sinGuardar: boolean;
   /** Familia en la nube a la que está conectado este equipo (null: los datos viven sólo aquí). */
-  nube: { familia: { id: string; nombre: string }; conectado: boolean } | null;
+  nube: { familia: { id: string; nombre: string }; conectado: boolean; calendarios: CalendarioConectado[] } | null;
 }
 
 const Ctx = createContext<Contexto | null>(null);
@@ -53,6 +53,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
   /** Colecciones que no se pudieron guardar y por qué ("lleno": no cupo en el equipo; "red": sin conexión con la nube). */
   const fallidas = useRef(new Map<ClaveColeccion, "lleno" | "red">());
   const [conectado, setConectado] = useState(true);
+  const [calendarios, setCalendarios] = useState<CalendarioConectado[]>([]);
   const sinAlmacenamiento = useRef(false);
   /** Cuándo se cerró el aviso de "no se guarda" (0: nunca). */
   const avisoCerradoEn = useRef(0);
@@ -102,6 +103,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
       }
     })();
     const sinConexion = repo.alCambiarConexion?.((c) => vivo && setConectado(c));
+    const sinCalendarios = repo.alCambiarCalendarios?.((c) => vivo && setCalendarios(c));
     const desuscribir = repo.suscribir((nuevo) => {
       const n = normalizarGuardado(nuevo, estadoEjemplo().ajustes);
       persistido.current = n;
@@ -112,6 +114,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
       vivo = false;
       desuscribir();
       sinConexion?.();
+      sinCalendarios?.();
     };
   }, [repo, refrescarAviso]);
 
@@ -201,7 +204,7 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
         cerrarError,
         // Un guardado que no cupo ya se deshizo: en memoria queda lo mismo que en el equipo.
         sinGuardar: sinAlmacenamiento.current,
-        nube: repo.familia ? { familia: repo.familia, conectado } : null,
+        nube: repo.familia ? { familia: repo.familia, conectado, calendarios } : null,
       }}
     >
       {children}

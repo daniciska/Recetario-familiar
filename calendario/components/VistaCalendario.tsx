@@ -18,7 +18,7 @@ import {
   sumarMeses,
   diaSemana,
 } from "@/lib/fechas";
-import { ocurrenciasEnRango, textoHora } from "@/lib/eventos";
+import { duracionDias, ocurrenciasEnRango, seRepite, textoHora } from "@/lib/eventos";
 import { iconoClima, useIrAHoyEnMovil, type Clima } from "@/lib/hooks";
 import { claveComida } from "@/lib/compras";
 import { TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
@@ -218,15 +218,15 @@ function TarjetaEvento({
           grande ? "text-xl" : "text-base 2xl:text-lg",
         )}
       >
-        {ev.horaInicio && ev.horaFin && !ev.todoElDia ? (
+        {ev.horaInicio && ev.horaFin && !ev.todoElDia && duracionDias(ev) === 1 ? (
           <>
             <span className="whitespace-nowrap">{ev.horaInicio}–</span>
             <span className="whitespace-nowrap">{ev.horaFin}</span>
           </>
         ) : (
-          <span>{textoHora(ev)}</span>
+          <span>{textoHora(ev, oc)}</span>
         )}
-        {ev.repeticion !== "nunca" && (
+        {seRepite(ev) && (
           <span className="ml-1" aria-label="se repite">
             ↻
           </span>
@@ -248,7 +248,8 @@ function TarjetaEvento({
         ))}
         {grande && <span className="ml-2 self-center text-xl font-bold text-tinta-suave">{personas.map((p) => p.nombre).join(", ")}</span>}
       </div>
-      {grande && ev.nota && <div className="mt-2 text-lg text-tinta-suave">📝 {ev.nota}</div>}
+      {grande && ev.lugar && <div className="mt-2 break-words text-lg text-tinta-suave">📍 {ev.lugar}</div>}
+      {grande && ev.nota && <div className="mt-2 whitespace-pre-line break-words text-lg text-tinta-suave">📝 {ev.nota}</div>}
     </button>
   );
 }
@@ -358,7 +359,7 @@ function Semana({
               </button>
               <div className="desliza flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
                 {ocs.get(f)!.map((oc) => (
-                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, f)} />
+                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, oc.inicio)} />
                 ))}
               </div>
               <ComidasDelDia fecha={f} alTocar={alIrAMenu} />
@@ -389,7 +390,7 @@ function Semana({
               <div className="space-y-1.5">
                 {ocs.get(f)!.length === 0 && <div className="text-base text-tinta-suave">Sin eventos</div>}
                 {ocs.get(f)!.map((oc) => (
-                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, f)} />
+                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, oc.inicio)} />
                 ))}
               </div>
               <div className="mt-2">
@@ -514,7 +515,7 @@ function Dia({
         {lista.length === 0 && <div className="py-10 text-center text-2xl text-tinta-suave">Día libre 🌿</div>}
         <div className="space-y-2.5">
           {lista.map((oc) => (
-            <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} grande onClick={() => alAbrir(oc.evento, fecha)} />
+            <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} grande onClick={() => alAbrir(oc.evento, oc.inicio)} />
           ))}
         </div>
       </div>

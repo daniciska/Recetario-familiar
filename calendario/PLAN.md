@@ -1,7 +1,8 @@
 # Plan: lo que falta para que el calendario quede como Skylight (o mejor)
 
-Estado al 2 de noviembre de 2026. Hecho y publicado: calendario, menú con colación, recetas, lista de compras
-inteligente, quehaceres con estrellas y premios, cuentas regresivas (y repetición anual), PIN para la pared.
+Estado al 3 de noviembre de 2026. Hecho y publicado: calendario, menú con colación, recetas, lista de compras
+inteligente, quehaceres con estrellas y premios, cuentas regresivas (y repetición anual), PIN para la pared, datos
+compartidos entre equipos y calendario de iCloud en ambos sentidos.
 Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `calendario-familiar-pared`).
 
 ## Decisiones de la familia
@@ -48,15 +49,27 @@ invitación con QR y código de un uso, lista de equipos con "quitar acceso", fo
 
 </details>
 
-### Fase 2 · Calendario de iCloud (CalDAV, en ambos sentidos)
-- Edge Function `icloud-calendario` (Deno) con CalDAV contra `caldav.icloud.com` usando `ICLOUD_USUARIO` +
-  `ICLOUD_CLAVE_APP`. Programada cada 5 min (pg_cron) + al guardar un evento desde la pared.
-- Eventos de iCloud → tabla `eventos` con `origen: "icloud"`, `uid`, `etag`. Eventos creados en la pared → PUT al
-  calendario "Familia". Conflictos: gana el cambio más reciente.
-- Personas: el evento se asigna por el nombre en el título o por la etiqueta `@Sofía` en las notas (a definir).
+### Fase 2 · Calendario de iCloud — HECHA (ver README → Calendario de iCloud)
+
+CalDAV en ambos sentidos con Netlify Functions: función programada cada 5 min (`calendario-programado`) + al guardar
+un evento (`/api/calendario/sincronizar`). Estado por evento en Blobs (ETag + huella), escrituras condicionales,
+"gana el más reciente", seguro contra borrados masivos, reconectar sin duplicar. Personas: emoji al inicio del título
+(lo pone el panel), o nombre en el título, o `@Nombre` en la nota; sin nada, para todos. El modelo de eventos ganó
+varios días, lugar, "cada N" y varios días de la semana. Falta que la familia ponga `ICLOUD_USUARIO` e
+`ICLOUD_CLAVE_APP` en Netlify y conecte "Familia" desde *Familia → 📅 Calendario del iPhone*.
+
+### Fase 2b · Google Calendar (si se quiere)
+- Google no acepta contraseña de app para el calendario (CalDAV sólo con OAuth). La forma limpia para un Gmail personal:
+  una **cuenta de servicio** de Google Cloud (gratis), compartir el calendario de Google con el correo de esa cuenta
+  ("Hacer cambios en eventos") y usar la API de Calendar v3 con un token JWT (sin que nadie tenga que volver a iniciar
+  sesión). La clave de la cuenta de servicio va en una variable secreta de Netlify (`GOOGLE_CUENTA_SERVICIO`).
+- Limitación: una cuenta de servicio no puede invitar personas a los eventos (no hace falta para el panel).
+- El motor de `servidor/sincronizar.ts` sirve igual: falta un "proveedor" Google (listar con `syncToken`, leer/escribir
+  eventos JSON en vez de .ics) y que un evento nuevo de la pared se pueda mandar a un calendario u otro.
 
 ### Fase 3 · Correo dedicado
-- Edge Function `correo-entrante`: IMAP a `imap.mail.me.com:993` con la misma contraseña de app, cada 5 min.
+- Función programada `correo-entrante`: IMAP a `imap.mail.me.com:993` con la misma contraseña de app, cada 5 min
+  (o Gmail: `imap.gmail.com:993` con una contraseña de aplicación de Google, que pide verificación en 2 pasos).
 - Cada correo nuevo (texto, PDF, fotos) va a Gemini con un esquema JSON: ¿eventos? ¿receta? ¿ítems de compras?
   Crea lo que corresponda, marca el correo como leído y responde con un resumen ("Agregué 3 eventos…") con opción de
   deshacer desde la app. Los nombres de los integrantes en el asunto asignan las personas.

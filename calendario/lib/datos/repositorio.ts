@@ -44,4 +44,13 @@ export interface Repositorio {
   alCambiarConexion?(f: (conectado: boolean) => void): () => void;
   /** (Opcional) la familia en la nube a la que está conectado este equipo. */
   readonly familia?: { id: string; nombre: string };
+  /** (Opcional) avisa qué calendarios externos (iCloud) tiene conectados la familia. */
+  alCambiarCalendarios?(f: (calendarios: CalendarioConectado[]) => void): () => void;
+}
+
+/** Un calendario de afuera (iCloud) que la familia conectó al panel. */
+export interface CalendarioConectado {
+  id: string;
+  proveedor: "icloud";
+  nombre: string;
 }

@@ -17,21 +17,35 @@ export interface Evento {
   id: Id;
   titulo: string;
   miembros: Id[]; // uno o varios (evento compartido)
-  fecha: string; // AAAA-MM-DD (primera ocurrencia)
+  fecha: string; // AAAA-MM-DD (primera ocurrencia; si dura varios días, el día en que empieza)
+  fechaFin?: string; // AAAA-MM-DD: último día, si dura varios días (vacaciones, viajes)
   todoElDia: boolean;
   horaInicio?: string; // HH:mm
-  horaFin?: string; // HH:mm
+  horaFin?: string; // HH:mm (si dura varios días, la hora en que termina el último día)
   repeticion: Repeticion;
+  intervalo?: number; // cada N días/semanas/meses/años (sin valor: cada 1)
+  diasSemana?: number[]; // semanal: 0 = lunes … 6 = domingo (sin valor: el día de `fecha`)
   repetirHasta?: string; // AAAA-MM-DD, opcional
   nota?: string;
-  excepciones?: string[]; // fechas en que NO ocurre (borrado "sólo este día")
+  lugar?: string;
+  excepciones?: string[]; // fechas en que NO empieza (borrado "sólo este día")
+  /**
+   * Repeticiones que vienen de un calendario conectado y no se pueden escribir con las opciones de
+   * arriba (p. ej. "el segundo martes de cada mes"): las fechas en que empieza, ya calculadas.
+   */
+  fechas?: string[];
   cuentaRegresiva?: boolean; // se muestra arriba "⏳ … en N días" (cumpleaños, viajes)
+  /** Vínculo con un calendario conectado (iCloud). `recurrencia`: el día de la serie que se cambió sólo ese día. */
+  externo?: { conexion: string; uid: string; recurrencia?: string };
+  soloPanel?: boolean; // no se sube a los calendarios conectados
+  actualizado?: string; // ISO: último cambio hecho en el panel (para decidir choques con iCloud)
 }
 
 /** Una ocurrencia concreta de un evento (los repetidos se expanden). */
 export interface Ocurrencia {
   evento: Evento;
   fecha: string;
+  inicio: string; // día en que empezó esta ocurrencia (distinto de `fecha` si dura varios días)
 }
 
 export type Unidad =

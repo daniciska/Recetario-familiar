@@ -3,6 +3,7 @@
 
 import { CATEGORIAS, UNIDADES } from "../compras";
 import { colorPastel } from "../colores";
+import { canonico } from "../eventos";
 import type {
   Ajustes,
   CategoriaCompra,
@@ -74,31 +75,49 @@ function miembro(x: unknown): Miembro | null {
   };
 }
 
+/** Un evento suelto, reparado (también lo usa el servidor al traer eventos de iCloud). */
+export function normalizarEvento(x: unknown): Evento | null {
+  return evento(x);
+}
+
 function evento(x: unknown): Evento | null {
   if (!esObj(x)) return null;
   const f = fecha(x.fecha);
   if (!f) return null;
   const repeticion = REPETICIONES.includes(x.repeticion as Repeticion) ? (x.repeticion as Repeticion) : "nunca";
   const todoElDia = x.todoElDia === true;
-  let repetirHasta = repeticion === "nunca" ? undefined : fecha(x.repetirHasta);
-  // Un "hasta" anterior al inicio dejaría el evento invisible: se deja en una sola vez.
-  if (repetirHasta && repetirHasta < f) repetirHasta = f;
-  // Un evento que no se repite no lleva excepciones (una sobre su única fecha lo haría invisible).
-  const excepciones = repeticion === "nunca" ? [] : lista(x.excepciones, (e) => fecha(e) ?? null);
-  return {
+  const fechas = Array.isArray(x.fechas) ? lista(x.fechas, (e) => fecha(e) ?? null) : undefined;
+  const intervalo = num(x.intervalo);
+  let externo: Evento["externo"];
+  if (esObj(x.externo) && typeof x.externo.conexion === "string" && typeof x.externo.uid === "string" && x.externo.uid) {
+    externo = { conexion: x.externo.conexion, uid: x.externo.uid };
+    const rec = fecha(x.externo.recurrencia);
+    if (rec) externo.recurrencia = rec;
+  }
+  // `canonico` deja una sola forma: sin "cada 1", sin excepciones en un evento de una vez (una sobre
+  // su única fecha lo haría invisible) y un "hasta" anterior al inicio pasa a ser el mismo día.
+  return canonico({
     id: id(x.id, "ev"),
     titulo: txt(x.titulo, "Sin título"),
     miembros: lista(x.miembros, (m) => (typeof m === "string" ? m : null)),
     fecha: f,
+    fechaFin: fecha(x.fechaFin),
     todoElDia,
     horaInicio: todoElDia ? undefined : (hora(x.horaInicio) ?? "09:00"),
     horaFin: todoElDia ? undefined : hora(x.horaFin),
     repeticion,
-    repetirHasta,
+    intervalo: intervalo && Number.isInteger(intervalo) && intervalo > 1 ? Math.min(intervalo, 99) : undefined,
+    diasSemana: Array.isArray(x.diasSemana) ? lista(x.diasSemana, (d) => num(d)) : undefined,
+    repetirHasta: repeticion === "nunca" ? undefined : fecha(x.repetirHasta),
     nota: txtOpc(x.nota),
-    excepciones: excepciones.length ? excepciones : undefined,
+    lugar: txtOpc(x.lugar),
+    excepciones: lista(x.excepciones, (e) => fecha(e) ?? null),
+    fechas,
     cuentaRegresiva: x.cuentaRegresiva === true ? true : undefined,
-  };
+    externo,
+    soloPanel: x.soloPanel === true ? true : undefined,
+    actualizado: txtOpc(x.actualizado),
+  });
 }
 
 function ingrediente(x: unknown): Ingrediente | null {

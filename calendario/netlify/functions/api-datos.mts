@@ -7,6 +7,7 @@ import {
   MAX_COLECCION,
   anotarVersiones,
   autenticar,
+  calendariosPublicos,
   error,
   esClave,
   guardarColeccion,
@@ -29,7 +30,7 @@ export default async (req: Request, context: Context) => {
     const leidas = await Promise.all(claves.map(async (c) => [c, await leerColeccion(s.familiaId, c)] as const));
     const colecciones: Record<string, Coleccion> = {};
     for (const [c, v] of leidas) if (v) colecciones[c] = v;
-    return json({ colecciones });
+    return json({ colecciones, calendarios: calendariosPublicos(s.acceso) });
   }
 
   if (req.method !== "PUT") return error("Método no permitido", 405);

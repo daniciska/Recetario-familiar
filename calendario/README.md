@@ -8,7 +8,7 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 
 | Pestaña | Qué hace |
 |---|---|
-| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos con repetición diaria / semanal / mensual / anual (cumpleaños), fecha de término opcional, y borrar “sólo este día”. **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y la comida al pie de cada columna. |
+| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos de uno o **varios días** (vacaciones, viajes), con lugar, repetición diaria / semanal / mensual / anual (cumpleaños) **cada N** (p. ej. “cada 2 semanas”) y, en la semanal, **varios días** (lu y mi), fecha de término opcional, y borrar “sólo este día”. **Conectado al Calendario de los iPhone** (iCloud, en ambos sentidos: ver más abajo). **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y la comida al pie de cada columna. |
 | 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena (la colación trae atajos propios: fruta, yogur, sándwich…). Se asigna una receta (con porciones por día) o un texto libre (“Sobras”, “Comemos fuera”). “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
 | 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. |
 | 🛒 Compras | Agrupada por categoría (Verduras y frutas, Carnes y pescados, Lácteos y huevos…). Agregar a mano (“2 kg papas” entiende la cantidad). Marcar comprado, sacar comprados. Regenerar la lista de la semana reemplaza sólo lo que vino del menú y aún no se compra. |
@@ -21,7 +21,7 @@ Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al d
 
 **PIN:** con un PIN definido (Familia → PIN), la pantalla de la pared lo pide para crear o cambiar eventos, el menú y las recetas, administrar quehaceres y premios (también *Limpiar hechas*), canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo piden. Queda abierto 5 minutos; quitarlo o dejar de pedirlo exige ponerlo otra vez. El teléfono no lo pide (se puede cambiar por equipo). Con la familia en la nube el PIN es el mismo en todos los equipos. Si se olvida: en el teclado, *¿Olvidaste el PIN?* muestra un número; en otro equipo, *Familia → PIN → Destrabar otro equipo* con ese número da un código que lo quita. Un respaldo cargado no cambia el PIN. Es un candado para la casa, no seguridad.
 
-Lo que falta (calendario de iCloud, correo dedicado, recetas por audio con Gemini, fotos en la pared) está en [`PLAN.md`](PLAN.md).
+Lo que falta (correo dedicado, recetas por audio con Gemini, fotos en la pared, Google Calendar) está en [`PLAN.md`](PLAN.md).
 
 ## Correrlo
 
@@ -36,7 +36,7 @@ npm run build      # versión de producción en out/ (archivos estáticos)
 
 **Publicado en Netlify:** https://calendario-familiar-pared.netlify.app (proyecto `calendario-familiar-pared`, sitio aparte del recetario, oculto para buscadores).
 
-La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`): no necesita servidor ni funciones.
+La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`); lo compartido entre equipos y el calendario de iCloud usan Netlify Functions y Netlify Blobs (ver *Datos* y *Calendario de iCloud*).
 
 Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, rama `claude/recetario-familiar`, **Base directory** = `calendario` (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Desde ahí, cada push que toque `calendario/` se publica solo; los cambios del recetario no lo gatillan.
 
@@ -49,7 +49,7 @@ Para que cada cambio se publique solo: en Netlify, *Project configuration → Bu
 Cómo funciona:
 - **Netlify Blobs** guarda todo: cada colección (eventos, recetas, menú…) como un documento con número de versión, los equipos con acceso (sólo la huella de su clave), las invitaciones, las versiones (los equipos preguntan cada 20 s si hubo cambios) y las fotos de las recetas. Un cambio sólo se acepta si parte de la última versión (escritura condicional con ETag); si otro equipo guardó antes, la app vuelve a aplicar su cambio sobre lo más nuevo, así dos equipos que cambian a la vez no se pisan.
 - Se intentó con Netlify Database (Postgres), pero al publicar Netlify devolvió un error interno 500 al crear la base (dos veces, sin incidentes en su página de estado); la familia eligió seguir con Blobs. Pasar a Netlify Database más adelante sólo cambia `servidor/comun.ts` y `api-datos.mts`.
-- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/salud`.
+- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/calendario`, `/api/salud`.
 - Sólo se puede crear la primera familia del sitio; para crear otra hay que definir la variable `CLAVE_CREACION` en Netlify y mandarla en la cabecera `x-clave-creacion`.
 
 Sin conectar a la nube, los datos viven en el `localStorage` del equipo y se mueven con *Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): `RepositorioLocal` o `RepositorioNube`, elegido en `lib/datos/index.ts`.
@@ -63,8 +63,12 @@ lib/datos/repositorioLocal.ts implementación con localStorage
 lib/datos/repositorioNube.ts  implementación con la nube (versiones, sondeo, copia local)
 lib/datos/nube.ts             sesión del equipo, llamadas a /api, fotos
 components/Nube.tsx           crear familia, invitar (QR), unirse, equipos
-netlify/functions/            API (Netlify Functions)
+components/CalendarioICloud.tsx  conectar el calendario de iCloud y ver cómo va
+netlify/functions/            API (Netlify Functions) y calendario-programado (cada 5 min)
 servidor/comun.ts             Blobs: colecciones con versión, acceso por equipo, invitaciones
+servidor/caldav.ts            cliente CalDAV (iCloud)
+servidor/ics.ts               .ics del iPhone ↔ eventos del panel
+servidor/sincronizar.ts       sincronización en ambos sentidos con iCloud
 lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
 lib/compras.ts                categorías, unidades, suma de ingredientes
 lib/fechas.ts                 fechas en America/Santiago, semana lunes–domingo
@@ -72,6 +76,35 @@ lib/eventos.ts                repeticiones
 lib/ejemplo.ts                familia de 4, eventos y 6 recetas chilenas de ejemplo
 components/                   las vistas
 ```
+
+## Calendario de iCloud
+
+**Qué hace:** el panel y el Calendario de los iPhone comparten un calendario de iCloud (“Familia”). Un evento creado o cambiado en la pared aparece en los iPhone (y avisa con las alertas de cada teléfono); uno creado o cambiado en el iPhone aparece en la pared. Borrar en un lado borra en el otro.
+
+**Prepararlo (una vez):**
+1. Un **Apple ID nuevo sólo para el panel** (account.apple.com). La app sólo entra a esa cuenta, nunca a las personales.
+2. Con ese Apple ID, en iCloud.com → Calendario, crear **“Familia”** y compartirlo (permiso para editar) con el Apple ID de cada integrante.
+3. Una **contraseña de app**: account.apple.com → Inicio de sesión y seguridad → Contraseñas de app → “Panel”.
+4. En Netlify (proyecto `calendario-familiar-pared`) → *Project configuration → Environment variables*: `ICLOUD_USUARIO` (el Apple ID del panel) e `ICLOUD_CLAVE_APP` (la contraseña de app), marcadas como secretas si el plan lo permite; nunca en el repositorio ni en el chat. Volver a publicar para que las funciones las tomen.
+5. En la app: *Familia → 📅 Calendario del iPhone → Elegir calendario* → “Familia” → *Conectar*. Se puede elegir si los eventos que ya estaban en la pared se suben o quedan sólo en la pared.
+
+**Cómo se reparte entre personas:** al subir, el título lleva adelante el emoji de cada persona (“🦄 Dentista”); los eventos de todos van sin emoji. Al traer un evento del iPhone: emojis al inicio → esas personas; si no, el nombre en el título (“Fútbol Tomás”) o `@Tomás` en la nota; si no, es para todos.
+
+**Reglas:**
+- Se sincroniza cada 5 minutos (función programada `calendario-programado`) y 1,5 s después de guardar un evento en cualquier equipo.
+- Si un evento se cambió en los dos lados, gana el cambio más reciente. Si en un lado se borró y en el otro se cambió, gana el cambio (nada se pierde).
+- Si de una vez se borrarían muchos eventos (p. ej. al cargar un respaldo viejo o si iCloud devolviera el calendario vacío), no borra nada y pregunta en *Familia*: borrarlos también del otro lado o traerlos de vuelta.
+- Lo que el iPhone guarda y el panel no maneja (alertas, invitados, adjuntos, URL) se conserva: al actualizar sólo se cambia lo que se cambió en la pared.
+- Repeticiones que el panel no sabe escribir (“el segundo martes de cada mes”) se muestran bien, pero su repetición se cambia en el iPhone; en la pared se puede cambiar lo demás o borrar un día.
+- Cambiar “sólo este día” en el iPhone se ve en la pared como un evento aparte ese día.
+- Un evento puede quedar **sólo en la pared** (interruptor en el editor).
+- Desconectar deja los eventos en los dos lados; al volver a conectar se reconocen y no se duplican.
+
+**Cómo funciona:** CalDAV contra `caldav.icloud.com` con el Apple ID y la contraseña de app (`servidor/caldav.ts`). Para cada evento (serie) se guarda en Blobs su ETag y una huella de cómo quedó la última vez que los dos lados coincidieron; así se sabe qué lado cambió. Se escribe siempre con `If-Match` / `If-None-Match` (nunca se pisa un cambio a ciegas) y los eventos nuevos usan UID `<id>@calendario-familiar`, así un reintento no duplica. Una sola sincronización a la vez por familia.
+
+**Probar en local** sin tocar iCloud: un servidor CalDAV de prueba (p. ej. [Radicale](https://radicale.org)) y `ICLOUD_CALDAV_URL=http://127.0.0.1:5232/ ICLOUD_USUARIO=… ICLOUD_CLAVE_APP=… NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions`. `ICLOUD_CALDAV_URL` es sólo para pruebas.
+
+**Google Calendar** (todavía no): se puede con una *cuenta de servicio* de Google Cloud con la que se comparte el calendario (Google no acepta contraseñas de app para el calendario). Ver `PLAN.md`.
 
 ## Modo kiosko en el tablet
 

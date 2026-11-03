@@ -71,7 +71,22 @@ export interface Acceso {
   familia: { id: string; nombre: string };
   equipos: Record<string, Equipo>;
   versiones: Partial<Record<ClaveColeccion, number>>;
+  /** Calendarios de afuera conectados (iCloud). El estado de la sincronización va aparte. */
+  calendarios?: ConexionCalendario[];
 }
+
+export interface ConexionCalendario {
+  id: string;
+  proveedor: "icloud";
+  nombre: string; // nombre del calendario ("Familia")
+  url: string;
+  color?: string;
+  creada: string;
+}
+
+/** Lo que ven los equipos de cada calendario conectado. */
+export const calendariosPublicos = (a: Acceso) =>
+  (a.calendarios ?? []).map((c) => ({ id: c.id, proveedor: c.proveedor, nombre: c.nombre }));
 
 const claveAcceso = (familiaId: string) => `acceso/${familiaId}`;
 

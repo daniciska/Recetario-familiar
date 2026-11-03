@@ -5,9 +5,9 @@ import { useDatos } from "@/lib/store";
 import { useCandado } from "@/lib/candado";
 import type { Evento, Repeticion } from "@/lib/datos/tipos";
 import { nuevoId } from "@/lib/ejemplo";
-import { NOMBRE_REPETICION } from "@/lib/eventos";
-import { fechaLarga, horaAMinutos, partes } from "@/lib/fechas";
-import { AreaTexto, Boton, Campo, Casilla, ChipMiembro, Entrada, Modal, Segmentos, SelectorHora } from "./ui";
+import { DIAS_CORTOS, NOMBRE_REPETICION, canonico, diasDeLaSemana, duracionDias, seRepite, textoRepeticion, unidadRepeticion } from "@/lib/eventos";
+import { diaSemana, diferenciaDias, fechaLarga, horaAMinutos, partes, sumarDias } from "@/lib/fechas";
+import { AreaTexto, Boton, Campo, Casilla, ChipMiembro, Contador, Entrada, Modal, Segmentos, SelectorHora, cx } from "./ui";
 
 const HORA_DEFECTO = "09:00";
 
@@ -24,7 +24,8 @@ export default function EventoModal({
   fecha: string;
   alCerrar: () => void;
 }) {
-  const { estado, actualizar } = useDatos();
+  const { estado, actualizar, nube } = useDatos();
+  const calendarios = nube?.calendarios ?? [];
   const { proteger } = useCandado();
   const [f, setF] = useState<Evento>(
     () =>
@@ -44,8 +45,12 @@ export default function EventoModal({
   const set = <K extends keyof Evento>(k: K, v: Evento[K]) => setF((p) => ({ ...p, [k]: v }));
 
   const hastaAntes = f.repeticion !== "nunca" && !!f.repetirHasta && f.repetirHasta < f.fecha;
-  const finAntes = !f.todoElDia && !!f.horaInicio && !!f.horaFin && f.horaFin <= f.horaInicio;
-  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes;
+  const variosDias = f.fechaFin !== undefined;
+  const finDiaAntes = variosDias && f.fechaFin! <= f.fecha;
+  const finAntes = !variosDias && !f.todoElDia && !!f.horaInicio && !!f.horaFin && f.horaFin <= f.horaInicio;
+  /** Repetición que viene del iPhone y la app no sabe escribir (p. ej. "el segundo martes"): se cambia allá. */
+  const repeticionDeAfuera = !!f.fechas;
+  const valido = f.titulo.trim() !== "" && f.miembros.length > 0 && !hastaAntes && !finAntes && !finDiaAntes;
 
   /** Al mover la hora de inicio, el término se mueve con ella (se mantiene la duración). */
   const cambiarInicio = (v: string | undefined) =>
@@ -58,9 +63,24 @@ export default function EventoModal({
       return { ...p, horaInicio: v, horaFin: fin < 24 * 60 ? minutosAHora(fin) : undefined };
     });
 
-  /** Al mover el inicio de una serie más allá de su "hasta", el "hasta" se limpia. */
+  /**
+   * Al mover el inicio de una serie más allá de su "hasta", el "hasta" se limpia; si dura varios
+   * días, el último día se mueve con el primero. En una semanal, el día nuevo queda elegido.
+   */
   const cambiarFecha = (v: string) =>
-    setF((p) => ({ ...p, fecha: v, repetirHasta: p.repetirHasta && p.repetirHasta < v ? undefined : p.repetirHasta }));
+    setF((p) => {
+      const n: Evento = { ...p, fecha: v, repetirHasta: p.repetirHasta && p.repetirHasta < v ? undefined : p.repetirHasta };
+      if (p.fechaFin !== undefined) n.fechaFin = sumarDias(v, Math.max(1, diferenciaDias(p.fecha, p.fechaFin)));
+      if (p.diasSemana?.length && !p.diasSemana.includes(diaSemana(v))) n.diasSemana = [...p.diasSemana, diaSemana(v)].sort();
+      return n;
+    });
+
+  const cambiarDiasSemana = (d: number) =>
+    setF((p) => {
+      const actuales = diasDeLaSemana(p);
+      const nuevos = actuales.includes(d) ? actuales.filter((x) => x !== d) : [...actuales, d].sort();
+      return nuevos.length ? { ...p, diasSemana: nuevos } : p; // al menos un día
+    });
 
   const cambiarRepeticion = (r: Repeticion) =>
     setF((p) => {
@@ -75,18 +95,16 @@ export default function EventoModal({
 
   const guardar = async () => {
     if (!valido) return;
-    const unico = f.repeticion === "nunca";
-    const hasta = unico ? undefined : f.repetirHasta || undefined;
-    const excepciones = unico ? [] : (f.excepciones ?? []).filter((x) => x >= f.fecha && (!hasta || x <= hasta));
-    const limpio: Evento = {
+    const limpio: Evento = canonico({
       ...f,
       titulo: f.titulo.trim(),
       horaInicio: f.todoElDia ? undefined : (f.horaInicio ?? HORA_DEFECTO),
       horaFin: f.todoElDia ? undefined : f.horaFin || undefined,
-      repetirHasta: hasta,
+      repetirHasta: f.repeticion === "nunca" ? undefined : f.repetirHasta || undefined,
       nota: f.nota?.trim() || undefined,
-      excepciones: excepciones.length ? excepciones : undefined,
-    };
+      lugar: f.lugar?.trim() || undefined,
+      actualizado: new Date().toISOString(),
+    });
     const ok = await actualizar("eventos", (lista) =>
       lista.some((e) => e.id === limpio.id) ? lista.map((e) => (e.id === limpio.id ? limpio : e)) : [...lista, limpio],
     );
@@ -94,14 +112,20 @@ export default function EventoModal({
     else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
   };
 
+  /** Borra el evento; si es una serie de iCloud, también los días que se cambiaron sólo esa vez. */
   const borrarTodo = () => {
-    actualizar("eventos", (lista) => lista.filter((e) => e.id !== f.id));
+    const serie = f.externo && !f.externo.recurrencia ? f.externo : null;
+    actualizar("eventos", (lista) =>
+      lista.filter((e) => e.id !== f.id && !(serie && e.externo?.uid === serie.uid && e.externo.conexion === serie.conexion)),
+    );
     alCerrar();
   };
 
   const borrarSoloEste = () => {
     actualizar("eventos", (lista) =>
-      lista.map((e) => (e.id === f.id ? { ...e, excepciones: [...(e.excepciones ?? []), fecha] } : e)),
+      lista.map((e) =>
+        e.id === f.id ? { ...e, excepciones: [...(e.excepciones ?? []), fecha], actualizado: new Date().toISOString() } : e,
+      ),
     );
     alCerrar();
   };
@@ -119,13 +143,13 @@ export default function EventoModal({
           )}
           {evento && confirmarBorrar && (
             <div className="mr-auto flex flex-wrap gap-2">
-              {evento.repeticion !== "nunca" && (
+              {seRepite(evento) && (
                 <Boton variante="peligro" onClick={() => proteger(borrarSoloEste)}>
                   Sólo el {fechaLarga(fecha)}
                 </Boton>
               )}
               <Boton variante="peligro" onClick={() => proteger(borrarTodo)}>
-                {evento.repeticion !== "nunca" ? "Todas las repeticiones" : "Sí, borrar"}
+                {seRepite(evento) ? "Todas las repeticiones" : "Sí, borrar"}
               </Boton>
               <Boton variante="fantasma" onClick={() => setConfirmarBorrar(false)}>
                 No
@@ -179,10 +203,17 @@ export default function EventoModal({
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Campo etiqueta={f.repeticion === "nunca" ? "Fecha" : "Desde"}>
-            <Entrada type="date" value={f.fecha} onChange={(e) => e.target.value && cambiarFecha(e.target.value)} />
-            <span className="mt-1 block text-base font-bold first-letter:uppercase">{fechaLarga(f.fecha, true)}</span>
-          </Campo>
+          {repeticionDeAfuera ? (
+            <div>
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave">Desde</span>
+              <span className="block text-lg font-bold first-letter:uppercase">{fechaLarga(f.fecha, true)}</span>
+            </div>
+          ) : (
+            <Campo etiqueta={variosDias ? "Primer día" : f.repeticion === "nunca" ? "Fecha" : "Desde"}>
+              <Entrada type="date" value={f.fecha} onChange={(e) => e.target.value && cambiarFecha(e.target.value)} />
+              <span className="mt-1 block text-base font-bold first-letter:uppercase">{fechaLarga(f.fecha, true)}</span>
+            </Campo>
+          )}
           <div>
             <span className="mb-1.5 block text-base font-bold text-tinta-suave">Horario</span>
             <Segmentos
@@ -202,14 +233,50 @@ export default function EventoModal({
           </div>
         </div>
 
+        {!repeticionDeAfuera && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={variosDias}
+            onClick={() => set("fechaFin", variosDias ? undefined : sumarDias(f.fecha, 1))}
+            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+          >
+            <Casilla marcada={variosDias} />
+            <span className="flex-1 text-lg font-bold">Dura varios días</span>
+          </button>
+        )}
+
+        {variosDias && (
+          <Campo etiqueta="Último día">
+            <Entrada
+              type="date"
+              value={f.fechaFin}
+              min={sumarDias(f.fecha, 1)}
+              disabled={repeticionDeAfuera}
+              onChange={(e) => e.target.value && set("fechaFin", e.target.value)}
+            />
+            <span className="mt-1 block text-base font-bold first-letter:uppercase">
+              {fechaLarga(f.fechaFin!, true)}
+              {!finDiaAntes && ` · ${duracionDias(f)} días`}
+            </span>
+            {finDiaAntes && (
+              <span className="mt-1 block text-base font-bold text-red-700 noche:text-red-300">
+                Tiene que ser después del {fechaLarga(f.fecha)}.
+              </span>
+            )}
+          </Campo>
+        )}
+
         {!f.todoElDia && (
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="mb-1.5 block text-base font-bold text-tinta-suave">Empieza</span>
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave">{variosDias ? "Empieza el primer día" : "Empieza"}</span>
               <SelectorHora etiqueta="Empieza" valor={f.horaInicio ?? HORA_DEFECTO} alCambiar={cambiarInicio} />
             </div>
             <div>
-              <span className="mb-1.5 block text-base font-bold text-tinta-suave">Termina (opcional)</span>
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave">
+                {variosDias ? "Termina el último día" : "Termina (opcional)"}
+              </span>
               <SelectorHora etiqueta="Termina" opcional valor={f.horaFin} alCambiar={(v) => set("horaFin", v)} />
             </div>
             {finAntes && (
@@ -220,24 +287,72 @@ export default function EventoModal({
           </div>
         )}
 
-        <div>
-          <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Se repite?</span>
-          <div className="flex flex-wrap gap-2">
-            {(Object.keys(NOMBRE_REPETICION) as Repeticion[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => cambiarRepeticion(r)}
-                className={
-                  "min-h-12 rounded-2xl px-4 text-lg font-bold transition " +
-                  (f.repeticion === r ? "bg-acento text-acento-tinta" : "bg-superficie-2 text-tinta-suave")
-                }
-              >
-                {NOMBRE_REPETICION[r]}
-              </button>
-            ))}
+        {repeticionDeAfuera ? (
+          <div className="rounded-2xl bg-superficie-2 px-4 py-3">
+            <span className="block text-lg font-bold">↻ {textoRepeticion(f)}</span>
+            <span className="block text-base text-tinta-suave">
+              Para cambiar cómo se repite, hazlo en el Calendario del iPhone. Aquí puedes cambiar lo demás.
+            </span>
           </div>
-        </div>
+        ) : (
+          <div>
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Se repite?</span>
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(NOMBRE_REPETICION) as Repeticion[]).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => cambiarRepeticion(r)}
+                  className={
+                    "min-h-12 rounded-2xl px-4 text-lg font-bold transition " +
+                    (f.repeticion === r ? "bg-acento text-acento-tinta" : "bg-superficie-2 text-tinta-suave")
+                  }
+                >
+                  {NOMBRE_REPETICION[r]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!repeticionDeAfuera && f.repeticion !== "nunca" && (
+          <div className="-mt-1 space-y-3 rounded-2xl bg-superficie-2 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-lg font-bold">Cada</span>
+              <Contador
+                valor={f.intervalo ?? 1}
+                min={1}
+                max={30}
+                alCambiar={(v) => set("intervalo", v > 1 ? v : undefined)}
+              />
+              <span className="text-lg font-bold">{unidadRepeticion(f.repeticion, f.intervalo ?? 1)}</span>
+            </div>
+            {f.repeticion === "semanal" && (
+              <div>
+                <span className="mb-1.5 block text-base font-bold text-tinta-suave">Los días</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {DIAS_CORTOS.map((d, i) => {
+                    const activo = diasDeLaSemana(f).includes(i);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        aria-pressed={activo}
+                        onClick={() => cambiarDiasSemana(i)}
+                        className={cx(
+                          "min-h-12 min-w-12 rounded-full px-3 text-lg font-bold capitalize transition",
+                          activo ? "bg-acento text-acento-tinta" : "bg-superficie text-tinta-suave",
+                        )}
+                      >
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {f.repeticion === "anual" && partes(f.fecha).mes === 2 && partes(f.fecha).dia === 29 && (
           <p className="-mt-3 text-base text-tinta-suave">En los años que no son bisiestos, se muestra el 28 de febrero.</p>
@@ -249,7 +364,7 @@ export default function EventoModal({
           </p>
         )}
 
-        {f.repeticion !== "nunca" && (
+        {!repeticionDeAfuera && f.repeticion !== "nunca" && (
           <Campo etiqueta="Hasta (déjalo vacío si no termina)">
             <Entrada type="date" value={f.repetirHasta ?? ""} min={f.fecha} onChange={(e) => set("repetirHasta", e.target.value)} />
             {hastaAntes && (
@@ -274,9 +389,33 @@ export default function EventoModal({
           </span>
         </button>
 
+        <Campo etiqueta="Lugar (opcional)">
+          <Entrada value={f.lugar ?? ""} onChange={(e) => set("lugar", e.target.value)} placeholder="Ej.: Clínica Alemana, Colegio" />
+        </Campo>
+
         <Campo etiqueta="Nota">
           <AreaTexto value={f.nota ?? ""} onChange={(e) => set("nota", e.target.value)} placeholder="Ej.: llevar la carpeta" />
         </Campo>
+
+        {calendarios.length > 0 && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!f.soloPanel}
+            onClick={() => set("soloPanel", f.soloPanel ? undefined : true)}
+            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+          >
+            <Casilla marcada={!f.soloPanel} />
+            <span className="flex-1">
+              <span className="block text-lg font-bold">📱 También en el calendario “{calendarios[0].nombre}”</span>
+              <span className="block text-base text-tinta-suave">
+                {f.soloPanel
+                  ? "Queda sólo en el panel: no se ve en los iPhone."
+                  : "Se ve en el Calendario de los iPhone de la familia y avisa con sus alertas."}
+              </span>
+            </span>
+          </button>
+        )}
       </div>
     </Modal>
   );
