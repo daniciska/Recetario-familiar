@@ -364,6 +364,45 @@ const unaRegla = (v: ICAL.Component): ICAL.Recur | null => {
 };
 const tieneFiltros = (r: ICAL.Recur) => Object.keys(r.parts ?? {}).length > 0;
 
+// En las reglas diarias, semanales y por horas ical.js busca la siguiente ocurrencia sin tope (también al
+// crear el iterador): con una que nunca calza (BYMONTHDAY=30 con BYMONTH=2, INTERVAL=7 con un BYDAY que
+// no es el día del inicio) no vuelve más. Cada paso de esa búsqueda mira el plazo de quien la recorre.
+let plazoIcal = Infinity;
+const SIN_FIN = new Error("regla que no termina");
+{
+  // check_contracting_rules (interno de ical.js 2.x) se llama una vez por paso, sea cual sea la frecuencia.
+  const P = (ICAL as unknown as { RecurIterator?: { prototype: { check_contracting_rules?: () => boolean } } }).RecurIterator?.prototype;
+  const f = P?.check_contracting_rules;
+  if (P && typeof f === "function") {
+    let pasos = 0;
+    P.check_contracting_rules = function (this: unknown) {
+      if ((++pasos & 1023) === 0 && performance.now() > plazoIcal) throw SIN_FIN;
+      return f.call(this);
+    };
+  }
+}
+
+/** Iterador de la serie que no pasa de `limite` (performance.now()). `cortado`: se acabó el plazo. */
+function recorrer(v: ICAL.Component, limite: number) {
+  const r = { cortado: false, next: (): ICAL.Time | null => null };
+  const conPlazo = <T,>(f: () => T): T | null => {
+    const previo = plazoIcal;
+    plazoIcal = Math.min(previo, limite);
+    try {
+      return f();
+    } catch (e) {
+      if (e !== SIN_FIN) throw e;
+      r.cortado = true;
+      return null;
+    } finally {
+      plazoIcal = previo;
+    }
+  };
+  const it = conPlazo(() => new ICAL.Event(v).iterator()); // al crearlo ya busca la primera
+  r.next = () => (it && !r.cortado ? conPlazo(() => it.next()) : null);
+  return r;
+}
+
 /** Un valor de fecha/hora como hora de reloj (flotante) en la zona IANA `tzid`. */
 function relojFlotante(t: ICAL.Time, tzidValor: string | null, tzid: string): ICAL.Time {
   if (t.isDate) return t;
@@ -496,7 +535,7 @@ function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: 
   if (pd) {
     // Cada día que pasa los filtros: la primera y la última ocurrencia de ese día (en la zona de la serie).
     // Los EXDATE no se miran: en el panel quedan como excepciones (ver leerRecurso).
-    const it = new ICAL.Event(adelantar(pd.diaria, desde)).iterator();
+    const it = recorrer(adelantar(pd.diaria, desde), limite);
     const t0 = relojMs(pd.ini);
     for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
       if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) {
@@ -516,9 +555,9 @@ function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: 
       if (fa > hasta) break;
       for (const f of [fa, fechaEnPanel(b, tzid)]) if (f >= desde && f <= hasta) r.push(f);
     }
-    return { fechas: [...new Set(r)].sort(), completo };
+    return { fechas: [...new Set(r)].sort(), completo: completo && !it.cortado };
   }
-  const it = new ICAL.Event(adelantar(base, desde)).iterator();
+  const it = recorrer(adelantar(base, desde), limite);
   for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
     if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) {
       completo = false;
@@ -529,7 +568,7 @@ function expandir(v: ICAL.Component, tzid: string | null, desde: string, hasta: 
     if (f > hasta) break;
     if (f >= desde) r.push(f);
   }
-  return { fechas: [...new Set(r)], completo };
+  return { fechas: [...new Set(r)], completo: completo && !it.cortado };
 }
 
 interface Instancia {
@@ -562,13 +601,13 @@ function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, In
   const limite = performance.now() + TOPE_MS;
   for (const [desde, hasta] of tramos) {
     const anioDesde = Number(desde.slice(0, 4)) - 1;
-    const it = new ICAL.Event(adelantar(copia, desde)).iterator();
+    const it = recorrer(adelantar(copia, desde), limite);
     for (let i = 0, n: ICAL.Time | null; (n = it.next()); i++) {
       if (i >= TOPE_VUELTAS || ((i & 255) === 0 && performance.now() > limite)) return r;
       if (n.year < anioDesde) continue;
       const f = fechaEnPanel(n, ini.tzid);
       if (f > hasta) break;
-      if (buscadas.has(f)) r.set(f, [...(r.get(f) ?? []), { t: n.clone(), tzid: ini.tzid }]);
+      if (f >= desde && buscadas.has(f)) r.set(f, [...(r.get(f) ?? []), { t: n.clone(), tzid: ini.tzid }]);
     }
   }
   return r;
@@ -627,7 +666,11 @@ function reglaSimple(v: ICAL.Component, h: Horario & { tzid: string | null }): R
   if (repeticion === "diaria" && (p.BYMONTHDAY || p.BYMONTH || p.BYSETPOS)) return null;
   if (r.until) res.repetirHasta = aPanel(r.until, r.until.zone === ICAL.Timezone.utcTimezone ? null : h.tzid).fecha;
   else if (r.count) {
-    const { fechas, completo } = expandir(v, h.tzid, h.fecha, "9999-12-31");
+    // La última de la regla, sin mirar los EXDATE: si la última se borró en el iPhone sigue siendo una
+    // excepción dentro del rango (y no se pierde al escribir de vuelta con el mismo COUNT).
+    const sinEx = clonar(v);
+    sinEx.removeAllProperties("exdate");
+    const { fechas, completo } = expandir(sinEx, h.tzid, h.fecha, "9999-12-31");
     if (!completo) return null;
     res.repetirHasta = fechas[fechas.length - 1] ?? h.fecha;
   }
@@ -879,12 +922,24 @@ function ponerExcepciones(v: ICAL.Component, ev: Evento, cambiadas: Set<string>,
     for (const x of p.getValues()) if (x instanceof ICAL.Time) previas.push({ t: x, tzid });
   }
   v.removeAllProperties("exdate");
-  if (!rehacer) {
+  // Por horas un EXDATE borra una sola toma, no el día: si la serie se movió de hora, los que había se
+  // corren lo mismo que su inicio (en hora de Santiago, sin cambiar de día) en vez de recalcularse.
+  const a = antes && SEGUNDOS[unaRegla(v)?.freq ?? ""] ? valorDe(antes.getFirstProperty("dtstart")) : null;
+  const n = a ? valorDe(v.getFirstProperty("dtstart")) : null;
+  let corrimiento: number | null = null;
+  if (a && n && !a.t.isDate && !n.t.isDate) {
+    const pa = aPanel(a.t, a.tzid);
+    const pn = aPanel(n.t, n.tzid);
+    corrimiento = (pn.instante! - pa.instante! - diferenciaDias(pa.fecha, pn.fecha) * 86_400_000) / 1000;
+  }
+  if (!rehacer || corrimiento !== null) {
     const puestas = new Set<string>();
     for (const i of previas) {
       const f = aPanel(i.t, i.tzid).fecha;
       if (!faltan.has(f)) continue;
-      v.addProperty(propInstancia("exdate", i));
+      const t = i.t.clone();
+      if (corrimiento && !t.isDate) t.addDuration(ICAL.Duration.fromSeconds(corrimiento));
+      v.addProperty(propInstancia("exdate", { t, tzid: i.tzid }));
       puestas.add(f);
     }
     for (const f of puestas) faltan.delete(f);
@@ -973,6 +1028,17 @@ function moverSerieDeAfuera(v: ICAL.Component, ev: Evento) {
     const r = (prop.getFirstValue() as ICAL.Recur).clone();
     const p = (r.parts ?? {}) as Record<string, (string | number)[]>;
     if (cambioHora && ("BYHOUR" in p || "BYMINUTE" in p || "BYSECOND" in p)) no("su repetición tiene horas fijas.");
+    // Por horas o minutos, BYDAY (y los demás BY…) sólo filtran las tomas: la regla se puede correr (o dejar
+    // igual) sólo si todas las tomas del día se corren los mismos días que el inicio.
+    if (SEGUNDOS[r.freq] && Object.keys(p).length && (delta || cambioHora) && !ini.t.isDate && !nuevo.isDate) {
+      const dia = 86_400_000;
+      let g = dia; // cada cuánto se repiten las tomas dentro del día: mcd(paso, 24 h)
+      for (let x = Math.max(1, r.interval || 1) * SEGUNDOS[r.freq] * 1000; x; ) [g, x] = [x, g % x];
+      const s = relojMs(nuevo) - relojMs(ini.t);
+      for (let x = horaDelDia(ini.t) % g; x < dia; x += g) {
+        if (Math.floor((x + s) / dia) !== delta) no("con esa hora las tomas se correrían de día.");
+      }
+    }
     if (delta) {
       const dias = (p.BYDAY ?? []).map(String);
       const porDiasDeSemana = r.freq === "DAILY" || r.freq === "WEEKLY" || !!SEGUNDOS[r.freq];
@@ -985,11 +1051,16 @@ function moverSerieDeAfuera(v: ICAL.Component, ev: Evento) {
       if (r.freq === "WEEKLY" && r.interval > 1) {
         r.wkst = ICAL.Recur.icalDayToNumericDay(mover(ICAL.Recur.numericDayToIcalDay(r.wkst || ICAL.Time.MONDAY))) as typeof r.wkst;
       }
-      if (r.until) {
+      if (r.until && (r.until.isDate || ini.t.isDate || nuevo.isDate)) {
         const u = r.until.clone();
         u.adjust(delta, 0, 0, 0);
         r.until = u;
       }
+    }
+    // UNTIL con hora se corre lo mismo que la hora de reloj del inicio (días y horas): cada ocurrencia
+    // sigue dentro o fuera igual que antes (Outlook, Teams y Zoom ponen UNTIL = inicio de la última).
+    if (r.until && !r.until.isDate && !ini.t.isDate && !nuevo.isDate && (delta || cambioHora)) {
+      r.until = deRelojMs(relojMs(r.until) + relojMs(nuevo) - relojMs(ini.t), r.until.zone);
     }
     // UNTIL tiene que ser del mismo tipo que DTSTART (RFC 5545 §3.3.10).
     if (r.until && r.until.isDate !== nuevo.isDate) {

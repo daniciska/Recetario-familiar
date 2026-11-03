@@ -2,7 +2,8 @@
 //   GET  /api/calendario                → si el servidor tiene cuenta de iCloud y cómo va cada calendario conectado
 //   POST /api/calendario/calendarios    → los calendarios de la cuenta de iCloud (para elegir uno)
 //   POST /api/calendario/conectar       {url, subirExistentes} → lo conecta y sincroniza por primera vez
-//   POST /api/calendario/sincronizar    {resolver?} → sincroniza ahora (lo piden los equipos al guardar un evento)
+//   POST /api/calendario/sincronizar    {resolver?, codigo?, uids?} → sincroniza ahora (lo piden los equipos al
+//                                        guardar un evento); con `resolver`, la respuesta al aviso `codigo` (de los `uids`)
 //   POST /api/calendario/desconectar    {id} → lo desconecta (los eventos quedan en el panel)
 import type { Config, Context } from "@netlify/functions";
 import {
@@ -90,7 +91,16 @@ export default async (req: Request, context: Context) => {
             creada: c.creada,
             eventos: lista.filter((x) => x.externo?.conexion === c.id).length,
             estado: e
-              ? { ultima: e.ultima, intento: e.intento, error: e.error ?? null, resumen: e.resumen, pendiente: !!e.pendiente, avisos: e.avisos ?? [] }
+              ? {
+                  ultima: e.ultima,
+                  intento: e.intento,
+                  error: e.error ?? null,
+                  resumen: e.resumen,
+                  pendiente: !!e.pendiente,
+                  avisos: e.avisos ?? [],
+                  // Una respuesta a un aviso que espera a que iCloud alcance a responder.
+                  respuesta: e.respuesta && e.respuesta.hasta > new Date().toISOString() ? e.respuesta.resolver : null,
+                }
               : null,
           };
         }),
@@ -155,12 +165,18 @@ export default async (req: Request, context: Context) => {
     try {
       await cambiarAcceso(s.familiaId, (a) => {
         if (!a) throw new Error("Familia sin acceso");
+        // Volver a leer la propia escritura (Blobs reintenta solo si se perdió la respuesta) es un éxito.
+        if ((a.calendarios ?? []).some((c) => c.id === conexion.id)) return a;
         if ((a.calendarios ?? []).some((c) => c.proveedor === "icloud")) throw new Error("YA_CONECTADO");
         return { ...a, calendarios: [...(a.calendarios ?? []), conexion] };
       });
     } catch (e) {
-      await borrarEstado(s.familiaId, conexion.id);
-      if ((e as Error).message === "YA_CONECTADO") return error("Ya hay un calendario de iCloud conectado", 409);
+      // El estado se borra sólo si de verdad la conexión no quedó (con otro error pudo quedar anotada, y el
+      // estado lleva la elección de no subir los eventos que ya estaban).
+      if ((e as Error).message === "YA_CONECTADO") {
+        await borrarEstado(s.familiaId, conexion.id);
+        return error("Ya hay un calendario de iCloud conectado", 409);
+      }
       throw e;
     }
     // La primera sincronización, si queda tiempo (iCloud lento): si no, queda pendiente y el equipo la
@@ -174,8 +190,10 @@ export default async (req: Request, context: Context) => {
     if (!conexiones.length) return json({ resultados: [] });
     const resolver = body.resolver === "borrar" || body.resolver === "recuperar" ? (body.resolver as Resolver) : undefined;
     const codigo = typeof body.codigo === "string" ? body.codigo : undefined;
+    const uids =
+      Array.isArray(body.uids) && body.uids.every((u: unknown) => typeof u === "string") ? (body.uids as string[]).slice(0, 5000) : undefined;
     const resultados = [];
-    for (const c of conexiones) resultados.push({ id: c.id, ...(await sincronizar(s.familiaId, c, { limite, resolver, codigo })) });
+    for (const c of conexiones) resultados.push({ id: c.id, ...(await sincronizar(s.familiaId, c, { limite, resolver, codigo, uids })) });
     return json({ resultados });
   }
 

@@ -372,7 +372,7 @@ function FilaTarea({
 // ---------- Editor de quehaceres ----------
 
 function EditorTarea({ tarea, hoy, paraInicial, alCerrar }: { tarea?: Tarea; hoy: string; paraInicial?: string; alCerrar: () => void }) {
-  const { estado, actualizar } = useDatos();
+  const { estado, actualizar, nube } = useDatos();
   const [f, setF] = useState<Tarea>(
     () => tarea ?? { id: nuevoId("tar"), titulo: "", miembroId: paraInicial, hecha: false, creada: new Date().toISOString(), repetir: "nunca" },
   );
@@ -412,7 +412,12 @@ function EditorTarea({ tarea, hoy, paraInicial, alCerrar }: { tarea?: Tarea; hoy
       await actualizar("estrellas", (l) => l.map((m) => (m.ref === de ? { ...m, ref: a } : m)));
     }
     if (ok) alCerrar();
-    else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
+    else
+      setError(
+        nube
+          ? "No se pudo guardar: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo."
+          : "No se pudo guardar: el almacenamiento de este equipo está lleno.",
+      );
   };
   const borrar = () => {
     actualizar("tareas", (l) => l.filter((t) => t.id !== f.id));

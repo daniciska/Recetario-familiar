@@ -93,7 +93,7 @@ components/                   las vistas
 **Reglas:**
 - Se sincroniza cada 5 minutos (función programada `calendario-programado`) y 1,5 s después de guardar un evento en cualquier equipo.
 - Si un evento se cambió en los dos lados, gana el cambio más reciente. Si en un lado se borró y en el otro se cambió, gana el cambio (nada se pierde).
-- Si de una vez se borrarían muchos eventos (p. ej. al cargar un respaldo viejo o si iCloud devolviera el calendario vacío), no borra nada y pregunta en *Familia*: borrarlos también del otro lado o traerlos de vuelta. La respuesta vale sólo para esos eventos: otro borrado masivo vuelve a preguntar.
+- Si de una vez se borrarían muchos eventos (p. ej. al cargar un respaldo viejo o si iCloud devolviera el calendario vacío), no borra nada y pregunta en *Familia*: borrarlos también del otro lado o traerlos de vuelta. La respuesta vale sólo para los eventos que mostraba el aviso: si mientras tanto se borraron otros, vuelve a preguntar, y otro borrado masivo después también. Si iCloud está lento, la respuesta queda anotada y la aplica sola la sincronización siguiente.
 - Si iCloud está lento o el calendario es muy grande, cada sincronización avanza lo que alcanza y sigue en la siguiente (la programada tiene más tiempo). Mientras quede algo del iPhone sin leer, no se suben eventos nuevos de la pared (podría ser su par y se duplicaría).
 - En un calendario de sólo lectura, lo que se cambia o borra en la pared vuelve a quedar como en iCloud (con un aviso).
 - Lo que el iPhone guarda y el panel no maneja (alertas, invitados, adjuntos, URL) se conserva: al actualizar sólo se cambia lo que se cambió en la pared.

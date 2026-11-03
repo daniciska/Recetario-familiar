@@ -61,14 +61,21 @@ export interface EstadoSync {
   pendiente?: boolean; // quedó trabajo para la próxima vuelta
   ultima?: string; // ISO: última vez que terminó bien
   intento?: string; // ISO: último intento
-  error?: { mensaje: string; codigo?: string; cuando: string; cuantos?: number } | null;
+  /** `uids`: los eventos que mostraba un aviso de borrado masivo (la respuesta vale sólo para esos). */
+  error?: { mensaje: string; codigo?: string; cuando: string; cuantos?: number; uids?: string[] } | null;
   resumen?: Resumen;
   avisos?: string[];
   /**
-   * La familia aceptó borrar muchos de una vez: vale sólo para esos (`uids`) y un rato, mientras se
-   * terminan de borrar. Otro borrado masivo vuelve a preguntar.
+   * La familia aceptó borrar muchos de una vez: vale sólo para esos (`uids`, de uno o de los dos avisos)
+   * y un rato, mientras se terminan de borrar. Otro borrado masivo vuelve a preguntar.
    */
-  decision?: { codigo: string; hasta: string; uids?: string[] };
+  decision?: { hasta: string; uids?: string[] };
+  /**
+   * La respuesta a un aviso de borrado masivo, anotada hasta que una vuelta alcance a listar el
+   * calendario (iCloud lento, o se tomó el candado al final del plazo). Vale sólo para los eventos que
+   * mostró el aviso (`uids`).
+   */
+  respuesta?: { resolver: Resolver; codigo: string; uids?: string[]; hasta: string };
   /**
    * Al conectar se eligió no subir los eventos que ya estaban: sus ids. La primera vuelta (con el
    * candado) los deja "sólo en el panel"; se borra cuando quedó guardado.
@@ -91,6 +98,11 @@ export interface Resultado {
   resumen?: Resumen;
   error?: EstadoSync["error"];
   pendiente?: boolean;
+  /**
+   * Qué pasó con la respuesta a un aviso: se aplicó, quedó anotada (sigue sola), mientras tanto se
+   * borraron otros (no se aplicó) o ese aviso ya no estaba.
+   */
+  respuesta?: "aplicada" | "anotada" | "vieja" | "sinAviso";
 }
 
 // ---------- Credenciales y almacenamiento ----------
@@ -228,6 +240,8 @@ interface Opciones {
   resolver?: Resolver;
   /** El aviso que se estaba mostrando cuando se respondió (si ya cambió, la respuesta no vale). */
   codigo?: string;
+  /** Los eventos de ese aviso (`error.uids`): si mientras tanto se borraron otros, no se aceptan a ciegas. */
+  uids?: string[];
 }
 
 export async function sincronizar(familiaId: string, conexion: Conexion, op: Opciones): Promise<Resultado> {
@@ -236,15 +250,18 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
   const esperar = op.resolver ? Math.max(0, op.limite - Date.now() - 3500) : 0;
   const r = await conCandado(familiaId, conexion.id, async () => {
     let resultado: Resultado = { ok: true };
+    let respuesta: Resultado["respuesta"];
     // Si quedó trabajo o mientras tanto cambió algo en el panel, se da otra vuelta (hasta 3, si alcanza el tiempo).
     for (let vuelta = 0; vuelta < 3; vuelta++) {
       resultado = await unaVuelta(familiaId, conexion, { ...op, resolver: vuelta ? undefined : op.resolver });
+      // Una respuesta anotada se aplica en una vuelta siguiente (de ésta o de la programada).
+      if (resultado.respuesta && respuesta !== "aplicada") respuesta = resultado.respuesta;
       if (!resultado.ok || op.limite - Date.now() < 4000) break;
       const estado = await leerEstado(familiaId, conexion.id);
       const col = await leerColeccion(familiaId, "eventos");
       if (!estado || (!estado.pendiente && estado.versionEventos === (col?.version ?? 0))) break;
     }
-    return resultado;
+    return respuesta ? { ...resultado, respuesta } : resultado;
   }, esperar);
   return r === "ocupado" ? { ok: !op.resolver, ocupado: true } : r;
 }
@@ -256,15 +273,20 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
   const estado: EstadoSync = (await leerEstado(familiaId, conexion.id)) ?? { recursos: {} };
   estado.intento = ahora;
   if (estado.decision && estado.decision.hasta < ahora) delete estado.decision;
-  // La respuesta vale sólo para el aviso que se respondió (y si sigue siendo el que está a la vista).
-  const respondido =
-    op.resolver && estado.error?.codigo?.startsWith("MUCHOS_BORRADOS_") && (!op.codigo || op.codigo === estado.error.codigo)
-      ? estado.error.codigo
-      : undefined;
-  const fallar = async (mensaje: string, codigo?: string, cuantos?: number): Promise<Resultado> => {
-    estado.error = { mensaje, codigo, cuando: ahora, cuantos };
+  if (estado.respuesta && estado.respuesta.hasta < ahora) delete estado.respuesta;
+  // La respuesta vale sólo para el aviso que se respondió (si sigue siendo el que está a la vista) y para
+  // su lista. Queda anotada en el estado: si esta vuelta no alcanza a listar el calendario, la aplica la
+  // próxima que sí alcance (la programada, por ejemplo).
+  let respuesta: Resultado["respuesta"];
+  if (op.resolver && estado.error?.codigo?.startsWith("MUCHOS_BORRADOS_") && (!op.codigo || op.codigo === estado.error.codigo)) {
+    const hasta = new Date(Date.now() + 30 * 60_000).toISOString();
+    estado.respuesta = { resolver: op.resolver, codigo: estado.error.codigo, uids: op.uids ?? estado.error.uids, hasta };
+    respuesta = "anotada";
+  } else if (op.resolver) respuesta = "sinAviso";
+  const fallar = async (mensaje: string, codigo?: string, cuantos?: number, uids?: string[]): Promise<Resultado> => {
+    estado.error = { mensaje, codigo, cuando: ahora, cuantos, ...(uids ? { uids } : {}) };
     await guardarEstado(familiaId, conexion.id, estado);
-    return { ok: false, error: estado.error };
+    return { ok: false, error: estado.error, respuesta };
   };
 
   const cred = credencialesICloud();
@@ -292,15 +314,6 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       ops.push({ tipo: "limpiar", vivas });
       eventos = eventos.map((e) => (e.externo && !vivas.includes(e.externo.conexion) ? sinExterno(e) : e));
     }
-    // Al conectar se eligió que los eventos que ya estaban queden sólo en el panel (se marca aquí, con
-    // el candado: así ninguna otra sincronización alcanza a subirlos antes).
-    const inicial = new Set(estado.soloPanelInicial ?? []);
-    if (inicial.size)
-      eventos = eventos.map((e) => {
-        if (!inicial.has(e.id) || e.soloPanel || e.externo) return e;
-        ops.push({ tipo: "soloPanel", id: e.id });
-        return { ...e, soloPanel: true };
-      });
     const miembros = miembrosDe(colMiembros?.datos);
     const hoy = ahoraEnSantiago().fecha;
     const ctx: Contexto = { conexion: conexion.id, miembros, hoy };
@@ -317,6 +330,8 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     // Atajo: nada cambió en el panel ni en el calendario (un solo pedido liviano a iCloud).
     if (
       !op.resolver &&
+      !estado.respuesta &&
+      !estado.soloPanelInicial?.length &&
       !estado.pendiente &&
       !estado.error &&
       !porReleer &&
@@ -351,6 +366,20 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       ops.push({ tipo: "vincular", id: e.id, externo: ext });
       return { ...e, externo: ext };
     });
+    // Al conectar se eligió que los eventos que ya estaban queden sólo en el panel (se marca aquí, con
+    // el candado: así ninguna otra sincronización alcanza a subirlos antes). Mientras no se haya leído
+    // todo el calendario la marca vale sólo en memoria (ver `faltaLeer`): los que tienen par en iCloud se
+    // vinculan, y la pared no muestra "sólo en el panel" algo que después se sube.
+    const inicial = new Set(estado.soloPanelInicial ?? []);
+    const marcasInicial = new Set<Op>();
+    if (inicial.size)
+      eventos = eventos.map((e) => {
+        if (!inicial.has(e.id) || e.soloPanel || e.externo) return e;
+        const m: Op = { tipo: "soloPanel", id: e.id };
+        marcasInicial.add(m);
+        ops.push(m);
+        return { ...e, soloPanel: true };
+      });
 
     const grupos = new Map<string, Evento[]>();
     for (const e of eventos) {
@@ -397,41 +426,58 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     }
     for (const href of lista.recursos.keys()) if (!uidPorHref.has(href)) nuevosRemotos.push(href);
 
-    // Lo que la familia eligió cuando se iba a borrar mucho de una vez queda anotado en el estado, así
-    // vale también para lo que no alcance en esta vuelta.
-    // Cada respuesta toca sólo la lista de su aviso: "panel" son los borrados aquí que se borrarían en
-    // iCloud; "iCloud", los que desaparecieron allá y se borrarían aquí.
-    if (op.resolver === "recuperar" && respondido === "MUCHOS_BORRADOS_PANEL") {
-      for (const uid of borrarAlla) estado.recursos[uid].etag = null; // se vuelve a traer desde iCloud
-      traer.push(...borrarAlla.splice(0));
+    // Lo que la familia eligió cuando se iba a borrar mucho de una vez. Cada respuesta toca sólo la lista
+    // de su aviso ("panel": los borrados aquí que se borrarían en iCloud; "iCloud": los que desaparecieron
+    // allá y se borrarían aquí), y sólo a los eventos que mostró el aviso: lo borrado después pasa por el
+    // seguro como siempre.
+    const resp = estado.respuesta;
+    if (resp) {
+      delete estado.respuesta; // se aplica ahora o ya no vale
+      const panel = resp.codigo === "MUCHOS_BORRADOS_PANEL";
+      const l = panel ? borrarAlla : borrarAqui;
+      const vistos = new Set(resp.uids ?? l);
+      if (resp.resolver === "recuperar") {
+        // Traerlos de vuelta no borra nada: vale para los del aviso que todavía se borrarían (lo borrado
+        // después pasa por el seguro como siempre).
+        respuesta = "aplicada";
+        const esos = l.filter((u) => vistos.has(u));
+        if (panel) {
+          for (const uid of esos) estado.recursos[uid].etag = null; // se vuelve a traer desde iCloud
+          traer.push(...esos);
+        } else {
+          for (const uid of esos) estado.recursos[uid].huella = ""; // se vuelve a subir a iCloud
+          recrearAlla.push(...esos);
+        }
+        const quedan = l.filter((u) => !vistos.has(u));
+        l.splice(0, l.length, ...quedan);
+      } else if (l.some((u) => !vistos.has(u))) respuesta = "vieja"; // se borraron otros: el seguro decide de nuevo
+      else {
+        respuesta = "aplicada";
+        // Se suma a lo ya aceptado (con los dos avisos a la vez, una respuesta no deshace la otra). Queda
+        // anotado en el estado, así vale también para lo que no alcance en esta vuelta.
+        const uids = [...new Set([...(estado.decision?.uids ?? []), ...l])];
+        estado.decision = { hasta: new Date(Date.now() + 30 * 60_000).toISOString(), uids };
+      }
     }
-    if (op.resolver === "recuperar" && respondido === "MUCHOS_BORRADOS_ICLOUD") {
-      for (const uid of borrarAqui) estado.recursos[uid].huella = ""; // se vuelve a subir a iCloud
-      recrearAlla.push(...borrarAqui.splice(0));
-    }
-    if (op.resolver === "borrar" && respondido)
-      estado.decision = {
-        codigo: respondido,
-        hasta: new Date(Date.now() + 30 * 60_000).toISOString(),
-        uids: respondido === "MUCHOS_BORRADOS_PANEL" ? [...borrarAlla] : [...borrarAqui],
-      };
     // Seguro: si de una vez se borraría mucho, se pregunta antes (p. ej. al restaurar un respaldo viejo).
     // Lo que la familia ya aceptó no cuenta.
     const total = Object.keys(estado.recursos).length;
     const muchos = (n: number) => n >= 5 && n > total * 0.3;
-    const sinAceptar = (l: string[], codigo: string) =>
-      l.filter((u) => !(estado.decision?.codigo === codigo && estado.decision.uids?.includes(u))).length;
-    if (muchos(sinAceptar(borrarAlla, "MUCHOS_BORRADOS_PANEL")))
+    const aceptados = new Set(estado.decision?.uids ?? []);
+    const sinAceptar = (l: string[]) => l.filter((u) => !aceptados.has(u)).length;
+    if (muchos(sinAceptar(borrarAlla)))
       return fallar(
         `Se borraron del panel ${borrarAlla.length} eventos que están en iCloud. ¿Se borran también de los iPhone?`,
         "MUCHOS_BORRADOS_PANEL",
         borrarAlla.length,
+        [...borrarAlla],
       );
-    if (muchos(sinAceptar(borrarAqui, "MUCHOS_BORRADOS_ICLOUD")))
+    if (muchos(sinAceptar(borrarAqui)))
       return fallar(
         `Desaparecieron de iCloud ${borrarAqui.length} eventos. ¿Se borran también del panel?`,
         "MUCHOS_BORRADOS_ICLOUD",
         borrarAqui.length,
+        [...borrarAqui],
       );
 
     const yaVistos = new Set<string>(); // eventos del panel ya resueltos con una serie del calendario
@@ -460,6 +506,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       const todos = [...new Set([...ids, ...nuevos.map((e) => e.id)])];
       ops.push({ tipo: "grupo", uid, ids: todos, eventos: nuevos, base: huellaLocal(sel(uid, todos)) });
     };
+    const conFechas = (l: Evento[]) => l.some((e) => e.fechas?.length);
     const masReciente = (local: Evento[]) => enCalendario(local).map((e) => e.actualizado ?? "").sort().pop() ?? "";
 
     // 1. Leer del calendario lo que hace falta (de a tandas, mientras alcance el tiempo).
@@ -492,7 +539,9 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
         if (r === "conflicto") pendiente = true; // alguien lo cambió recién: se resuelve en la próxima vuelta
         else if (r === "noExiste") parches.set(uid, null);
         else {
-          parches.set(uid, { href, etag: r.etag, huella: h, ids: idsDe(local) });
+          // Una serie de afuera (con fechas sueltas) se vuelve a leer en la próxima vuelta: al cambiarle la
+          // hora pueden cambiar sus días en la pared (otra zona), y su huella no los incluye.
+          parches.set(uid, { href, etag: conFechas(local) ? null : r.etag, huella: h, ids: idsDe(local) });
           resumen.subidos++;
         }
       } catch (e) {
@@ -596,6 +645,9 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     // el par de un evento del panel sin vínculo. Mientras queden, no se crea ni se borra nada por
     // ausencia (se duplicaría o se borraría algo que sí está).
     const faltaLeer = nuevosRemotos.some((h) => !procesados.has(h));
+    if (faltaLeer && marcasInicial.size) {
+      for (let i = ops.length - 1; i >= 0; i--) if (marcasInicial.has(ops[i])) ops.splice(i, 1);
+    }
     /** ¿La serie que ya no está en su href se resolvió (o se puede estar resolviendo) en otro? */
     const enOtroHref = (uid: string) => {
       if (parches.get(uid)) return true; // el paso 1 la encontró en otro href: cambió de dirección
@@ -659,7 +711,8 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
           return alFallar(e);
         }
         if (r !== "existe") {
-          parches.set(uid, { href: r.href, etag: r.etag, huella: huellaGrupo(conExterno, miembros), ids: idsDe(conExterno) });
+          const etag = conFechas(conExterno) ? null : r.etag; // (ver subirGrupo)
+          parches.set(uid, { href: r.href, etag, huella: huellaGrupo(conExterno, miembros), ids: idsDe(conExterno) });
           if (vincular) ops.push({ tipo: "vincular", id: vincular.id, externo: { conexion: conexion.id, uid } });
           resumen.subidos++;
           return;
@@ -744,7 +797,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
         if (rec) estado.recursos[uid] = rec;
         else delete estado.recursos[uid];
       }
-      delete estado.soloPanelInicial;
+      if (!faltaLeer) delete estado.soloPanelInicial;
     }
     estado.ctag = pendiente ? null : lista.ctag;
     estado.versionEventos = versionFinal;
@@ -759,14 +812,14 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     estado.avisos = avisos.length ? avisos.slice(0, 5) : undefined;
     await guardarEstado(familiaId, conexion.id, estado);
     if (rechazo) throw rechazo.reason;
-    return { ok: !fallo, resumen, pendiente, error: estado.error };
+    return { ok: !fallo, resumen, pendiente, error: estado.error, respuesta };
   } catch (e) {
     if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") {
       // No alcanzó el tiempo (p. ej. iCloud lento al listar): no es un error, sigue la próxima vuelta.
       estado.pendiente = true;
       estado.ctag = null;
       await guardarEstado(familiaId, conexion.id, estado);
-      return { ok: true, pendiente: true };
+      return { ok: true, pendiente: true, respuesta };
     }
     if (e instanceof ErrorCalDAV) return fallar(e.message, e.codigo);
     console.error("sincronizar", e);

@@ -11,10 +11,12 @@ import { Boton, Casilla, Modal, cx } from "./ui";
 interface EstadoSync {
   ultima?: string;
   intento?: string;
-  error: { mensaje: string; codigo?: string; cuando: string; cuantos?: number } | null;
+  error: { mensaje: string; codigo?: string; cuando: string; cuantos?: number; uids?: string[] } | null;
   resumen?: { traidos: number; subidos: number; borradosAqui: number; borradosAlla: number };
   pendiente: boolean;
   avisos: string[];
+  /** Una respuesta a un aviso anotada, que se aplica en cuanto iCloud alcance a responder. */
+  respuesta?: "borrar" | "recuperar" | null;
 }
 
 interface Conexion {
@@ -106,18 +108,24 @@ export function SeccionICloud() {
   };
 
   const sincronizar = async (resolver?: "borrar" | "recuperar") => {
-    // Con la respuesta va el aviso que se estaba viendo: si mientras tanto cambió, no se aplica a ciegas.
-    const codigo = info?.conexiones[0]?.estado?.error?.codigo;
-    const r = await pedir<{ resultados: { ok: boolean; ocupado?: boolean; error?: { mensaje: string } }[] }>(
-      "/api/calendario/sincronizar",
-      resolver ? { resolver, codigo } : {},
-    );
-    if (r?.status === 200 && r.datos.resultados[0]?.ocupado)
+    // Con la respuesta va el aviso que se estaba viendo (y sus eventos): si mientras tanto cambió, no se
+    // aplica a ciegas.
+    const error = info?.conexiones[0]?.estado?.error;
+    const r = await pedir<{
+      resultados: { ok: boolean; ocupado?: boolean; error?: { mensaje: string; codigo?: string }; respuesta?: "aplicada" | "anotada" | "vieja" | "sinAviso" }[];
+    }>("/api/calendario/sincronizar", resolver ? { resolver, codigo: error?.codigo, uids: error?.uids } : {});
+    const res = r?.status === 200 ? r.datos.resultados[0] : undefined;
+    if (res?.ocupado)
       setMsg(
         resolver
           ? "Se estaba sincronizando y la respuesta no alcanzó a pasar: vuelve a tocar el botón en unos segundos."
           : "Ya se estaba sincronizando: en un momento queda al día.",
       );
+    else if (resolver && res?.respuesta === "anotada")
+      setMsg("Respuesta anotada: iCloud está lento, así que se aplica sola en la próxima sincronización (unos minutos).");
+    else if (resolver && res?.respuesta === "vieja" && res.error?.codigo?.startsWith("MUCHOS_BORRADOS_"))
+      setMsg("Mientras tanto se borraron otros eventos, así que no se borró nada todavía: revisa el aviso de nuevo.");
+    else if (resolver && res?.respuesta === "sinAviso") setMsg("Ese aviso ya se había resuelto (desde otro equipo, por ejemplo).");
     await cargar();
     nube?.revisar();
   };
@@ -168,7 +176,7 @@ export function SeccionICloud() {
             {e?.pendiente && " · quedan cambios por pasar (sigue sola en unos minutos)"}. Se revisa cada 5 minutos y al guardar un
             evento.
           </p>
-          {e?.error && <ErrorSync error={e.error} ocupado={ocupado} alResolver={sincronizar} />}
+          {e?.error && <ErrorSync error={e.error} respuesta={e.respuesta ?? null} ocupado={ocupado} alResolver={sincronizar} />}
           {!!e?.avisos.length && (
             <ul className="mb-3 list-disc space-y-1 pl-6 text-base text-tinta-suave">
               {e.avisos.map((a) => (
@@ -257,10 +265,12 @@ export function SeccionICloud() {
 
 function ErrorSync({
   error,
+  respuesta,
   ocupado,
   alResolver,
 }: {
   error: NonNullable<EstadoSync["error"]>;
+  respuesta: "borrar" | "recuperar" | null;
   ocupado: boolean;
   alResolver: (r: "borrar" | "recuperar") => void;
 }) {
@@ -277,7 +287,12 @@ function ErrorSync({
           crea otra, hay que cambiarla allá y volver a publicar).
         </p>
       )}
-      {masivo && (
+      {masivo && respuesta && (
+        <p className="mt-1 text-base">
+          Respuesta anotada ({respuesta === "borrar" ? "borrarlos" : "traerlos de vuelta"}): se aplica sola en cuanto iCloud responda.
+        </p>
+      )}
+      {masivo && !respuesta && (
         <div className="mt-2 flex flex-wrap gap-2">
           <Boton variante="peligro" disabled={ocupado} onClick={() => alResolver("borrar")}>
             {error.codigo === "MUCHOS_BORRADOS_PANEL" ? "Sí, borrarlos también de los iPhone" : "Sí, borrarlos también de la pared"}

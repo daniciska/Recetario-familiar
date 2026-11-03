@@ -280,6 +280,13 @@ export function seSolapa(ev: Evento): boolean {
 
 /** Campos de "cuándo": si se cambió uno en el formulario, van todos juntos (si no, podría quedar un horario que no calza). */
 const CUANDO = ["fecha", "fechaFin", "todoElDia", "horaInicio", "horaFin", "repeticion", "intervalo", "diasSemana", "repetirHasta"] as const;
+/** Partes de "cuándo" que se pueden tomar por separado sin que el horario quede sin sentido. */
+const PARTES_CUANDO: readonly (readonly (keyof Evento)[])[] = [
+  ["todoElDia", "horaInicio", "horaFin"],
+  ["fecha", "fechaFin", "diasSemana"],
+  ["repeticion", "intervalo", "diasSemana"],
+  ["repetirHasta"],
+];
 /** En una repetición del iPhone (fechas sueltas) el formulario sólo cambia la hora. */
 const CUANDO_AFUERA = ["todoElDia", "horaInicio", "horaFin"] as const;
 /** Lo que no se edita en el formulario: siempre como está ahora en la lista (lo pone la sincronización o "borrar sólo este día"). */
@@ -293,8 +300,16 @@ const NO_EDITABLES = new Set<string>(["id", "externo", "fechas", "excepciones", 
 export function aplicarCambios(antes: Evento, despues: Evento, actual: Evento): Evento {
   const igual = (k: keyof Evento) => JSON.stringify(antes[k] ?? null) === JSON.stringify(despues[k] ?? null);
   const r: Record<string, unknown> = { ...actual };
-  const cuando: readonly (keyof Evento)[] = antes.fechas ? CUANDO_AFUERA : CUANDO;
-  if (cuando.some((k) => !igual(k))) for (const k of cuando) r[k] = despues[k];
+  const cuando: readonly (keyof Evento)[] = antes.fechas || actual.fechas ? CUANDO_AFUERA : CUANDO;
+  if (cuando.some((k) => !igual(k))) {
+    // Si el horario no cambió afuera mientras el formulario estaba abierto, va entero (como se ve). Si
+    // cambió (p. ej. el iPhone cerró la serie con "este y futuros"), sólo las partes que se tocaron aquí.
+    const cambioAfuera =
+      !!antes.fechas !== !!actual.fechas || cuando.some((k) => JSON.stringify(antes[k] ?? null) !== JSON.stringify(actual[k] ?? null));
+    for (const g of cambioAfuera ? PARTES_CUANDO : [cuando]) {
+      if (g.some((k) => cuando.includes(k) && !igual(k))) for (const k of g) if (cuando.includes(k)) r[k] = despues[k];
+    }
+  }
   const claves = new Set([...Object.keys(antes), ...Object.keys(despues)] as (keyof Evento)[]);
   for (const k of claves) {
     if (NO_EDITABLES.has(k) || (CUANDO as readonly string[]).includes(k) || igual(k)) continue;

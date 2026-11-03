@@ -125,14 +125,24 @@ export default function EventoModal({
     // El formulario es una copia de cuando se abrió: mientras tanto la sincronización pudo traer cambios
     // del iPhone (un día borrado, otra hora) o vincularlo con iCloud. Por eso se aplica sólo lo que se
     // cambió aquí sobre el evento como está ahora en la lista.
+    // Si se borró (en el iPhone o en otro equipo) mientras se editaba, no se vuelve a crear.
+    let seBorro = false;
     const ok = await actualizar("eventos", (lista) => {
       const actual = lista.find((e) => e.id === limpio.id);
+      seBorro = !!evento && !actual;
+      if (seBorro) return lista;
       if (!actual) return [...lista, { ...limpio, actualizado: ahora }];
       const final: Evento = { ...(evento ? aplicarCambios(limpiar(evento), limpio, actual) : limpio), actualizado: ahora };
       return lista.map((e) => (e.id === limpio.id ? final : e));
     });
-    if (ok) alCerrar();
-    else setError("No se pudo guardar: el almacenamiento de este equipo está lleno.");
+    if (seBorro) setError("Este evento se borró (en el iPhone o en otro equipo) mientras lo tenías abierto.");
+    else if (ok) alCerrar();
+    else
+      setError(
+        nube
+          ? "No se pudo guardar: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo."
+          : "No se pudo guardar: el almacenamiento de este equipo está lleno.",
+      );
   };
 
   /** Borra el evento; si es una serie de iCloud, también los días que se cambiaron sólo esa vez. */
