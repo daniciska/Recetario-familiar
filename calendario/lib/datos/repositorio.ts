@@ -44,15 +44,33 @@ export interface Repositorio {
   alCambiarConexion?(f: (conectado: boolean) => void): () => void;
   /** (Opcional) la familia en la nube a la que está conectado este equipo. */
   readonly familia?: { id: string; nombre: string };
-  /** (Opcional) avisa qué calendarios externos (iCloud) tiene conectados la familia. */
+  /** (Opcional) avisa qué calendarios externos (iCloud o Google) tiene conectados la familia. */
   alCambiarCalendarios?(f: (calendarios: CalendarioConectado[]) => void): () => void;
   /** (Opcional) revisa ya si hubo cambios (p. ej. después de conectar un calendario). */
   revisar?(): void;
 }
 
-/** Un calendario de afuera (iCloud) que la familia conectó al panel. */
+/** Rol de un adulto de la familia (en pantalla: «Madre», «Padre», «Otro adulto»). */
+export type RolAdulto = "madre" | "padre" | "adulto";
+
+/** Alguien con quien se compartió el calendario de Google desde el panel. */
+export interface PersonaCalendario {
+  correo: string; // en minúsculas
+  nombre: string;
+  rol: RolAdulto;
+  permiso: "editor" | "lectura";
+  miembroId?: string; // si corresponde a un integrante del panel
+  invitada: string; // ISO
+  modo: "panel" | "manual"; // "manual" = el panel no pudo compartir y hay que hacerlo en Google Calendar
+}
+
+/** Un calendario de afuera (iCloud o Google) que la familia conectó al panel. */
 export interface CalendarioConectado {
   id: string;
-  proveedor: "icloud";
+  proveedor: "icloud" | "google";
   nombre: string;
+  /** Sólo google, si el servidor lo manda: el adulto dueño del calendario. */
+  dueno?: { nombre: string; correo: string; rol: RolAdulto; miembroId?: string };
+  /** Sólo google, si el servidor lo manda: con quién más se compartió. */
+  personas?: PersonaCalendario[];
 }

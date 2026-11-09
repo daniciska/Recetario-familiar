@@ -71,17 +71,35 @@ export interface Acceso {
   familia: { id: string; nombre: string };
   equipos: Record<string, Equipo>;
   versiones: Partial<Record<ClaveColeccion, number>>;
-  /** Calendarios de afuera conectados (iCloud). El estado de la sincronización va aparte. */
+  /** Calendarios de afuera conectados (iCloud o Google). El estado de la sincronización va aparte. */
   calendarios?: ConexionCalendario[];
+}
+
+/** Rol de un adulto de la familia (en pantalla: «Madre», «Padre», «Otro adulto»). */
+export type RolAdulto = "madre" | "padre" | "adulto";
+
+/** Alguien con quien se compartió el calendario de Google desde el panel. */
+export interface PersonaCalendario {
+  correo: string; // en minúsculas, validado
+  nombre: string; // máx. 60
+  rol: RolAdulto;
+  permiso: "editor" | "lectura";
+  miembroId?: string; // si corresponde a un integrante del panel
+  invitada: string; // ISO
+  modo: "panel" | "manual"; // "manual" = el panel no pudo compartir y hay que hacerlo en Google Calendar
 }
 
 export interface ConexionCalendario {
   id: string;
-  proveedor: "icloud";
+  proveedor: "icloud" | "google";
   nombre: string; // nombre del calendario ("Familia")
-  url: string;
+  url: string; // en icloud, la dirección CalDAV del calendario; en google, url = ID del calendario
   color?: string;
   creada: string;
+  /** Sólo google: el adulto dueño del calendario (es un calendario de su Gmail). */
+  dueno?: { nombre: string; correo: string; rol: RolAdulto; miembroId?: string };
+  /** Sólo google: con quién más se compartió (máx. 20). */
+  personas?: PersonaCalendario[];
 }
 
 /** Lo que ven los equipos de cada calendario conectado. */

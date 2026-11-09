@@ -10,7 +10,7 @@ export class ErrorCalDAV extends Error {
   constructor(
     mensaje: string,
     public status: number,
-    public codigo: "CLAVE" | "RED" | "SERVIDOR" | "NO_ENCONTRADO" | "PERMISO" | "TIEMPO" = "SERVIDOR",
+    public codigo: "CLAVE" | "RED" | "SERVIDOR" | "NO_ENCONTRADO" | "PERMISO" | "TIEMPO" | "CONFIGURACION" = "SERVIDOR",
   ) {
     super(mensaje);
   }
