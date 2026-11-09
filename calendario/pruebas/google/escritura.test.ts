@@ -4,7 +4,7 @@
 //
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/escritura.test.ts
 import ICAL from "ical.js";
-import { NoSePuedeEscribir, escribirRecurso, leerRecurso, parsear } from "../../servidor/ics";
+import { NoSePuedeEscribir, escribirRecurso, huellaGrupo, leerRecurso, parsear } from "../../servidor/ics";
 import type { Evento } from "../../lib/datos/tipos";
 import { agrupar, huellaPieza, serieAIcs, type EvG, type HoraG, type Serie } from "../../servidor/google/serie";
 import {
@@ -424,6 +424,67 @@ caso("crear", () => {
     error = e;
   }
   ok("sin principal → NoSePuedeEscribir", error instanceof NoSePuedeEscribir, String(error));
+});
+
+caso("crear y releer: la pared queda igual (todas las repeticiones del panel)", () => {
+  const base = { miembros: ["sofi"], todoElDia: false, horaInicio: "09:00", horaFin: "10:00", repeticion: "nunca" as Evento["repeticion"] };
+  const eventos: Partial<Evento>[] = [
+    { titulo: "Diaria", fecha: "2026-11-10", repeticion: "diaria" },
+    { titulo: "Semanal varios días", fecha: "2026-11-09", repeticion: "semanal", diasSemana: [0, 2, 4] },
+    { titulo: "Cada 2 semanas", fecha: "2026-11-11", repeticion: "semanal", intervalo: 2 },
+    { titulo: "Mensual del 30", fecha: "2026-11-30", repeticion: "mensual" },
+    { titulo: "Mensual del 31", fecha: "2026-12-31", repeticion: "mensual" },
+    { titulo: "Anual 29 de febrero", fecha: "2028-02-29", repeticion: "anual", todoElDia: true, horaInicio: undefined, horaFin: undefined },
+    { titulo: "Con hasta", fecha: "2026-11-12", repeticion: "semanal", repetirHasta: "2027-01-31" },
+    { titulo: "Varios días", fecha: "2026-12-20", fechaFin: "2026-12-27", todoElDia: true, horaInicio: undefined, horaFin: undefined },
+    { titulo: "Viaje con hora", fecha: "2026-12-20", fechaFin: "2026-12-22", horaInicio: "08:00", horaFin: "20:00" },
+    { titulo: "Sin hora de término", fecha: "2026-11-20", horaFin: undefined },
+    { titulo: "Hasta medianoche", fecha: "2026-11-21", horaInicio: "22:00", horaFin: "23:59", repeticion: "diaria", repetirHasta: "2026-11-25" },
+    { titulo: "Con excepciones", fecha: "2026-11-02", repeticion: "semanal", excepciones: ["2026-11-16", "2026-11-23"], nota: "Llevar\ncolación", lugar: "Gimnasio, sala 2" },
+    { titulo: "Todos", fecha: "2026-11-15", miembros: ["sofi", "tomi"], repeticion: "anual" },
+    { titulo: "En el cambio de hora", fecha: "2026-09-05", horaInicio: "23:30", horaFin: "23:59", repeticion: "diaria", repetirHasta: "2026-09-08" },
+  ];
+  let n = 0;
+  for (const parcial of eventos) {
+    const id = `p${++n}`;
+    const uid = `${id}@calendario-familiar`;
+    const ev = { ...base, ...parcial, id, externo: { conexion: "c1", uid } } as Evento;
+    const B = escribirRecurso([ev], ctx, uid, null);
+    const ins = planearCreacion(B).cuerpo(0);
+    // Lo que guardaría Google y devolvería events.list (timeZone=America/Santiago).
+    const enSantiago = (t: unknown): HoraG => {
+      const x = t as HoraG;
+      if (!x.dateTime) return x;
+      const ms = Date.parse(x.dateTime);
+      const off = Date.UTC(...((): [number, number, number, number, number, number] => {
+        const f = new Intl.DateTimeFormat("en-CA", { timeZone: SCL, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+        const p: Record<string, string> = {};
+        for (const y of f.formatToParts(new Date(ms))) p[y.type] = y.value;
+        return [+p.year, +p.month - 1, +p.day, p.hour === "24" ? 0 : +p.hour, +p.minute, +p.second];
+      })()) - ms;
+      const local = new Date(ms + off).toISOString().slice(0, 19);
+      const a = Math.abs(off / 60000);
+      return { ...x, dateTime: `${local}${off < 0 ? "-" : "+"}${String(Math.floor(a / 60)).padStart(2, "0")}:${String(a % 60).padStart(2, "0")}` };
+    };
+    const google: EvG = {
+      ...(ins as unknown as EvG),
+      etag: '"1"',
+      status: "confirmed",
+      start: enSantiago(ins.start),
+      end: enSantiago(ins.end),
+      iCalUID: `${ins.id}@google.com`,
+      organizer: yo,
+      created: "2026-11-09T12:00:00.000Z",
+      updated: "2026-11-09T12:00:00.000Z",
+    };
+    const s = unaSerie([google]);
+    const A = serieAIcs(s);
+    const g = leerRecurso(A, ctx, [ev])!;
+    const igual = s.uid === uid && huellaGrupo([ev], miembros) === huellaGrupo(g.eventos, miembros);
+    ok(`crear y releer «${ev.titulo}»: mismo UID y la misma huella en la pared; propia (modificado null)`, igual && g.modificado === null, { ins, leido: g.eventos, modificado: g.modificado });
+    const p = planear(s, escribirRecurso(g.eventos, ctx, g.uid, A));
+    ok(`crear y releer «${ev.titulo}»: escribir de vuelta no pide nada`, vacio(p), sinPieza(p));
+  }
 });
 
 caso("fusionar, marcar y el respaldo sin hora de término", () => {

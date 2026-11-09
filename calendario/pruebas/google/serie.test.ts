@@ -424,8 +424,11 @@ caso("huellaPieza: la predicción calza con lo que queda en Google", () => {
       const cuerpos: [EvG, Cuerpo][] = [...(plan.maestro ? [[s.principal!, plan.maestro] as [EvG, Cuerpo]] : []), ...plan.ops.map((o) => [piezas.get(o.id)!, o.cuerpo] as [EvG, Cuerpo])];
       const calzan = cuerpos.map(([b, c]) => {
         const r = aplicarComoGoogle(b, c, normalizar);
-        // Una excepción cancelada vuelve del listado sólo con id, estado y originalStartTime: deja de ser propia.
-        return c.status === "cancelled" ? !esPropia({ id: r.id, status: r.status, recurringEventId: r.recurringEventId, originalStartTime: r.originalStartTime }) : esPropia(r);
+        if (c.status !== "cancelled") return esPropia(r);
+        // Una excepción cancelada puede volver del listado con pocos campos: es propia si trae la marca
+        // (con todos sus campos o sólo con id, estado y originalStartTime) y ajena si no la trae.
+        const minima: EvG = { id: r.id, status: r.status, recurringEventId: r.recurringEventId, originalStartTime: { dateTime: r.originalStartTime!.dateTime } };
+        return esPropia(r) && esPropia({ ...minima, extendedProperties: r.extendedProperties }) && !esPropia(minima);
       });
       ok(`${normalizar ? "con Google normalizando: " : ""}${nombre} → ${cuerpos.length} cuerpo(s), todos propios al releer`, cuerpos.length > 0 && calzan.every(Boolean), { cuerpos, calzan });
     }

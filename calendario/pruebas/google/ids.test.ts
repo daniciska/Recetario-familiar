@@ -89,7 +89,7 @@ caso("forma canónica y generaciones", () => {
   const ultimo = base[base.length - 1];
   const otro = B32[(B32.indexOf(ultimo) ^ 1) & 31];
   const r = uidDesdeId(base.slice(0, -1) + otro);
-  ok("bits de relleno distintos → null o el mismo UID nunca (no canónico)", r === null, r);
+  ok("bits de relleno distintos → null (no es la forma canónica)", r === null, r);
   const conGen = (texto: string) => "cf" + idGoogleDe(texto).slice(2);
   ok("generación 0 escrita → null", uidDesdeId(conGen("ev1@calendario-familiar\n0")) === null);
   ok("generación 10 → null", uidDesdeId(conGen("ev1@calendario-familiar\n10")) === null);

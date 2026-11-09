@@ -10,6 +10,7 @@
 //
 // API:
 //   agrupar(items, calId, zonaCal): Map<href, Serie>
+//   hrefSerie(calId, id): string                  el href de una serie (el mismo que arma agrupar)
 //   proyectar(serie): { ics, p2, porClave }        (con memo por serie; determinista)
 //   serieAIcs(serie): string                       = proyectar(serie).ics
 //   etagSerie(serie): string                       (ya viene puesto en serie.etag)
@@ -271,8 +272,14 @@ export function normRec(lineas: readonly string[]): string[] {
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest();
 
-/** Huella de lo que el panel lee de una pieza (los primeros 16 caracteres hex de un sha256). */
+/**
+ * Huella de lo que el panel lee de una pieza (los primeros 16 caracteres hex de un sha256). De una
+ * excepción cancelada el panel sólo lee qué ocurrencia quitó (y Google la devuelve con pocos campos).
+ */
 export function huellaPieza(e: EvG): string {
+  if (e.status === "cancelled" && e.recurringEventId) {
+    return sha256(JSON.stringify(["cancelled", claveHora(e.originalStartTime) ?? ""])).toString("hex").slice(0, 16);
+  }
   const datos = [
     (e.summary ?? "").trim(),
     textoPlano(e.description ?? "").trim(),
@@ -296,6 +303,9 @@ export function esPropia(e: EvG): boolean {
 }
 
 // ---------- Agrupar el listado ----------
+
+/** El "href" de una serie para el motor (el transporte arma el mismo al crear). */
+export const hrefSerie = (calId: string, id: string) => `/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(id)}`;
 
 const recorte = (s: string | undefined | null) => (s ?? "").trim();
 const duracion = (e: EvG) => (e.endTimeUnspecified ? "~" : String(instanteDeHora(e.end) - instanteDeHora(e.start)));
@@ -387,7 +397,7 @@ export function agrupar(items: readonly EvG[], calId: string, zonaCal: string | 
     const soloLectura =
       !p || !!p.locked || !!p.privateCopy || ajeno(p.organizer, calId) || (p.recurrence ?? []).some((l) => !leerLinea(l));
     series.push({
-      href: `/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(raiz)}`,
+      href: hrefSerie(calId, raiz),
       id: raiz,
       uid: "",
       gen: null,

@@ -210,10 +210,16 @@ export function vista(ics: string): Record<string, VistaPieza> {
 
 /** ¿La regla de B (RRULE + RDATE, sin EXDATE) genera ese inicio? En la zona de la serie; con tope de vueltas y de tiempo. */
 export function ocurre(principalB: ICAL.Component, original: HoraG): boolean {
-  const k = claveHora(original);
-  if (!k) return false;
-  const fecha = fechaDeClave(k);
-  return (instancias(principalB, [fecha]).get(fecha) ?? []).some((i) => claveValor(i.t, i.tzid) === k);
+  return ocurrenTodos(principalB, [original]);
+}
+
+/** ¿La regla de B genera todos esos inicios? (recorre la serie una sola vez) */
+function ocurrenTodos(principalB: ICAL.Component, originales: (HoraG | undefined)[]): boolean {
+  const claves = originales.map(claveHora);
+  if (claves.some((k) => !k)) return false;
+  if (!claves.length) return true;
+  const hay = instancias(principalB, new Set(claves.map((k) => fechaDeClave(k!))));
+  return claves.every((k) => (hay.get(fechaDeClave(k!)) ?? []).some((i) => claveValor(i.t, i.tzid) === k));
 }
 
 const DIAS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
@@ -413,12 +419,8 @@ export function planear(serie: Serie, icsB: string): Plan {
   // el "hasta" o cambiar la hora de término mientras la regla nueva siga generando esos días.
   const mismasReglas = reglasEquivalentes(vA, vB, pA, pB);
   const cambioHorario = pA.start !== pB.start || pA.end !== pB.end;
-  if (cambioHorario || !mismasReglas) {
-    for (const x of [...serie.vivas, ...serie.fantasmas]) {
-      if (!x.originalStartTime || !ocurre(vB, x.originalStartTime)) {
-        throw new NoSePuedeEscribir(`"${T}" tiene días cambiados uno por uno: cambia la hora o la repetición de toda la serie en el iPhone o en Google Calendar.`);
-      }
-    }
+  if ((cambioHorario || !mismasReglas) && !ocurrenTodos(vB, [...serie.vivas, ...serie.fantasmas].map((x) => x.originalStartTime))) {
+    throw new NoSePuedeEscribir(`"${T}" tiene días cambiados uno por uno: cambia la hora o la repetición de toda la serie en el iPhone o en Google Calendar.`);
   }
 
   // Días cambiados.
