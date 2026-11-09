@@ -98,7 +98,7 @@ function enZona(zona: string, instante: number) {
 }
 
 /** Instante (ms) de una hora "de reloj" en una zona IANA. */
-function instanteLocal(zona: string, y: number, m: number, d: number, h: number, mi: number, s = 0): number {
+export function instanteLocal(zona: string, y: number, m: number, d: number, h: number, mi: number, s = 0): number {
   const reloj = Date.UTC(y, m - 1, d, h, mi, s);
   const desfase = (t: number) => {
     const p = enZona(zona, t);
@@ -581,7 +581,7 @@ interface Instancia {
  * mirar los EXDATE. Sirve para escribir EXDATE y RECURRENCE-ID que calcen con la serie aunque esté en
  * UTC o en otra zona. Casi siempre es una por fecha; en una serie por horas, todas las de ese día.
  */
-function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, Instancia[]> {
+export function instancias(v: ICAL.Component, fechas: Iterable<string>): Map<string, Instancia[]> {
   const buscadas = new Set(fechas);
   const r = new Map<string, Instancia[]>();
   if (!buscadas.size) return r;
