@@ -286,6 +286,17 @@ caso("C2: otros casos", () => {
     plan(natacion(), (l) => l.filter(esPrincipal).map((e) => ({ ...e, excepciones: [...e.excepciones!, "2026-12-09"] }))),
     (p) => claves(p.maestro) === "recurrence" && p.ops.length === 1 && p.ops[0].tipo === "cancelar",
   );
+  T(
+    "quitar la repetición (sin días cambiados) → recurrence: null",
+    plan([principalNat(), canceladaNat()], enPrincipal((e) => ({ ...e, repeticion: "nunca", diasSemana: undefined, excepciones: undefined }))),
+    (p) => claves(p.maestro) === "recurrence" && p.maestro!.recurrence === null,
+  );
+  ok("quitar la repetición con un día cambiado → NoSePuedeEscribir (G1)", /tiene días cambiados/.test(mensaje(plan(natacion(), enPrincipal((e) => ({ ...e, repeticion: "nunca", diasSemana: undefined, excepciones: undefined }))))));
+  T(
+    "mover la serie de hora y no excluir el día cancelado allá → permitido (la cancelada queda huérfana)",
+    plan([principalNat(), canceladaNat()], enPrincipal((e) => ({ ...e, horaInicio: "10:00", horaFin: "11:00", excepciones: ["2026-11-11"] }))),
+    (p) => JSON.stringify(p.maestro!.recurrence) === JSON.stringify(["RRULE:FREQ=WEEKLY;WKST=MO;BYDAY=WE", "EXDATE;TZID=America/Santiago:20261111T100000"]) && !p.ops.length,
+  );
   const orden = plan(natacion(), (l) => l.filter(esPrincipal).map((e) => ({ ...e, excepciones: [...e.excepciones!, "2026-12-02"] })));
   ok("dos cancelar en orden de fecha", !(orden instanceof Error) && orden.ops.map((o) => o.fecha).join() === "2026-11-18,2026-12-02", sinPieza(orden));
 });

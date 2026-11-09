@@ -274,12 +274,13 @@ function lineaExdate(v: Valor): string {
   return `EXDATE;TZID=${ZONA}:${s.t.toICALString()}`;
 }
 
-/** recurrence[] de un VEVENT: sus RRULE/EXRULE/RDATE y un EXDATE por valor (ordenados). */
+/** recurrence[] de un VEVENT: sus RRULE/EXRULE/RDATE y un EXDATE por valor (ordenados). Sin regla, nada. */
 export function recurrenciaDe(v: ICAL.Component): string[] {
   const reglas = v
     .getAllProperties()
     .filter((p) => NOMBRES_REGLA.includes(p.name))
     .map((p) => p.toICALString());
+  if (!reglas.some((l) => /^(RRULE|RDATE)[;:]/i.test(l))) return [];
   const ex = new Map<string, Valor>();
   for (const p of v.getAllProperties("exdate")) {
     const tzid = tzidDe(p);
@@ -465,9 +466,13 @@ export function planear(serie: Serie, icsB: string): Plan {
   }
   for (const v of EA) {
     if (EB.includes(v) || !proy.p2.has(v)) continue;
-    // Un día cancelado en Google: si la serie se movió sigue excluido con otro valor (no hay nada que hacer).
-    const f = fechaDeClave(v);
-    if (!EB.some((w) => fechaDeClave(w) === f)) throw new NoSePuedeEscribir(`"${T}": ese día se borró en Google Calendar; para recuperarlo, hazlo allá.`);
+    // Un día cancelado en Google que B ya no excluye. Si la regla de B todavía genera esa misma ocurrencia,
+    // la pared la quiere de vuelta y Google no deja revivirla. Si no (la serie se movió de hora o de día),
+    // la cancelada queda huérfana en Google y no hay nada que hacer: si ese día sigue excluido con otro
+    // valor, ese valor va a recurrence (abajo).
+    if (ocurre(vB, proy.p2.get(v)!.originalStartTime!)) {
+      throw new NoSePuedeEscribir(`"${T}": ese día se borró en Google Calendar; para recuperarlo, hazlo allá.`);
+    }
   }
   if (soloEnA.size) {
     throw new NoSePuedeEscribir(`"${T}": un día cambiado no se puede volver a la normalidad desde la pared; hazlo en el iPhone o en Google Calendar.`);
@@ -482,7 +487,9 @@ export function planear(serie: Serie, icsB: string): Plan {
         .getAllProperties()
         .filter((p) => NOMBRES_REGLA.includes(p.name))
         .map((p) => p.toICALString());
-  const recurrenceB = [...reglas, ...EB.filter((v) => !cubiertos.has(v) && !proy.p2.has(v)).map((v) => lineaExdate(B.exdates.get(v)!))];
+  // Sin RRULE ni RDATE (la serie pasó a ser un evento suelto) los EXDATE no significan nada: recurrence vacía.
+  const repite = reglas.some((l) => /^(RRULE|RDATE)[;:]/i.test(l.trim()));
+  const recurrenceB = repite ? [...reglas, ...EB.filter((v) => !cubiertos.has(v) && !proy.p2.has(v)).map((v) => lineaExdate(B.exdates.get(v)!))] : [];
   const cambiaRec = !mismaRecurrencia(recurrenceB, antes);
   const conRecurrencia = cambiaRec ? recurrenceB.length > 0 : antes.length > 0;
 
