@@ -147,7 +147,7 @@ export const CASOS: Caso[] = [
   // 2 ---------------------------------------------------------------------------------------------
   {
     id: "02-sopaipillas-dos-partes",
-    que_prueba: "Dos audios = una receta; la parte 2 corrige el zapallo (medio kilo → 'como un kilo'); 'harina, lo que pida' → al gusto + duda; aceite para freír; rinde en unidades ('salen como treinta').",
+    que_prueba: "Dos audios = una receta; la parte 2 corrige el zapallo (medio kilo → 'como un kilo'); 'harina, lo que pida' → al gusto + duda; aceite para freír; rinde en unidades ('salen como treinta'): porciones = personas estimadas, las 30 en la nota y una duda.",
     nombres: ["PTT-20260612-WA0011.opus", "PTT-20260612-WA0012.opus"],
     partes: [
       "hola soy la mami Lela les voy a dejar la receta de las sopaipillas pasadas porque se viene el frío. para la masa, un trozo de zapallo como medio kilo cocido y molido, harina lo que pida, una cucharadita de polvos de hornear, sal, y dos cucharadas de manteca derretida, o mantequilla si no tienen. se amasa todo hasta que la masa no se pegue en las manos. después se uslerea y se cortan redonditas y se pinchan con un tenedor. y se fríen en aceite bien caliente",
@@ -160,8 +160,8 @@ export const CASOS: Caso[] = [
       motivo: null,
       nombre: "Sopaipillas pasadas",
       emoji: "🍩",
-      porciones: 30,
-      porciones_estimadas: false,
+      porciones: 10,
+      porciones_estimadas: true,
       tiempo_min: 75,
       tiempo_estimado: true,
       ingredientes: [
@@ -185,13 +185,19 @@ export const CASOS: Caso[] = [
         "Pasa las sopaipillas por el almíbar a fuego bajo, unos 5 minutos.",
       ],
       secretos: ["Con más zapallo (como un kilo) quedan más suavecitas.", "Si no hay manteca, se puede usar mantequilla."],
-      nota: "Receta de la Mami Lela, para cuando se viene el frío.",
-      dudas: ["¿Cuánta harina lleva la masa, más o menos?", "¿De qué grosor se uslerea la masa?", "¿Cuánta cáscara de naranja se le pone?"],
+      nota: "Receta de la Mami Lela, para cuando se viene el frío. Salen como 30.",
+      dudas: [
+        "¿Cuánta harina lleva la masa, más o menos?",
+        "¿Para cuántas personas alcanzan las 30 sopaipillas?",
+        "¿De qué grosor se uslerea la masa?",
+        "¿Cuánta cáscara de naranja se le pone?",
+      ],
     },
     comprobaciones: {
       es_receta: true,
-      porciones: { igual: 30 },
-      porciones_estimadas: false,
+      porciones: { entre: [4, 15] }, // personas, no las 30 que salen
+      porciones_estimadas: true,
+      nota_re: "30|treinta",
       ing: [
         { n: "zapallo", c: { base: [900, 1100] }, e: true },
         { n: "harina", u: ["al gusto"], c: null },
@@ -204,7 +210,7 @@ export const CASOS: Caso[] = [
       ],
       pasos_min: 4,
       pasos_re: ["alm[ií]bar", "5 min|cinco min"],
-      dudas_re: ["harina"],
+      dudas_re: ["harina", "personas"],
       trans_re: ["\\[Parte 1\\]", "\\[Parte 2\\]", "como un kilo"],
       nombre_re: "sopaipilla",
     },
@@ -590,7 +596,7 @@ export const CASOS: Caso[] = [
   // 10 --------------------------------------------------------------------------------------------
   {
     id: "10-calzones-rotos",
-    que_prueba: "'un chorrito de pisco' (Bebidas) y 'una nuez de mantequilla' estimados; aceite para freír; azúcar flor (Condimentos y especias, como la app); 'salen como cuarenta' = porciones 40; secreto del pisco.",
+    que_prueba: "'un chorrito de pisco' (Bebidas) y 'una nuez de mantequilla' estimados; aceite para freír; azúcar flor (Condimentos y especias, como la app); 'salen como cuarenta' → porciones = personas estimadas y las 40 en la nota; secreto del pisco.",
     partes: [
       "calzones rotos. tres tazas de harina, una cucharadita de polvos de hornear, cuatro cucharadas de azúcar, una nuez de mantequilla, tres huevos, ralladura de un limón y un chorrito de pisco que es el secreto, quedan más crujientes. se amasa hasta que esté lisa, se estira finita, se corta en rombos, se le hace un tajo al medio y se da vuelta una punta por el tajo. se fríen en aceite bien caliente hasta que estén doraditos y se escurren en papel. y azúcar flor por encima. salen como cuarenta",
     ],
@@ -601,8 +607,8 @@ export const CASOS: Caso[] = [
       motivo: null,
       nombre: "Calzones rotos",
       emoji: "🍩",
-      porciones: 40,
-      porciones_estimadas: false,
+      porciones: 10,
+      porciones_estimadas: true,
       tiempo_min: 60,
       tiempo_estimado: true,
       ingredientes: [
@@ -624,12 +630,15 @@ export const CASOS: Caso[] = [
         "Espolvorea azúcar flor por encima.",
       ],
       secretos: ["El chorrito de pisco es el secreto: quedan más crujientes."],
-      nota: null,
-      dudas: [],
+      nota: "Salen como 40.",
+      dudas: ["¿Para cuántas personas alcanzan los 40 calzones rotos?"],
     },
     comprobaciones: {
       es_receta: true,
-      porciones: { igual: 40 },
+      porciones: { entre: [4, 20] }, // personas, no los 40 que salen
+      porciones_estimadas: true,
+      nota_re: "40|cuarenta",
+      dudas_re: ["personas"],
       ing: [
         { n: "^harina", u: ["taza"], c: { igual: 3 } },
         { n: "polvos? de hornear", u: ["cdta"], c: { igual: 1 } },

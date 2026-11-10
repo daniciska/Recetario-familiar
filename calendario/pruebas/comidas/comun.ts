@@ -18,7 +18,8 @@ export function igual(nombre: string, obtenido: unknown, esperado: unknown) {
 
 /** Igualdad de lo que queda guardado (JSON: sin las claves con undefined). */
 export function igualJSON(nombre: string, obtenido: unknown, esperado: unknown) {
-  ok(nombre, isDeepStrictEqual(JSON.parse(JSON.stringify(obtenido)), JSON.parse(JSON.stringify(esperado))), { obtenido, esperado });
+  const j = (x: unknown) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
+  ok(nombre, isDeepStrictEqual(j(obtenido), j(esperado)), { obtenido: obtenido ?? null, esperado: esperado ?? null });
 }
 
 export async function caso(nombre: string, fn: () => unknown | Promise<unknown>) {

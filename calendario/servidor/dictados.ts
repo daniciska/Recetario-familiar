@@ -9,6 +9,13 @@
 //   almacén "audios" (consistencia fuerte)
 //                                     <familia>/<id>           → los bytes, metadata {mime, mimeReproducir, sha256, segundos, equipo, subido}
 //                                     <familia>/<id>.texto     → {transcripcion, modelo, fecha, segundos, recetaId}: se escribe al guardar
+//                                                                 (sólo si la receta ya está en la colección «recetas»)
+//
+// Duración: el tope de 15 minutos sale de los bytes del audio cuando se puede (gemini.ts, duracionAudio); si
+// no, de `?segundos=` del equipo; y si no hay ninguna, el audio no puede pasar de MAX_AUDIO_SIN_DURACION.
+//
+// «Pedir otra versión»: el borrador, la transcripción y lo demás quedan en `anterior` mientras Gemini vuelve
+// a escuchar. Si la corrida termina bien, se reemplazan; si falla, vuelven (estado listo, con el `error`).
 //
 // Concurrencia: los cambios al registro son de lectura-cambio-escritura con ETag (cambiarDictado). La corrida
 // "toma" el dictado con un turno y un plazo (cerca): sólo el dueño del turno escribe el resultado, así que dos
@@ -23,21 +30,26 @@ import { adivinarCategoria } from "../lib/compras";
 import {
   ID_DICTADO,
   MAX_AUDIO,
+  MAX_AUDIO_SIN_DURACION,
   MAX_PENDIENTES,
   MAX_SEGUNDOS,
+  RECETA_NO_GUARDADA,
   type CodigoError,
   type DictadoPublico,
   type ErrorDictado,
   type ListaDictados,
   type MotivoRechazo,
+  type RespuestaDescartar,
   type RespuestaProbar,
   type TextoDictado,
 } from "../lib/dictados/tipos";
-import { almacen, autenticar, conCandado, error, idAzar, json, leerJSON, type Sesion } from "./comun";
-import { configGemini, detectarAudio, estadoGemini, pedirReceta, probarClave, relojReal, sanear, type Reloj } from "./gemini";
+import { almacen, autenticar, conCandado, error, idAzar, json, leerColeccion, leerJSON, type Sesion } from "./comun";
+import { configGemini, detectarAudio, duracionAudio, estadoGemini, pedirReceta, probarClave, relojReal, sanear, type Reloj } from "./gemini";
 import { aRecetaApp, borradorRescate, normalizar, type BorradorReceta } from "./receta-ia/normalizar-receta";
 
-export { ID_DICTADO, MAX_AUDIO, MAX_PENDIENTES, MAX_SEGUNDOS };
+export { ID_DICTADO, MAX_AUDIO, MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, MAX_SEGUNDOS };
+/** Margen sobre MAX_SEGUNDOS para la duración que se lee de los bytes (la grabadora corta justo en 900 s). */
+export const TOLERANCIA_SEGUNDOS = 10;
 /** La corrida es dueña del dictado hasta aquí (la función en segundo plano dura hasta 15 min). */
 export const PLAZO_CORRIDA_MS = 14 * 60_000;
 /** Tiempo total para hablar con Gemini en una corrida (reintentos y esperas incluidos). */
@@ -49,6 +61,10 @@ const prefijoDictados = (f: string) => `dictados/${f}/`;
 export const claveAudio = (f: string, id: string) => `${f}/${id}`;
 export const claveTexto = (f: string, id: string) => `${f}/${id}.texto`;
 
+/** Lo que trae una corrida que terminó bien (y lo que «Pedir otra versión» guarda en `anterior`). */
+const CAMPOS_VERSION = ["borrador", "avisos", "revisar", "transcripcion", "esReceta", "motivo", "modelo", "ms", "rescate"] as const;
+export type VersionDictado = Pick<DictadoPublico, (typeof CAMPOS_VERSION)[number]>;
+
 /** Lo guardado en Blobs. Lo que no está en DictadoPublico nunca sale a los equipos (ver vista()). */
 export interface Dictado extends Omit<DictadoPublico, "nombre" | "emoji"> {
   familiaId: string;
@@ -57,6 +73,19 @@ export interface Dictado extends Omit<DictadoPublico, "nombre" | "emoji"> {
   mimeReproducir: string; // content-type para escucharlo en el equipo
   turno?: string; // corrida dueña (cerca)
   plazo?: number; // epoch ms: hasta cuándo es dueña
+  anterior?: VersionDictado; // el borrador de antes de «Pedir otra versión», hasta que llegue el nuevo
+}
+
+const sinVersion = Object.fromEntries(CAMPOS_VERSION.map((k) => [k, undefined])) as Record<(typeof CAMPOS_VERSION)[number], undefined>;
+const versionDe = (d: Dictado): VersionDictado => Object.fromEntries(CAMPOS_VERSION.map((k) => [k, d[k]])) as VersionDictado;
+
+/**
+ * El dictado con este error. Si venía de «Pedir otra versión» (hay `anterior`), vuelve el borrador de antes
+ * (estado listo) y el error queda como aviso: un fallo de Gemini no borra lo que ya se tenía.
+ */
+function conError(d: Dictado, err: ErrorDictado, cuando: string): Dictado {
+  const n: Dictado = { ...d, estado: "error", error: err, turno: undefined, plazo: undefined, actualizado: cuando };
+  return d.anterior ? { ...n, ...d.anterior, estado: "listo", anterior: undefined } : n;
 }
 
 export interface DepsDictados {
@@ -140,10 +169,11 @@ export function vista(d: Dictado, ahora: number, completo: boolean): DictadoPubl
     intentos: d.intentos,
     modelo: d.modelo,
     ms: d.ms,
-    nombre: d.borrador?.nombre,
-    emoji: d.borrador?.emoji,
+    nombre: d.borrador?.nombre ?? d.anterior?.borrador?.nombre,
+    emoji: d.borrador?.emoji ?? d.anterior?.borrador?.emoji,
     esReceta: d.esReceta,
     motivo: d.motivo,
+    rescate: d.rescate === true ? true : undefined,
     error: d.error,
   };
   if (d.estado === "procesando" && (d.plazo ?? 0) < ahora) {
@@ -165,6 +195,8 @@ const rechazo = (mensaje: string, motivo: MotivoRechazo) => json({ error: mensaj
 const OTRO_AUDIO = "Ese identificador ya se usó para otro audio.";
 const MENSAJE_GRANDE = "El audio es muy grande: el máximo son 4 MB (unos 15 minutos grabando aquí). Graba uno más corto o divídelo en dos.";
 const MENSAJE_LARGO = "El audio dura más de 15 minutos. Graba uno más corto o divídelo en dos.";
+const MENSAJE_SIN_DURACION =
+  "No se pudo saber cuánto dura este audio y pesa más de 1,8 MB, así que podría pasar de 15 minutos. Prueba con un m4a o mp3, o graba uno más corto aquí en el panel.";
 
 const limpiarArchivo = (x: string | null) =>
   (x ?? "")
@@ -190,7 +222,10 @@ function fechaLarga(isoFecha: string): string | undefined {
  * GET    /api/dictados/:id/audio                        → los bytes (content-type para reproducir)
  * GET    /api/dictados/:id/texto                        → {transcripcion, modelo, fecha, segundos}
  * POST   /api/dictados/:id/guardado {recetaId}          ya se guardó la receta: queda el texto y el audio
- * DELETE /api/dictados/:id                              descartar: borra registro, audio y texto
+ *                                                       (409 {codigo: RECETA_NO_GUARDADA} si la colección «recetas» no la tiene aún)
+ * DELETE /api/dictados/:id?borrador=1                   descartar un borrador; si la receta ya se guardó → {ok, guardada: true}
+ *                                                       sin borrar el audio ni lo que se dijo
+ * DELETE /api/dictados/:id                              quitar el audio de una receta guardada o borrarla: borra registro, audio y texto
  * POST   /api/dictados/probar                           → {gemini: "ok", modelo} | {gemini: código} (no gasta cuota)
  */
 export function manejarApi(deps: DepsDictados) {
@@ -243,11 +278,7 @@ async function atender(req: Request, context: { site?: { url?: string } } | unde
   if (req.method === "GET" && accion === "audio") return audio(s.familiaId, id);
   if (req.method === "GET" && accion === "texto") return texto(s.familiaId, id);
   if (req.method === "POST" && accion === "guardado") return guardado(req, s.familiaId, id);
-  if (req.method === "DELETE" && !accion) {
-    await borrarRegistro(s.familiaId, id);
-    await Promise.all([almacenAudios().delete(claveAudio(s.familiaId, id)), almacenAudios().delete(claveTexto(s.familiaId, id))]);
-    return json({ ok: true });
-  }
+  if (req.method === "DELETE" && !accion) return descartar(s.familiaId, id, new URL(req.url).searchParams.get("borrador") === "1");
   return error("Método no permitido", 405);
 }
 
@@ -266,15 +297,21 @@ async function subir(req: Request, s: Sesion, id: string, ahora: number, deps: D
   const f = s.familiaId;
   const q = new URL(req.url).searchParams;
   const seg = Number(q.get("segundos"));
-  const segundos = Number.isFinite(seg) && seg > 0 ? Math.round(seg) : undefined;
+  const segundosEquipo = Number.isFinite(seg) && seg > 0 ? Math.round(seg) : undefined;
   if (Number(req.headers.get("content-length")) > MAX_AUDIO) return error(MENSAJE_GRANDE, 413);
   const crudo = await req.arrayBuffer();
   const bytes = new Uint8Array(crudo);
   if (!bytes.byteLength) return error("Llegó un audio vacío", 400);
   if (bytes.byteLength > MAX_AUDIO) return error(MENSAJE_GRANDE, 413);
-  if (segundos && segundos > MAX_SEGUNDOS) return error(MENSAJE_LARGO, 413);
+  if (segundosEquipo && segundosEquipo > MAX_SEGUNDOS) return error(MENSAJE_LARGO, 413);
   const tipo = detectarAudio(bytes.subarray(0, 64));
   if (!tipo.ok) return error(tipo.mensaje, 415);
+  // Lo que dicen los bytes manda sobre lo que dice el equipo (que puede no saberlo: WebM de MediaRecorder,
+  // .opus en un navegador que no lo lee). Sin ninguna de las dos, un tope por tamaño.
+  const segundosAudio = duracionAudio(bytes);
+  if (segundosAudio != null && segundosAudio > MAX_SEGUNDOS + TOLERANCIA_SEGUNDOS) return error(MENSAJE_LARGO, 413);
+  if (segundosAudio == null && segundosEquipo == null && bytes.byteLength > MAX_AUDIO_SIN_DURACION) return error(MENSAJE_SIN_DURACION, 413);
+  const segundos = segundosEquipo ?? (segundosAudio != null ? Math.max(1, Math.round(segundosAudio)) : undefined);
   const huella = sha256(bytes);
   const mismo = (d: Dictado) => d.sha256 === huella && d.bytes === bytes.byteLength;
   const archivo = limpiarArchivo(q.get("archivo"));
@@ -334,17 +371,16 @@ async function procesar(req: Request, f: string, id: string, ahora: number, deps
     const err: ErrorDictado = { codigo: cfg.motivo, reintentable: true };
     // Un borrador listo no se pierde por pedir otra versión sin clave: sólo se avisa.
     if (leido.d.estado === "listo") return json({ dictado: { ...vista(leido.d, ahora, true), error: err } });
-    const r = await cambiarDictado(f, id, (d) =>
-      d && !enCurso(d) && d.estado !== "listo" ? { ...d, estado: "error", error: err, turno: undefined, plazo: undefined, actualizado: iso(ahora) } : null,
-    );
+    const r = await cambiarDictado(f, id, (d) => (d && !enCurso(d) && d.estado !== "listo" ? conError(d, err, iso(ahora)) : null));
     return r.d ? json({ dictado: vista(r.d, ahora, true) }) : noExiste();
   }
 
   const r = await cambiarDictado(f, id, (d) => {
     if (!d || enCurso(d) || (d.estado === "listo" && !otraVez)) return null;
-    const listo: Dictado = { ...d, estado: "subido", error: undefined, turno: undefined, plazo: undefined, actualizado: iso(ahora) };
-    if (!otraVez) return listo;
-    return { ...listo, borrador: undefined, avisos: undefined, revisar: undefined, transcripcion: undefined, esReceta: undefined, motivo: undefined };
+    const enCola: Dictado = { ...d, estado: "subido", error: undefined, turno: undefined, plazo: undefined, actualizado: iso(ahora) };
+    // «Pedir otra versión» de un borrador: queda guardado en `anterior` hasta que llegue el nuevo.
+    if (otraVez && d.estado === "listo") return { ...enCola, ...sinVersion, anterior: versionDe(d) };
+    return enCola; // reintento: si había un `anterior` (otra versión que se cortó), sigue ahí
   });
   if (!r.d) return noExiste();
   if (!r.escrito) return json({ dictado: vista(r.d, ahora, true) }, enCurso(r.d) ? 202 : 200);
@@ -371,8 +407,33 @@ async function texto(f: string, id: string) {
   if (t) return json(t);
   const leido = await leerDictado(f, id);
   const d = leido?.d;
-  if (!d?.transcripcion) return noExiste();
-  const cuerpo: TextoDictado = { transcripcion: d.transcripcion, modelo: d.modelo, fecha: d.creado, segundos: d.segundos };
+  const v = d?.transcripcion ? d : d?.anterior; // mientras se pide otra versión, lo que se dijo sigue disponible
+  if (!d || !v?.transcripcion) return noExiste();
+  const cuerpo: TextoDictado = { transcripcion: v.transcripcion, modelo: v.modelo, fecha: d.creado, segundos: d.segundos };
+  return json(cuerpo);
+}
+
+/** ¿La colección «recetas» de la familia ya tiene esta receta? (el PUT de la colección pudo no llegar todavía). */
+async function recetaGuardada(f: string, recetaId: string): Promise<boolean> {
+  const c = await leerColeccion(f, "recetas");
+  return Array.isArray(c?.datos) && c.datos.some((r) => !!r && typeof r === "object" && (r as { id?: unknown }).id === recetaId);
+}
+
+/**
+ * DELETE. `borrador`: el equipo descarta un BORRADOR (la revisión, la lista, la pantalla de dictar). Si la
+ * receta ya se guardó (hay .texto, quizás desde otro equipo que el de la revisión vieja no vio), no se
+ * borran ni su audio ni lo que se dijo: sólo el registro que sobra, y se responde `guardada: true`.
+ * Sin `borrador` (quitar el audio de una receta guardada, borrar la receta) se borra todo.
+ */
+async function descartar(f: string, id: string, borrador: boolean) {
+  if (borrador && (await almacenAudios().getMetadata(claveTexto(f, id)))) {
+    await borrarRegistro(f, id);
+    const cuerpo: RespuestaDescartar = { ok: true, guardada: true };
+    return json(cuerpo);
+  }
+  await borrarRegistro(f, id);
+  await Promise.all([almacenAudios().delete(claveAudio(f, id)), almacenAudios().delete(claveTexto(f, id))]);
+  const cuerpo: RespuestaDescartar = { ok: true };
   return json(cuerpo);
 }
 
@@ -384,6 +445,9 @@ async function guardado(req: Request, f: string, id: string) {
   if (!leido) return json({ ok: true }); // ya se guardó (o se descartó): idempotente
   const d = leido.d;
   if (d.estado !== "listo") return error("Todavía no está listo", 409);
+  // Sólo con la receta de verdad en la nube: si el PUT de la colección falló y este POST llegó, borrar el
+  // registro dejaría la revisión sin camino de vuelta. El equipo lo vuelve a intentar más tarde.
+  if (!(await recetaGuardada(f, recetaId))) return json({ error: "La receta todavía no está guardada en Recetas.", codigo: RECETA_NO_GUARDADA }, 409);
   const t: TextoDictado = { transcripcion: d.transcripcion ?? "", modelo: d.modelo, fecha: d.creado, segundos: d.segundos, recetaId };
   await almacenAudios().setJSON(claveTexto(f, id), t);
   await borrarRegistro(f, id);
@@ -459,7 +523,7 @@ async function pedirYOrdenar(d: Dictado, deps: DepsDictados, log: (l: string) =>
     { hasta: deps.reloj.ahora() + PRESUPUESTO_MS, reloj: deps.reloj, log: (l) => log(`dictado ${d.id}: ${l}`) },
   );
   const enlace = { id: d.id, fecha: d.creado, segundos: d.segundos };
-  const listo = (b: BorradorReceta, modelo: string, ms?: number): Cambios => {
+  const listo = (b: BorradorReceta, modelo: string, ms?: number, rescate?: true): Cambios => {
     const revisar = Object.fromEntries(b.ingredientes.filter((i) => i.revisar).map((i) => [i.id, i.revisar as string]));
     return {
       estado: "listo",
@@ -471,19 +535,26 @@ async function pedirYOrdenar(d: Dictado, deps: DepsDictados, log: (l: string) =>
       transcripcion: b.transcripcion,
       modelo,
       ms,
+      rescate, // undefined en una versión completa: borra la marca de un rescate anterior
       error: undefined,
     };
   };
   if (r.tipo === "ok") return listo(normalizar(r.datos, { adivinarCategoria, nuevoId: (p) => `${p}_${idAzar(10)}` }), r.modelo, r.ms);
-  if (r.tipo === "rescate") return listo(borradorRescate(r.transcripcion), r.modelo);
+  if (r.tipo === "rescate") return listo(borradorRescate(r.transcripcion), r.modelo, undefined, true);
   return { estado: "error", error: { codigo: r.codigo, reintentable: r.reintentable, ...(r.proximo ? { proximo: r.proximo } : {}) } };
 }
 
-/** Escribe el resultado sólo si el dictado sigue existiendo y el turno es el de esta corrida. */
+/**
+ * Escribe el resultado sólo si el dictado sigue existiendo y el turno es el de esta corrida. Con un error,
+ * si había un borrador de antes de «Pedir otra versión», vuelve ése (conError).
+ */
 async function terminar(f: string, id: string, turno: string, cambios: Cambios, deps: DepsDictados): Promise<ResultadoCorrida> {
-  const r = await cambiarDictado(f, id, (d) =>
-    d && d.turno === turno ? { ...d, ...cambios, turno: undefined, plazo: undefined, actualizado: iso(deps.reloj.ahora()) } : null,
-  );
+  const cuando = iso(deps.reloj.ahora());
+  const r = await cambiarDictado(f, id, (d) => {
+    if (!d || d.turno !== turno) return null;
+    if (cambios.estado !== "listo" && cambios.error) return conError({ ...d, ...cambios }, cambios.error, cuando);
+    return { ...d, ...cambios, turno: undefined, plazo: undefined, actualizado: cuando, anterior: undefined };
+  });
   if (r.escrito) return cambios.estado === "listo" ? "listo" : "error";
   return r.d ? "perdio" : "descartado";
 }

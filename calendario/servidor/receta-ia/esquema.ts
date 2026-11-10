@@ -131,9 +131,13 @@ const RAIZ: Campo = {
     ["emoji", texto("Un solo emoji de comida que represente el plato. null si no es receta.", true)],
     [
       "porciones",
-      { t: "integer", nulo: true, d: "Personas o unidades que rinde (empanadas, sopaipillas). Si no se dice, estímalo. null si no es receta." },
+      {
+        t: "integer",
+        nulo: true,
+        d: 'Personas para las que alcanza, nunca unidades ("salen como 40" va en nota y aquí las personas estimadas). Si no se dice, estímalo. null si no es receta.',
+      },
     ],
-    ["porciones_estimadas", { t: "boolean", d: "true si las porciones no se dijeron y las estimaste." }],
+    ["porciones_estimadas", { t: "boolean", d: "true si no dijo para cuántas personas es (o sólo cuántas unidades salen) y lo estimaste." }],
     [
       "tiempo_min",
       { t: "integer", nulo: true, d: "Minutos totales de preparación y cocción (sin remojos ni reposos de horas). null si no es receta." },
@@ -149,7 +153,7 @@ const RAIZ: Campo = {
       },
     ],
     ["secretos", { t: "array", d: "Trucos y advertencias que da quien cocina, breves.", items: { t: "string", d: "Un secreto." } }],
-    ["nota", texto("Contexto que contó: de quién es la receta, cuándo se hace, con qué se sirve. null si nada.", true)],
+    ["nota", texto('Contexto que contó: de quién es la receta, cuándo se hace, con qué se sirve, cuántas unidades salen ("Salen como 30."). null si nada.', true)],
     [
       "dudas",
       {

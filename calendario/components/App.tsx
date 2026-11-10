@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ProveedorDatos, useDatos } from "@/lib/store";
 import { ProveedorCandado, useCandado } from "@/lib/candado";
 import { useAhora, useClima, useModoPared, useRecargaDiaria, useTema, useWakeLock } from "@/lib/hooks";
+import { useMotorDictados } from "@/lib/dictados/useDictados";
 import BarraSuperior, { PantallaCompleta } from "./BarraSuperior";
 import VistaCalendario from "./VistaCalendario";
 import VistaComidas from "./VistaComidas";
@@ -50,6 +51,9 @@ function Panel() {
   useTema(estado.ajustes, ahora.minutosDelDia);
   useWakeLock(true);
   useRecargaDiaria(ahora, "03:30", sinGuardar);
+  // «Dictar receta»: los audios que quedaron en el equipo se suben y lo que falló se reintenta solo en
+  // cualquier pestaña (no sólo con Recetas abierta). Sin nube no hace nada.
+  useMotorDictados();
 
   const { proteger, cerrar: cerrarCandado } = useCandado();
   const [pestana, setPestana] = useState<Pestana>("calendario");

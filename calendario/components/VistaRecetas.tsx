@@ -9,7 +9,7 @@ import { quitarRecetaDelPlan } from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
 import { subirFoto } from "@/lib/datos/nube";
 import * as cliente from "@/lib/dictados/cliente";
-import { TEXTOS, conAprox, fechaDictado } from "@/lib/dictados/textos";
+import { TEXTOS, conAprox, fechaDictado, sePuedeRevisar } from "@/lib/dictados/textos";
 import type { DictadoPublico } from "@/lib/dictados/tipos";
 import { borradorVacio, borrarRevision, guardarRevision, leerRevision, limpiarReceta } from "@/lib/dictados/revision";
 import { useDictados } from "@/lib/dictados/useDictados";
@@ -47,10 +47,21 @@ export default function VistaRecetas() {
     .filter((r) => sinTildes(r.nombre).includes(q))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 
+  // Sólo un dictado «listo» con su borrador (las pantallas lo piden fresco antes): nunca un borrador vacío.
   const revisar = (d: DictadoPublico) => {
+    if (!sePuedeRevisar(d)) return;
     setDictando(false);
     setVerDictados(false);
     setEditando({ revision: d });
+  };
+  // «Pedir otra versión» desde la revisión (borrador de rescate): se cierra y se ve cómo va en 🎙️ Dictadas.
+  const otraVersion = async (id: string) => {
+    const r = await dictados.procesar(id, true);
+    if (r) {
+      setEditando(null);
+      setVerDictados(true);
+    }
+    return r;
   };
 
   return (
@@ -124,6 +135,7 @@ export default function VistaRecetas() {
           dictado={editando !== "nueva" && "revision" in editando ? editando.revision : undefined}
           alCerrar={() => setEditando(null)}
           alCambiarDictados={() => void dictados.refrescar()}
+          alOtraVersion={otraVersion}
         />
       )}
       {dictando && <DictarReceta alCerrar={() => setDictando(false)} alRevisar={revisar} alCambiar={() => void dictados.refrescar()} />}
@@ -290,12 +302,15 @@ function EditorReceta({
   dictado,
   alCerrar,
   alCambiarDictados,
+  alOtraVersion,
 }: {
   receta?: Receta;
   /** Revisar el borrador de una receta dictada (ya completo, con `borrador`). */
   dictado?: DictadoPublico;
   alCerrar: () => void;
   alCambiarDictados?: () => void;
+  /** «Pedir otra versión» de un borrador de rescate. null: el dictado ya no existe. Lanza si la nube no responde. */
+  alOtraVersion?: (id: string) => Promise<DictadoPublico | null>;
 }) {
   const { actualizar, nube } = useDatos();
   const { proteger } = useCandado();
@@ -315,6 +330,9 @@ function EditorReceta({
   const [confirmarAudio, setConfirmarAudio] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
+  // «Guardar» espera a la nube (hasta 15 s con mala señal): mientras, el botón dice «Guardando…» y no se repite.
+  const [guardando, setGuardando] = useState(false);
+  const [confirmarOtra, setConfirmarOtra] = useState(false);
   const revisar = dictado?.revisar ?? {};
 
   // Cada cambio del borrador queda guardado en este equipo (no el primer dibujo: eso es lo que trajo Gemini).
@@ -335,55 +353,69 @@ function EditorReceta({
     );
 
   const guardar = async () => {
-    // Con la familia en la nube, la foto se sube aparte (y la receta guarda sólo su dirección).
-    let foto = r.foto;
-    if (nube && foto?.startsWith("data:")) {
-      try {
-        foto = await subirFoto(foto);
-      } catch {
-        return setError("No se pudo subir la foto: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.");
+    if (guardando) return;
+    setGuardando(true);
+    setError(null);
+    try {
+      // Con la familia en la nube, la foto se sube aparte (y la receta guarda sólo su dirección).
+      let foto = r.foto;
+      if (nube && foto?.startsWith("data:")) {
+        try {
+          foto = await subirFoto(foto);
+        } catch {
+          return setError("No se pudo subir la foto: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.");
+        }
       }
-    }
-    const limpia: Receta = { ...limpiarReceta(r), foto };
-    const ok = await actualizar("recetas", (lista) =>
-      lista.some((x) => x.id === limpia.id) ? lista.map((x) => (x.id === limpia.id ? limpia : x)) : [...lista, limpia],
-    );
-    if (!ok)
-      return setError(
-        nube
-          ? "No se pudo guardar: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo."
-          : r.foto
-            ? "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba quitando la foto o borrando fotos de otras recetas."
-            : "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba borrando fotos de otras recetas.",
+      const limpia: Receta = { ...limpiarReceta(r), foto };
+      const ok = await actualizar("recetas", (lista) =>
+        lista.some((x) => x.id === limpia.id) ? lista.map((x) => (x.id === limpia.id ? limpia : x)) : [...lista, limpia],
       );
-    if (dictado) {
-      borrarRevision(dictado.id);
-      // Si falla, no importa: useDictados oculta el dictado (ya está rec_<id>) y lo limpia después.
-      void cliente
-        .marcarGuardado(dictado.id, limpia.id)
-        .catch(() => {})
-        .finally(() => alCambiarDictados?.());
+      if (!ok)
+        return setError(
+          nube
+            ? dictado
+              ? "No se pudo guardar: no hay conexión con la nube. Lo que corregiste queda en este equipo: inténtalo de nuevo cuando vuelva el wifi."
+              : "No se pudo guardar: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo."
+            : r.foto
+              ? "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba quitando la foto o borrando fotos de otras recetas."
+              : "No se pudo guardar: el almacenamiento de este equipo está lleno. Prueba borrando fotos de otras recetas.",
+        );
+      if (dictado) {
+        borrarRevision(dictado.id);
+        // Si falla (o la nube todavía no tiene la receta: false), no importa: el motor de Dictadas oculta el
+        // dictado (ya está rec_<id>) y lo marca como guardado después.
+        void cliente
+          .marcarGuardado(dictado.id, limpia.id)
+          .catch(() => false)
+          .finally(() => alCambiarDictados?.());
+      }
+      alCerrar();
+    } finally {
+      setGuardando(false);
     }
-    alCerrar();
   };
 
   const borrar = () => {
     actualizar("recetas", (lista) => lista.filter((x) => x.id !== r.id));
     actualizar("plan", (plan) => quitarRecetaDelPlan(plan, r.id));
     // El audio y lo que se dijo se borran sin esperar (si no hay red, quedan en la nube).
-    if (r.dictado && nube && borrarAudio) void cliente.descartarDictado(r.dictado.id).catch(() => {});
+    if (r.dictado && nube && borrarAudio) void cliente.quitarAudio(r.dictado.id).catch(() => {});
     alCerrar();
   };
 
-  /** Revisión: descartar el audio y el borrador (no hay receta guardada). */
+  /** Revisión: descartar el audio y el borrador (no hay receta guardada; si otro equipo ya la guardó, no se borra nada). */
   const descartar = async () => {
     if (!dictado) return;
     setOcupado(true);
     setError(null);
     try {
-      await cliente.descartarDictado(dictado.id);
+      const res = await cliente.descartarBorrador(dictado.id);
       borrarRevision(dictado.id);
       alCambiarDictados?.();
+      if (res === "guardada") {
+        setConfirmar(false);
+        return setError(TEXTOS.yaGuardadaOtro);
+      }
       alCerrar();
     } catch (e) {
       setError(mensajeNube(e));
@@ -398,7 +430,7 @@ function EditorReceta({
     setOcupado(true);
     setError(null);
     try {
-      await cliente.descartarDictado(r.dictado.id);
+      await cliente.quitarAudio(r.dictado.id);
       setR(sinDictado);
       await actualizar("recetas", (lista) => lista.map((x) => (x.id === r.id ? sinDictado(x) : x)));
       setConfirmarAudio(false);
@@ -409,9 +441,45 @@ function EditorReceta({
     }
   };
 
+  /** Borrador de rescate: pedirle a Gemini otra versión (si se corrigió algo aquí, se pregunta antes). */
+  const pedirOtraVersion = async (confirmado = false) => {
+    if (!dictado || !alOtraVersion) return;
+    if (!confirmado && (inicio.seguiste || JSON.stringify(r) !== JSON.stringify(inicio.r))) return setConfirmarOtra(true);
+    setConfirmarOtra(false);
+    setOcupado(true);
+    setError(null);
+    try {
+      const d = await alOtraVersion(dictado.id);
+      if (d) borrarRevision(dictado.id);
+      else setError(TEXTOS.yaNoExiste);
+    } catch (e) {
+      setError(mensajeNube(e));
+    } finally {
+      setOcupado(false);
+    }
+  };
+
   const titulo = dictado ? TEXTOS.tituloRevisar : receta ? "Editar receta" : "Nueva receta";
+  // El error va en el pie, junto a los botones: arriba quedaba fuera de la vista en una receta larga.
+  const avisoError = error && (
+    <p key="error" role="alert" className="basis-full rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300">
+      {error}
+    </p>
+  );
   const pie = dictado ? (
     <>
+      {avisoError}
+      {confirmarOtra && (
+        <div className="flex basis-full flex-wrap items-center gap-2 rounded-2xl bg-acento-suave p-3">
+          <span className="text-base font-bold">{TEXTOS.confirmarOtraVersion}</span>
+          <Boton variante="primario" disabled={ocupado} onClick={() => void pedirOtraVersion(true)}>
+            {TEXTOS.siOtraVersion}
+          </Boton>
+          <Boton variante="fantasma" onClick={() => setConfirmarOtra(false)}>
+            {TEXTOS.no}
+          </Boton>
+        </div>
+      )}
       {confirmar ? (
         <div className="mr-auto flex flex-wrap items-center gap-2">
           <span className="text-base font-bold">{TEXTOS.confirmarDescartar}</span>
@@ -427,15 +495,21 @@ function EditorReceta({
           {TEXTOS.descartar}
         </Boton>
       )}
+      {dictado.rescate && alOtraVersion && !confirmarOtra && (
+        <Boton disabled={ocupado || guardando} onClick={() => void pedirOtraVersion()}>
+          {TEXTOS.otraVersion}
+        </Boton>
+      )}
       <Boton variante="fantasma" onClick={alCerrar}>
         {TEXTOS.despues}
       </Boton>
-      <Boton variante="primario" disabled={!r.nombre.trim() || ocupado} onClick={guardar}>
-        {TEXTOS.guardarReceta}
+      <Boton variante="primario" disabled={!r.nombre.trim() || ocupado || guardando} onClick={() => void guardar()}>
+        {guardando ? TEXTOS.guardando : TEXTOS.guardarReceta}
       </Boton>
     </>
   ) : (
     <>
+      {avisoError}
       {receta &&
         (confirmar ? (
           <div className="mr-auto flex flex-wrap items-center gap-2">
@@ -467,8 +541,8 @@ function EditorReceta({
       <Boton variante="fantasma" onClick={alCerrar}>
         Cancelar
       </Boton>
-      <Boton variante="primario" disabled={!r.nombre.trim()} onClick={guardar}>
-        Guardar
+      <Boton variante="primario" disabled={!r.nombre.trim() || guardando} onClick={() => void guardar()}>
+        {guardando ? TEXTOS.guardando : "Guardar"}
       </Boton>
     </>
   );
@@ -476,8 +550,6 @@ function EditorReceta({
   return (
     <Modal titulo={titulo} alCerrar={alCerrar} ancho="max-w-4xl" pie={pie}>
       <div className="space-y-6">
-        {error && <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300">{error}</p>}
-
         {dictado && (
           <div className="space-y-3 rounded-2xl bg-acento-suave p-4 text-lg">
             {inicio.seguiste && <p className="font-bold">{TEXTOS.seguisteDondeQuedaste}</p>}

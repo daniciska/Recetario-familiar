@@ -9,6 +9,7 @@ import {
   claveComida,
   copiarComida,
   emojiComida,
+  esComidaEntera,
   itemsDe,
   itemsLlenos,
   itemsVisibles,
@@ -186,6 +187,27 @@ await caso("nombres", () => {
   igual("itemsVisibles: la receta borrada cuenta como vacío", itemsVisibles(huerfana, "almuerzo", recetas), [null, { texto: "Arroz" }, null, null]);
   ok("receta borrada pero con texto: se ve el texto", nombreItem({ recetaId: "rec_borrada", texto: "Charquicán" }, recetas) === "Charquicán");
   igual("los ítems devueltos son copias (json igual)", json(itemsDe(c, "almuerzo")), itemsDe(c, "almuerzo"));
+});
+
+await caso("comida entera (atajo para toda la comida: sin espacios por llenar)", () => {
+  // Lo que deja «Para toda la comida» (ponerTodo en VistaComidas): un solo ítem, en el primer espacio.
+  const entera = (tipo: "colacion" | "almuerzo" | "cena" | "desayuno", texto: string) =>
+    ponerComida({}, "k", { texto, porciones: 4 }).k;
+  ok("«Sin colación» es la colación entera", esComidaEntera(entera("colacion", SIN_COLACION), "colacion"));
+  for (const a of atajosComida("almuerzo")) ok(`«${a}» es el almuerzo entero`, esComidaEntera(entera("almuerzo", a), "almuerzo"));
+  ok("«Delivery» en la cena y en el desayuno también", esComidaEntera(entera("cena", "Delivery"), "cena") && esComidaEntera(entera("desayuno", "Delivery"), "desayuno"));
+  ok("escrito a mano con otras mayúsculas o espacios, igual", esComidaEntera({ texto: "  comemos FUERA ", porciones: 4 }, "almuerzo"));
+  ok("«Sin colación» no es un atajo del almuerzo", !esComidaEntera(entera("almuerzo", SIN_COLACION), "almuerzo"));
+  ok("un texto cualquiera en el primer espacio no lo es («Pollo»)", !esComidaEntera(entera("almuerzo", "Pollo"), "almuerzo"));
+  ok("con otro espacio lleno ya no es la comida entera", !esComidaEntera({ texto: "Comemos fuera", porciones: 4, mas: [{ texto: "Arroz" }] }, "almuerzo"));
+  ok("en otro espacio que no es el primero, tampoco", !esComidaEntera({ porciones: 4, mas: [{ texto: "Delivery" }] }, "almuerzo"));
+  ok("una receta con ese nombre no cuenta (es una receta)", !esComidaEntera({ recetaId: "rec_cazuela", texto: "Sobras", porciones: 4 }, "almuerzo"));
+  ok("vacía o sin comida: no", !esComidaEntera(undefined, "almuerzo") && !esComidaEntera({ porciones: 4 }, "almuerzo"));
+  ok(
+    "con una receta borrada en otro espacio (se ve vacío), sí",
+    esComidaEntera({ texto: "Sobras", porciones: 4, mas: [{ recetaId: "rec_borrada" }] }, "almuerzo", recetas) &&
+      !esComidaEntera({ texto: "Sobras", porciones: 4, mas: [{ recetaId: "rec_cazuela" }] }, "almuerzo", recetas),
+  );
 });
 
 fin();

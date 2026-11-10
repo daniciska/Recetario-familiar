@@ -10,8 +10,13 @@
 // - La duración la lleva un reloj propio que no cuenta las pausas (el WebM de Chrome dice Infinity).
 // - Se pausa sola si la app pasa a segundo plano o el micrófono se silencia (llamada, otra app: iOS lo
 //   corta) y avisa «interrumpida». Pide Wake Lock para que no se apague la pantalla.
+// - Si el micrófono se corta del todo (la pista termina: se desconectó el micrófono USB o Bluetooth; o el
+//   MediaRecorder se detiene solo o falla), termina sola con lo grabado hasta ahí y avisa «cortada».
 // - Avisa tras GRABACION_SILENCIO_SEG de silencio y cuando quedan 2 minutos (a los GRABACION_AVISO_SEG o cerca
-//   de GRABACION_MAX_BYTES); se corta sola a los GRABACION_MAX_SEG o al llegar a GRABACION_MAX_BYTES.
+//   de GRABACION_MAX_BYTES); se corta sola a los GRABACION_MAX_SEG o al llegar a GRABACION_MAX_BYTES. Los
+//   segundos que entrega nunca pasan de MAX_SEGUNDOS (el tope del servidor), aunque el corte llegue tarde.
+// - cancelar() mientras empezar() espera el permiso o el micrófono: cuando el micrófono llega se apaga al
+//   tiro y empezar() lanza ErrorGrabadora("otro", "cancelada").
 
 import { GRABACION_AVISO_SEG, GRABACION_MAX_BYTES, GRABACION_MAX_SEG, GRABACION_SILENCIO_SEG, MAX_SEGUNDOS } from "./tipos";
 
@@ -79,8 +84,13 @@ export const muyLargo = (segundos: number | undefined) => segundos != null && se
 // ---------- Grabadora ----------
 
 export type EstadoGrabadora = "inactiva" | "grabando" | "pausa" | "terminada";
-/** silencio: no se escucha nada · quedan_dos: faltan ~2 min · maximo: se cortó sola (llamar a terminar()) · interrumpida: se pausó sola. */
-export type AvisoGrabadora = "silencio" | "quedan_dos" | "maximo" | "interrumpida";
+/**
+ * silencio: no se escucha nada · quedan_dos: faltan ~2 min · maximo: se cortó sola a los 15 min o por tamaño ·
+ * interrumpida: se pausó sola · cortada: el micrófono se cortó del todo (la pista terminó o la grabadora se
+ * detuvo o falló). Con maximo y cortada la grabación ya está terminando: llamar a terminar(), que entrega
+ * lo grabado hasta ahí (es la misma promesa).
+ */
+export type AvisoGrabadora = "silencio" | "quedan_dos" | "maximo" | "interrumpida" | "cortada";
 
 export interface Grabacion {
   blob: Blob;
@@ -99,12 +109,17 @@ export interface Grabadora {
   readonly estado: EstadoGrabadora;
   readonly segundos: number;
   readonly bytes: number;
-  /** Llamarla dentro del toque en «Empezar a grabar» (en la app de inicio de iOS el permiso dura esa apertura). */
+  /**
+   * Llamarla dentro del toque en «Empezar a grabar» (en la app de inicio de iOS el permiso dura esa apertura).
+   * Dos llamadas seguidas dan la misma promesa. Si se cancela mientras espera el micrófono, lanza
+   * ErrorGrabadora("otro", "cancelada") y el micrófono queda apagado.
+   */
   empezar(): Promise<void>;
   pausar(): void;
   seguir(): void;
   /** Junta los trozos y apaga el micrófono. Se puede llamar varias veces: da siempre lo mismo. */
   terminar(): Promise<Grabacion>;
+  /** Descarta lo grabado y apaga el micrófono (también si empezar() todavía espera el permiso). */
   cancelar(): void;
 }
 
@@ -139,8 +154,10 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
   let avisoSilencio = false;
   let avisoDos = false;
   let terminando: Promise<Grabacion> | null = null;
-  let cerrando = false; // terminar() ya empezó: no se cuenta más tiempo ni se pausa o sigue
+  let empezando: Promise<void> | null = null;
+  let cerrando = false; // terminar() o cancelar() ya empezaron: no se cuenta más tiempo ni se pausa o sigue
   let alParar: (() => void) | null = null;
+  let detenida = false; // ya llegó el "stop" de la grabadora (con él, el último trozo)
 
   const segundos = () => (acumulado + (estado === "grabando" && !cerrando ? performance.now() - desde : 0)) / 1000;
   const cambiar = (e: EstadoGrabadora) => {
@@ -157,16 +174,27 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
   const alSilenciar = () => {
     if (estado === "grabando") interrumpir();
   };
+  const alTerminarPista = () => cortada();
 
   function interrumpir() {
     pausar();
     op.alAviso?.("interrumpida");
   }
 
+  /** El micrófono se cortó del todo: se termina con lo que hay y se avisa (la pantalla sale de «Grabando»). */
+  function cortada() {
+    if (cerrando || (estado !== "grabando" && estado !== "pausa")) return;
+    void terminar();
+    op.alAviso?.("cortada");
+  }
+
   async function pedirPantalla() {
     try {
       const wl = (navigator as unknown as { wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> } }).wakeLock;
-      if (wl && !document.hidden && !pantalla) pantalla = await wl.request("screen");
+      if (!wl || document.hidden || pantalla) return;
+      const p = await wl.request("screen");
+      if (cerrando || estado === "terminada") void p.release().catch(() => {}); // llegó después de terminar o cancelar
+      else pantalla = p;
     } catch {
       /* se puede apagar la pantalla: se pausa sola y se sigue al volver */
     }
@@ -217,6 +245,7 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", alSalir);
     flujo?.getTracks().forEach((t) => {
       t.removeEventListener("mute", alSilenciar);
+      t.removeEventListener("ended", alTerminarPista);
       t.stop();
     });
     flujo = undefined;
@@ -227,8 +256,17 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
     pantalla = null;
   }
 
-  async function empezar() {
-    if (estado !== "inactiva") return;
+  function empezar(): Promise<void> {
+    if (empezando) return empezando;
+    if (estado !== "inactiva" || cerrando) return Promise.resolve();
+    // Si no se pudo (sin permiso, sin micrófono), se puede volver a intentar con la misma grabadora.
+    empezando = abrirYGrabar().finally(() => {
+      if (estado === "inactiva" && !cerrando) empezando = null;
+    });
+    return empezando;
+  }
+
+  async function abrirYGrabar() {
     if (!puedeGrabar()) throw new ErrorGrabadora("sin_soporte");
     // El AudioContext se crea dentro del toque (si no, Safari lo deja suspendido).
     try {
@@ -247,6 +285,11 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
       if (n === "NotFoundError" || n === "OverconstrainedError" || n === "NotReadableError") throw new ErrorGrabadora("sin_microfono", String((e as Error)?.message ?? n));
       throw new ErrorGrabadora("otro", String((e as Error)?.message ?? e));
     }
+    if (cerrando || estado !== "inactiva") {
+      // Se canceló (o terminó) mientras se esperaba el permiso o el micrófono: se apaga al tiro.
+      limpiar();
+      throw new ErrorGrabadora("otro", "cancelada");
+    }
     try {
       if (ctx) {
         analizador = ctx.createAnalyser();
@@ -256,7 +299,10 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
     } catch {
       analizador = undefined;
     }
-    for (const t of flujo.getAudioTracks()) t.addEventListener("mute", alSilenciar);
+    for (const t of flujo.getAudioTracks()) {
+      t.addEventListener("mute", alSilenciar);
+      t.addEventListener("ended", alTerminarPista); // se desconectó el micrófono: el navegador detiene la grabadora
+    }
     const elegido = tipoGrabacion() ?? "";
     try {
       rec = new MediaRecorder(flujo, { ...(elegido ? { mimeType: elegido } : {}), audioBitsPerSecond: bitsPara(elegido) });
@@ -274,11 +320,21 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
       trozos.push(e.data);
       bytes += e.data.size;
     };
-    rec.onstop = () => alParar?.();
-    rec.onerror = () => {
-      if (estado === "grabando") interrumpir();
+    // Fuera de terminar() y cancelar(), un "stop" es que la grabadora se detuvo sola (la pista terminó).
+    rec.onstop = () => {
+      detenida = true;
+      if (alParar) alParar();
+      else cortada();
     };
-    rec.start(1000);
+    rec.onerror = () => cortada(); // un error de MediaRecorder siempre la detiene
+
+    try {
+      rec.start(1000);
+    } catch (e) {
+      rec = undefined;
+      limpiar(); // sin esto el micrófono quedaría encendido
+      throw new ErrorGrabadora("sin_soporte", String((e as Error)?.message ?? e));
+    }
     desde = performance.now();
     ultimoSonido = 0;
     cambiar("grabando");
@@ -291,6 +347,7 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
 
   function pausar() {
     if (estado !== "grabando" || !rec || cerrando) return;
+    if (rec.state === "inactive") return cortada(); // se detuvo sola y todavía no llega el "stop"
     try {
       rec.pause();
     } catch {
@@ -302,10 +359,11 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
 
   function seguir() {
     if (estado !== "pausa" || !rec || cerrando) return;
+    if (rec.state === "inactive") return cortada();
     try {
       rec.resume();
     } catch {
-      return;
+      return cortada(); // no se puede seguir: se guarda lo que hay y se avisa
     }
     desde = performance.now();
     ultimoSonido = segundos();
@@ -323,14 +381,16 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
     tic = undefined;
     const total = acumulado / 1000;
     terminando = (async () => {
-      if (rec && rec.state !== "inactive") {
-        // El último dataavailable llega antes de "stop".
+      if (rec && !detenida) {
+        // El último dataavailable llega antes de "stop". Si se detuvo sola (la pista terminó), el estado ya
+        // es "inactive" pero el último trozo puede no haber llegado: se espera igual el "stop".
         await new Promise<void>((ok) => {
           const t = setTimeout(ok, 3000);
           alParar = () => {
             clearTimeout(t);
             ok();
           };
+          if (rec!.state === "inactive") return;
           try {
             rec!.stop();
           } catch {
@@ -343,7 +403,8 @@ export function crearGrabadora(op: OpcionesGrabadora = {}): Grabadora {
       const mime = (rec?.mimeType || tipo || "audio/mp4").split(";")[0].trim();
       estado = "terminada";
       op.alEstado?.("terminada");
-      return { blob: new Blob(trozos, { type: mime }), mime, segundos: Math.round(total) };
+      // Un corte que llegó tarde (el tic de 250 ms atrasado) no puede pasar del tope del servidor.
+      return { blob: new Blob(trozos, { type: mime }), mime, segundos: Math.min(Math.round(total), MAX_SEGUNDOS) };
     })();
     return terminando;
   }

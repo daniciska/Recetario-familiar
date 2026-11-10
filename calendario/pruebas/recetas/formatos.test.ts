@@ -1,8 +1,10 @@
 // detectarAudio (servidor/gemini.ts): el tipo de audio sale de los bytes, no de lo que dice el navegador.
+// duracionAudio: los segundos también (para el tope de 15 minutos), con contenedores mínimos y, si hay ffmpeg,
+// audios reales y escritos «en vivo» (sin la duración en la cabecera, como MediaRecorder).
 //   node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/formatos.test.ts
-import { detectarAudio, type AudioDetectado } from "../../servidor/gemini.ts";
+import { detectarAudio, duracionAudio, type AudioDetectado } from "../../servidor/gemini.ts";
 import { MIMES_DOCUMENTADOS } from "./mock-gemini.mts";
-import { cabecera, conFfmpeg, grabadoChrome, type Formato } from "./audios.ts";
+import { cabecera, conDuracion, conFfmpeg, conFfmpegSinDuracion, grabadoChrome, type Formato } from "./audios.ts";
 import { info, ok, seccion, terminar } from "./arnes.ts";
 
 const ver = (d: AudioDetectado) => (d.ok ? `${d.mime}|${d.alterno ?? ""}|${d.reproducir}` : `✗ ${d.mensaje}`);
@@ -80,6 +82,53 @@ seccion("Audios reales generados con ffmpeg");
     }
     info(`ffmpeg generó ${reales.length} audios: ${reales.map((a) => `${a.nombre} (${a.bytes.byteLength} B)`).join(", ")}`);
   }
+}
+
+// ---------- Duración por los bytes (para que el tope de 15 minutos no dependa sólo del equipo) ----------
+const cerca = (x: number | undefined, s: number, margen = 0.5) => x != null && Math.abs(x - s) <= margen;
+
+seccion("Duración: contenedores mínimos");
+for (const f of ["ogg", "webm", "mp4", "wav"] as const) {
+  for (const s of [60, 600, 1000]) {
+    const b = conDuracion(f, s, 400_000);
+    const d = duracionAudio(b);
+    ok(`${f} que dice ${s} s → ${s} s`, detectarAudio(b).ok && cerca(d, s, 0.5), d); // wav: bytes por segundo enteros
+  }
+}
+{
+  const t0 = performance.now();
+  const d = duracionAudio(conDuracion("webm", 950, 4_000_000));
+  ok("webm de 4 MB → se lee en menos de 200 ms", cerca(d, 950) && performance.now() - t0 < 200, [d, Math.round(performance.now() - t0)]);
+}
+
+seccion("Duración: lo que no se puede saber → undefined");
+for (const f of ["ogg", "webm", "m4a", "mp4", "mov", "wav", "flac", "aiff", "aifc", "mp3", "mp3sync"] as const) {
+  ok(`cabecera ${f} sin datos de duración → undefined`, duracionAudio(cabecera(f, 3_000_000)) === undefined, duracionAudio(cabecera(f, 3_000_000)));
+}
+ok("vacío, cortito o basura → undefined", [new Uint8Array(0), new Uint8Array([0x4f, 0x67]), cabecera("texto", 5000), cabecera("caf")].every((b) => duracionAudio(b) === undefined));
+ok("duración imposible para el tamaño (2 MB en 0,01 s) → undefined", duracionAudio(conDuracion("mp4", 0.01, 2_000_000)) === undefined);
+ok("duración imposible para el tamaño (20 KB que dicen 2 semanas) → undefined", duracionAudio(conDuracion("ogg", 1_209_600, 20_000)) === undefined);
+{
+  const b = conDuracion("ogg", 1000, 400_000);
+  const cortado = b.subarray(0, b.length - 50); // la última página quedó a medias: no hay otra → undefined
+  ok("ogg con la última página cortada (y sin otra) → undefined", duracionAudio(cortado) === undefined, duracionAudio(cortado));
+}
+
+seccion("Duración: grabaciones reales");
+{
+  const d = duracionAudio(grabadoChrome());
+  ok("grabado-chrome.webm (MediaRecorder, sin Duration) → ≈ 3,9 s", cerca(d, 3.95, 0.15), d);
+  const reales = conFfmpeg();
+  if (!reales) info("omitido (sin ffmpeg)");
+  else
+    for (const a of reales) {
+      const x = duracionAudio(a.bytes);
+      if (a.esperado === "rechazo") ok(`${a.nombre} → undefined (se rechaza por el formato)`, x === undefined, x);
+      else ok(`${a.nombre} (4 s) → ≈ 4 s`, cerca(x, 4, 0.15), x);
+    }
+  const vivos = conFfmpegSinDuracion(20);
+  if (!vivos) info("omitido (sin ffmpeg)");
+  else for (const a of vivos) ok(`${a.nombre} (20 s, sin la duración en la cabecera) → ≈ 20 s`, cerca(duracionAudio(a.bytes), 20, 0.3), duracionAudio(a.bytes));
 }
 
 await terminar();

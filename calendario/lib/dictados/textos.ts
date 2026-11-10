@@ -118,10 +118,15 @@ export const chip = (d: Pick<DictadoPublico, "estado" | "esReceta" | "error" | "
 export const chipLocal = (p: { subiendo?: boolean; rechazo?: unknown }) =>
   p.subiendo ? "⬆️ Subiendo a la nube…" : p.rechazo ? CHIPS.necesita_ayuda : "📱 En este equipo, sin subir";
 
-/** Qué botones lleva la fila de un dictado en «🎙️ Dictadas» (▶️ y 🗑 Descartar van siempre). */
-export function botonesDictado(d: Pick<DictadoPublico, "estado" | "esReceta" | "error" | "intentos">): ("revisar" | "revisar_igual" | "otra_version" | "intentar")[] {
+/**
+ * Qué botones lleva la fila de un dictado en «🎙️ Dictadas» (▶️ y 🗑 Descartar van siempre). Un borrador de
+ * rescate (`rescate`: Gemini cortó la respuesta y sólo quedó lo que se dijo) lleva también «Pedir otra versión».
+ */
+export function botonesDictado(
+  d: Pick<DictadoPublico, "estado" | "esReceta" | "error" | "intentos"> & { rescate?: boolean },
+): ("revisar" | "revisar_igual" | "otra_version" | "intentar")[] {
   const s = situacion(d);
-  if (s === "lista") return ["revisar"];
+  if (s === "lista") return d.rescate ? ["revisar", "otra_version"] : ["revisar"];
   if (s === "no_receta") return ["revisar_igual", "otra_version"];
   if (d.estado === "error" && d.error?.codigo !== "audio_perdido") return ["intentar"];
   return [];
@@ -129,17 +134,27 @@ export function botonesDictado(d: Pick<DictadoPublico, "estado" | "esReceta" | "
 
 export interface ResumenDictados {
   listas: number; // para revisar
-  enCamino: number; // en cola, escribiendo, se reintenta o esperando a Gemini
+  enCamino: number; // en cola o con Gemini escribiendo
+  reintento: number; // Gemini ocupado o se cortó: la app lo vuelve a pedir sola
+  cuota: number; // se acabó la cuota del día: se procesa sola después de `cuotaHasta`
+  cuotaHasta?: number; // epoch ms: el más tardío de los «después de las HH:MM»
+  esperando: number; // falta la clave de Gemini en Netlify
   ayuda: number; // necesitan a alguien (o «no parece receta»)
   locales: number; // audios en este equipo sin subir
 }
 
 export function resumir(dictados: Pick<DictadoPublico, "estado" | "esReceta" | "error" | "intentos">[], locales = 0): ResumenDictados {
-  const r: ResumenDictados = { listas: 0, enCamino: 0, ayuda: 0, locales };
+  const r: ResumenDictados = { listas: 0, enCamino: 0, reintento: 0, cuota: 0, esperando: 0, ayuda: 0, locales };
   for (const d of dictados) {
     const s = situacion(d);
     if (s === "lista") r.listas++;
     else if (s === "no_receta" || s === "necesita_ayuda") r.ayuda++;
+    else if (s === "esperando_gemini") r.esperando++;
+    else if (s === "se_reintenta" && d.error?.codigo === "cuota_dia") {
+      r.cuota++;
+      const p = d.error.proximo;
+      if (p && (!r.cuotaHasta || p > r.cuotaHasta)) r.cuotaHasta = p;
+    } else if (s === "se_reintenta") r.reintento++;
     else r.enCamino++;
   }
   return r;
@@ -147,14 +162,76 @@ export function resumir(dictados: Pick<DictadoPublico, "estado" | "esReceta" | "
 
 const plural = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
 
-/** El botón ancho de arriba de Recetas (null: no hay nada que mostrar). Lo más urgente primero. */
+/**
+ * El botón ancho de arriba de Recetas (null: no hay nada que mostrar). Lo más urgente primero, y lo que
+ * espera dice qué espera: «Gemini está pasando…» sólo si de verdad está en cola o escribiendo.
+ */
 export function textoAviso(r: ResumenDictados): string | null {
   if (r.listas) return `🎙️ ${plural(r.listas, "lista", "listas")} para revisar →`;
   if (r.ayuda) return `🎙️ ${plural(r.ayuda, "receta dictada necesita", "recetas dictadas necesitan")} ayuda →`;
   if (r.locales) return `📱 ${plural(r.locales, "audio", "audios")} en este equipo sin subir →`;
   if (r.enCamino) return `🎙️ Gemini está pasando ${plural(r.enCamino, "receta", "recetas")}…`;
+  if (r.reintento) return `⏳ ${plural(r.reintento, "receta dictada se reintenta sola", "recetas dictadas se reintentan solas")} en unos minutos →`;
+  if (r.cuota) return `⏳ ${plural(r.cuota, "receta dictada espera", "recetas dictadas esperan")} la cuota de Gemini (se pasa sola ${despuesDe(r.cuotaHasta)}) →`;
+  if (r.esperando) return `⏳ ${plural(r.esperando, "receta dictada espera", "recetas dictadas esperan")} que conecten Gemini (falta la clave) →`;
   return null;
 }
+
+/** El aviso de por qué no se pudo usar el micrófono: los pasos del iPhone o iPad (`ios`) o los de Android y Fire. */
+export function textoMicrofono(motivo: "permiso" | "sin_microfono" | "sin_soporte" | "otro" | string, ios: boolean): string {
+  if (motivo === "permiso") return ios ? TEXTOS.micDenegadoIphone : TEXTOS.micDenegado;
+  if (motivo === "sin_microfono") return TEXTOS.sinMicrofono;
+  if (motivo === "sin_soporte") return TEXTOS.sinGrabadora;
+  return TEXTOS.micOtro;
+}
+
+// ---------- La ventana de dictar: qué se dice en el avance ----------
+
+/** Cómo va la subida a la nube en la ventana de dictar. */
+export type SubidaVista =
+  | { e: "subiendo" }
+  | { e: "ok" }
+  | { e: "sin_conexion" }
+  | { e: "rechazo"; motivo: "ya_guardada" | "lleno" | "rechazado"; mensaje: string };
+
+export interface VistaAvance {
+  /** El audio está sólo en esta ventana (no hay copia en el equipo y no llegó a la nube): cerrar pide confirmar. */
+  enRiesgo: boolean;
+  /** «Puedes cerrar esta ventana: sigue sola…»: sólo cuando de verdad sigue sola. */
+  pie: boolean;
+  /** El aviso de sin conexión (sólo dice «a salvo en este equipo» si la copia se guardó), o null. */
+  sinConexion: string | null;
+  /** Ofrecer «📤 Guardar una copia en Archivos». */
+  copia: boolean;
+}
+
+/**
+ * Qué muestra el avance de la ventana de dictar. `enEquipo`: si la copia en IndexedDB se guardó (null: todavía
+ * no se sabe). Nunca dice «a salvo en este equipo» ni «Puedes cerrar» si el audio sólo está en la ventana.
+ */
+export function vistaAvance(x: {
+  enEquipo: boolean | null;
+  subida: SubidaVista | null;
+  dictado: Pick<DictadoPublico, "estado" | "esReceta" | "error" | "intentos"> | null;
+}): VistaAvance {
+  const { enEquipo, subida, dictado } = x;
+  const enNube = !!dictado || subida?.e === "ok" || (subida?.e === "rechazo" && subida.motivo === "ya_guardada");
+  const enRiesgo = enEquipo === false && !enNube;
+  let pie = false;
+  if (dictado) {
+    const s = situacion(dictado);
+    pie = s === "en_cola" || s === "escribiendo" || s === "se_reintenta" || s === "esperando_gemini";
+  } else if (enEquipo === true) pie = subida?.e === "subiendo" || subida?.e === "sin_conexion" || (subida?.e === "rechazo" && subida.motivo === "lleno");
+  return {
+    enRiesgo,
+    pie,
+    sinConexion: subida?.e === "sin_conexion" && !dictado ? (enEquipo === true ? TEXTOS.sinConexion : TEXTOS.sinConexionSinCopia) : null,
+    copia: enRiesgo,
+  };
+}
+
+/** Se puede abrir la revisión sólo con un dictado «listo» que trae su borrador (nunca un borrador vacío). */
+export const sePuedeRevisar = (d: Pick<DictadoPublico, "estado" | "borrador"> | null | undefined): boolean => d?.estado === "listo" && !!d.borrador;
 
 // ---------- Ajustes: «Probar conexión» ----------
 
@@ -211,8 +288,10 @@ export const TEXTOS = {
   entendido: "Entendido",
   geminiNoConectado:
     "Gemini todavía no está conectado (falta la clave en Netlify). Puedes grabar igual: el audio queda guardado en la nube y se pasa a receta solo cuando esté la clave.",
+  micDenegadoIphone:
+    "No hay permiso para el micrófono. En el iPhone o iPad: Ajustes → Apps → Safari → Micrófono → Preguntar o Permitir. También puedes grabar con Notas de Voz y subirlo con 📎.",
   micDenegado:
-    "No hay permiso para el micrófono. En el iPhone: Ajustes → Apps → Safari → Micrófono → Preguntar o Permitir. También puedes grabar con Notas de Voz y subirlo con 📎.",
+    "No hay permiso para el micrófono. En Chrome o Silk (tablet Fire): toca el candado junto a la dirección → Permisos → Micrófono → Permitir; si no aparece, Ajustes del equipo → Apps → el navegador → Permisos → Micrófono. En Fully Kiosk: Settings → Web Content Settings → Enable Microphone Access. También puedes grabar una nota de voz en WhatsApp y subirla con 📎.",
   sinMicrofono: "No se encontró un micrófono en este equipo. Graba con Notas de Voz o WhatsApp y súbelo con 📎.",
   sinGrabadora: "Este navegador no puede grabar. Graba con Notas de Voz o WhatsApp y súbelo con 📎.",
   // Archivo
@@ -234,6 +313,8 @@ export const TEXTOS = {
   terminarYGuardar: "Terminar y guardar",
   seguirGrabando: "Seguir grabando",
   muyCorta: "La grabación quedó muy corta. Inténtalo de nuevo.",
+  guardandoGrabacion: "💾 Guardando la grabación…",
+  cortada: "El micrófono se cortó (se desconectó o lo tomó otra app) y la grabación se guardó hasta ahí. Si faltó algo, díctalo en otro audio.",
   // Avance
   guardadoEquipo: (segundos?: number) => `✅ Guardado en este equipo${segundos ? ` (${duracion(segundos)})` : ""}`,
   subiendo: "⬆️ Subiendo a la nube…",
@@ -244,8 +325,15 @@ export const TEXTOS = {
   pieAvance: "Puedes cerrar esta ventana: sigue sola y la encuentras en Recetas → 🎙️ Dictadas.",
   sinConexion: "Sin conexión: el audio está a salvo en este equipo y se sube solo cuando vuelva internet.",
   reintentarAhora: "Reintentar ahora",
-  sinCopiaLocal: "Este equipo no pudo guardar el audio. No cierres esta ventana hasta que vuelva internet.",
+  // Sin copia en el equipo (IndexedDB falló): el audio sólo está en esta ventana hasta que llegue a la nube.
+  sinCopiaLocal: "Este equipo no pudo guardar una copia del audio: por ahora sólo está en esta ventana. No la cierres hasta que llegue a la nube, o guarda una copia en Archivos.",
+  sinConexionSinCopia: "Sin conexión: el audio todavía no llega a la nube. Se sube cuando vuelva internet, mientras esta ventana siga abierta.",
+  confirmarPerder: "Este audio no quedó guardado en ningún lado (ni en este equipo ni en la nube). Si cierras la ventana, se pierde.",
+  cerrarYPerder: "Cerrar y perderlo",
+  noCerrar: "No cerrar",
   guardarCopia: "📤 Guardar una copia en Archivos",
+  rescate:
+    "Gemini no alcanzó a ordenar esta receta: quedó sólo lo que se dijo, sin ingredientes ni pasos. Toca «Pedir otra versión» o complétala a mano.",
   errorTitulo: "😕 No se pudo pasar en limpio",
   loQueSeEscucho: "📝 Lo que se escuchó",
   noReceta: (motivo?: string) =>
@@ -259,6 +347,10 @@ export const TEXTOS = {
   descartar: "🗑 Descartar",
   cerrar: "Cerrar",
   confirmarDescartar: "¿Descartar este audio? Se borra el audio y lo que escribió Gemini. No se puede deshacer.",
+  yaGuardadaOtro: "Esta receta ya la guardaron desde otro equipo: está en Recetas y no se borró nada.",
+  yaCambio: "Esta receta dictada cambió en otro equipo (por ejemplo, pidieron otra versión). Aquí se ve cómo va ahora.",
+  confirmarOtraVersion: "¿Pedir otra versión? Gemini vuelve a escuchar el audio; lo que corregiste aquí se reemplaza por la versión nueva.",
+  siOtraVersion: "Sí, pedir otra versión",
   siDescartar: "Sí, descartar",
   no: "No",
   // Revisar el borrador
@@ -276,6 +368,7 @@ export const TEXTOS = {
   dijo: (como: string) => `Dijo: «${como}»`,
   despues: "Después",
   guardarReceta: "Guardar receta",
+  guardando: "Guardando…",
   // Detalle y edición de una receta dictada
   porConfirmar: "❓ Por confirmar",
   dictadaEl: (fecha: string) => `🎙️ Dictada el ${fecha}`,

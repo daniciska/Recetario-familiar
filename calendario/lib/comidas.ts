@@ -190,6 +190,20 @@ export function nombreComida(c: ComidaPlanificada, recetas: Map<string, Receta>)
   return nombresComida(c, recetas).join(" · ");
 }
 
+const comparable = (s: string) => s.trim().replace(/\s+/g, " ").toLocaleLowerCase("es");
+
+/**
+ * La comida es uno de los atajos para la comida entera («Sin colación», «Comemos fuera», «Delivery»):
+ * sólo ese texto, en el primer espacio y sin receta. Se muestra sin espacios por llenar, y el editor
+ * la abre en el primer espacio. Con `recetas`, una receta borrada en otro espacio cuenta como vacío.
+ */
+export function esComidaEntera(c: ComidaPlanificada | undefined, tipo: TipoComida, recetas?: Map<string, Receta>): boolean {
+  const [primero, ...resto] = recetas ? itemsVisibles(c, tipo, recetas) : itemsDe(c, tipo);
+  if (!primero || primero.recetaId || !primero.texto || resto.some(Boolean)) return false;
+  const texto = comparable(primero.texto);
+  return atajosComida(tipo).some((a) => comparable(a) === texto);
+}
+
 /** El emoji de la primera receta de la comida (undefined si no tiene recetas de la biblioteca). */
 export function emojiComida(c: ComidaPlanificada | undefined, recetas: Map<string, Receta>): string | undefined {
   for (const x of itemsLlenos(c)) {

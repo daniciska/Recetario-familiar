@@ -19,6 +19,7 @@ import {
   TIPOS_COMIDA,
   atajosComida,
   claveComida,
+  esComidaEntera,
   itemsLlenos,
   itemsVisibles,
   nombreItem,
@@ -252,7 +253,8 @@ function Celda({
   // Una receta que se borró de la biblioteca cuenta como espacio vacío.
   const items = itemsVisibles(comida, tipo.id, recetas);
   const llenos = items.filter((x): x is ItemComida => !!x);
-  const vacios = items.length - llenos.length;
+  // «Comemos fuera», «Sin colación»…: es la comida entera, no le quedan espacios por llenar.
+  const vacios = esComidaEntera(comida, tipo.id, recetas) ? 0 : items.length - llenos.length;
   const varios = llenos.length > 1;
   const conReceta = llenos.some((x) => x.recetaId);
   const receta = !varios && llenos[0]?.recetaId ? recetas.get(llenos[0].recetaId) : undefined;
@@ -368,7 +370,9 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
   const espacios = ESPACIOS_COMIDA[tipo];
   const tamFamilia = Math.max(1, estado.miembros.length);
   const [porciones, setPorciones] = useState(actual?.porciones ?? tamFamilia);
-  const primerVacio = Math.max(0, items.findIndex((x) => !x));
+  // La comida entera («Comemos fuera») se abre en su primer espacio: lo que se elija la reemplaza.
+  const entera = esComidaEntera(actual, tipo, recetas);
+  const primerVacio = entera ? 0 : Math.max(0, items.findIndex((x) => !x));
   const [elegido, setElegido] = useState(primerVacio);
   const [busqueda, setBusqueda] = useState("");
   const [texto, setTexto] = useState(() => textoLibre(items[primerVacio]));
@@ -541,7 +545,11 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
                   key={a}
                   type="button"
                   onClick={() => ponerTodo({ texto: a, porciones })}
-                  className="min-h-11 rounded-full border-2 border-borde px-4 text-base font-bold"
+                  aria-pressed={entera && actual?.texto === a}
+                  className={cx(
+                    "min-h-11 rounded-full border-2 px-4 text-base font-bold",
+                    entera && actual?.texto === a ? "border-acento bg-acento text-acento-tinta" : "border-borde",
+                  )}
                 >
                   {a}
                 </button>

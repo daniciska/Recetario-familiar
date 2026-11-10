@@ -151,14 +151,14 @@ await caso("C", () => {
     x.id === DICTADA.id ? { ...x, nombre: "Charquicán de la abuela", ingredientes: x.ingredientes.map((i) => (i.id === "ing_1" ? { ...i, cantidad: 700 } : i)) } : x,
   );
   const r2 = (conservarCamposNuevos(previas, corregido) as O[])[0];
-  igual("C6 cantidad corregida → ese ingrediente pierde estimado, comoLoDijo y nota", r2.ingredientes[0], { id: "ing_1", nombre: "Zapallo", cantidad: 700, unidad: "g", categoria: "Verduras y frutas" });
+  igual("C6 cantidad corregida → ese ingrediente pierde estimado y comoLoDijo (la nota sigue)", r2.ingredientes[0], { id: "ing_1", nombre: "Zapallo", cantidad: 700, unidad: "g", categoria: "Verduras y frutas", nota: "en cubos" });
   ok("C7 …los demás ingredientes los conservan", r2.ingredientes[1].comoLoDijo === "unas seis" && r2.ingredientes[2].comoLoDijo === "lo que pida");
   ok("C8 …y la receta conserva dudas y dictado aunque cambió el nombre", r2.nombre === "Charquicán de la abuela" && r2.dudas?.length === 2 && r2.dictado?.id === ID);
   const otroNombre = recetasViejas(previas).map((x) =>
     x.id === DICTADA.id ? { ...x, ingredientes: x.ingredientes.map((i) => (i.id === "ing_2" ? { ...i, nombre: "Papas chilotas" } : i.id === "ing_3" ? { ...i, unidad: "pizca" } : i)) } : x,
   );
   const r3 = (conservarCamposNuevos(previas, otroNombre) as O[])[0];
-  ok("C9 nombre o unidad cambiados → ese ingrediente no recupera nada", !("comoLoDijo" in r3.ingredientes[1]) && !("comoLoDijo" in r3.ingredientes[2]), r3.ingredientes);
+  ok("C9 nombre o unidad cambiados → ese ingrediente no recupera «cómo lo dijo»", !("comoLoDijo" in r3.ingredientes[1]) && !("comoLoDijo" in r3.ingredientes[2]), r3.ingredientes);
   ok("C10 …el que no cambió sí", r3.ingredientes[0].estimado === true);
 
   const conNuevos = recetasViejas(previas).map((x) => (x.id === DICTADA.id ? { ...x, ingredientes: [...x.ingredientes, { id: "ing_9", nombre: "Choclo", cantidad: 2, unidad: "unidad", categoria: "Verduras y frutas" }] } : x));
@@ -254,7 +254,7 @@ await caso("D", async () => {
   const d2 = await dictadaEnNube();
   ok("D6 el equipo viejo edita la receta dictada (200)", v2.status === 200);
   ok("D7 …conserva dudas y dictado", JSON.stringify([d2.dudas, d2.dictado]) === JSON.stringify([DICTADA.dudas, DICTADA.dictado]), d2);
-  igual("D8 …el zapallo corregido a 700 g ya no es «≈»", d2.ingredientes[0], { id: "ing_1", nombre: "Zapallo", cantidad: 700, unidad: "g", categoria: "Verduras y frutas" });
+  igual("D8 …el zapallo corregido a 700 g ya no es «≈» (sigue «en cubos»)", d2.ingredientes[0], { id: "ing_1", nombre: "Zapallo", cantidad: 700, unidad: "g", categoria: "Verduras y frutas", nota: "en cubos" });
   ok("D9 …las papas siguen con «unas seis» y las porciones cambiaron", d2.ingredientes[1].comoLoDijo === "unas seis" && d2.porciones === 6);
 
   const antes = await enNube();

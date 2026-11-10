@@ -200,6 +200,26 @@ await caso("respuesta con thought", async () => {
   const r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
   ok("las partes thought:true se ignoran", r.tipo === "ok" && JSON.stringify(r.datos) === JSON.stringify(CASOS[0].esperado), r);
 });
+await caso("rescate sólo si Gemini cortó todas las veces", async () => {
+  sim.reiniciar();
+  sim.guion("*", ["max_tokens", "max_tokens"]);
+  let r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("dos MAX_TOKENS → rescate con la transcripción", r.tipo === "rescate" && r.transcripcion.length > 100, r);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", ["json_malo", "503", "503", "503"]);
+  sim.guion("gemini-3.5-flash-lite", ["503", "503", "503"]);
+  r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("JSON dañado y después 503 en todo → error ocupado reintentable (no rescate)", r.tipo === "error" && r.codigo === "ocupado" && r.reintentable && !!r.proximo, r);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", ["max_tokens", "429dia"]);
+  sim.guion("gemini-3.5-flash-lite", ["429dia"]);
+  r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("MAX_TOKENS y después la cuota del día en los dos → error cuota_dia (no rescate)", r.tipo === "error" && r.codigo === "cuota_dia", r);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", ["json_malo", "503", "json_malo"]);
+  r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("JSON dañado, 503 y otra vez JSON dañado → rescate", r.tipo === "rescate", r);
+});
 await caso("se acabó el presupuesto", async () => {
   sim.reiniciar();
   const r = await pedirReceta(cfg(), audio, { hasta: reloj.ahora() + 5_000, reloj });

@@ -10,6 +10,8 @@
 //   "resumen" → lo mismo sin los bytes, para listar sin cargar varios MB cada vez.
 // Todo con try/catch: si IndexedDB no existe o falla (modo privado, equipo lleno), guardar() da false,
 // listar() y resumenes() dan [] y borrar() no hace nada. La pantalla avisa si guardar() da false.
+// alCambiar() avisa cada cambio hecho desde esta pestaña (guardar, borrar, anotarRechazo): así lo automático
+// de Dictadas (lib/dictados/motor.ts) se entera de un audio que dejó la ventana de dictar sin red o «lleno».
 
 export interface RechazoLocal {
   mensaje: string; // lo que dijo la nube, para mostrarlo
@@ -94,6 +96,24 @@ async function transaccion<T>(modo: IDBTransactionMode, fn: (a: IDBObjectStore, 
 const sinDatos = ({ datos, ...resto }: Registro): ResumenLocal => ({ ...resto, bytes: datos.byteLength });
 const aPendiente = ({ datos, ...resto }: Registro): PendienteLocal => ({ ...resto, blob: new Blob([datos], { type: resto.mime }) });
 
+const oyentes = new Set<() => void>();
+
+/** Avisa cada vez que cambia lo guardado en este equipo desde esta pestaña. Devuelve cómo dejar de escuchar. */
+export function alCambiar(fn: () => void): () => void {
+  oyentes.add(fn);
+  return () => void oyentes.delete(fn);
+}
+
+function avisar() {
+  for (const f of [...oyentes]) {
+    try {
+      f();
+    } catch {
+      /* un oyente que falla no impide avisar a los demás */
+    }
+  }
+}
+
 let persistencia = false;
 /** Pide que el navegador no borre esta copia por falta de espacio (se concede por heurística; una vez). */
 function pedirPersistencia() {
@@ -117,6 +137,7 @@ export async function guardar(p: PendienteLocal): Promise<boolean> {
       a.put(registro);
       s.put(sinDatos(registro));
     });
+    if (r !== null) avisar();
     return r !== null;
   } catch {
     return false;
@@ -155,10 +176,11 @@ export async function leer(id: string): Promise<PendienteLocal | null> {
 
 export async function borrar(id: string): Promise<void> {
   try {
-    await transaccion("readwrite", (a, s) => {
+    const r = await transaccion("readwrite", (a, s) => {
       a.delete(id);
       s.delete(id);
     });
+    if (r !== null) avisar();
   } catch {
     /* sin copia: nada que borrar */
   }

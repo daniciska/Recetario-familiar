@@ -1,7 +1,9 @@
-// Lo que useDictados decide solo, en funciones puras (sin React ni red) para poder probarlo
-// (pruebas/recetas/cliente.test.ts): cuándo volver a pedir «procesar», cuándo mirar de nuevo la lista,
-// qué audios del equipo se suben solos y qué dictados sobran porque su receta ya está guardada.
+// Lo que Dictadas decide solo (lib/dictados/motor.ts y useDictados), en funciones puras (sin React ni red)
+// para poder probarlo (pruebas/recetas/cliente.test.ts): cuándo volver a pedir «procesar», cuándo mirar de
+// nuevo la lista, qué audios del equipo se suben solos, qué dictados se esconden porque su receta ya está
+// en Recetas y cuáles se pueden marcar como guardados (sólo si la nube ya confirmó la receta).
 
+import { PREFIJO } from "../datos/repositorioLocal";
 import type { ResumenLocal } from "./pendientes";
 import { esReintentable, type DictadoPublico, type EstadoGemini } from "./tipos";
 
@@ -42,9 +44,51 @@ export function debeReintentar(
   return esReintentable(codigo) && proximo != null && proximo <= ahora;
 }
 
-/** Dictados listos cuya receta (rec_<id>) ya está guardada en Recetas: sobran (se ocultan y se limpian). */
+/**
+ * Dictados listos cuya receta (rec_<id>) está en Recetas: se esconden de la lista. Con lo que muestra la app
+ * basta para esconder (si su guardado falla, la receta se deshace y el dictado vuelve a aparecer), pero no
+ * para limpiar: para eso, porLimpiar().
+ */
 export const yaGuardados = <T extends Pick<DictadoPublico, "id" | "estado">>(dictados: T[], recetaIds: Set<string>) =>
   dictados.filter((d) => d.estado === "listo" && recetaIds.has(`rec_${d.id}`));
+
+/**
+ * Los que se pueden marcar como guardados (POST /guardado, que saca el borrador de la nube): listos cuya
+ * receta está en la app Y la nube ya la confirmó (`confirmadas`, recetasConfirmadas()). Recién tocado
+ * «Guardar», la app muestra la receta antes de que llegue a la nube (cambio optimista de lib/store.tsx): si
+ * ese guardado falla, limpiar habría borrado el borrador sin receta. Si no se sabe qué confirmó la nube
+ * (null), se usa lo de la app y decide el servidor (responde 409 RECETA_NO_GUARDADA si no la tiene).
+ */
+export function porLimpiar<T extends Pick<DictadoPublico, "id" | "estado">>(dictados: T[], recetaIds: Set<string>, confirmadas: Set<string> | null): T[] {
+  return yaGuardados(dictados, confirmadas ? new Set([...recetaIds].filter((id) => confirmadas.has(id))) : recetaIds);
+}
+
+/**
+ * Ids de las recetas que la nube ya tiene, según la copia que RepositorioNube (lib/datos/repositorioNube.ts)
+ * deja en este equipo (localStorage `calendario-familiar:v1:recetas`): esa copia sólo se escribe con lo que
+ * la nube aceptó (después del 200 del PUT) o mandó, nunca con el cambio optimista. Sin copia: ninguna.
+ * null: no se puede leer (almacenamiento bloqueado) o está dañada.
+ */
+export function recetasConfirmadas(almacen: Pick<Storage, "getItem"> | null = almacenLocal()): Set<string> | null {
+  try {
+    if (!almacen) return null;
+    const crudo = almacen.getItem(`${PREFIJO}recetas`);
+    if (crudo == null) return new Set();
+    const lista: unknown = JSON.parse(crudo);
+    if (!Array.isArray(lista)) return null;
+    return new Set(lista.flatMap((r) => (r && typeof r === "object" && typeof (r as { id?: unknown }).id === "string" ? [(r as { id: string }).id] : [])));
+  } catch {
+    return null;
+  }
+}
+
+function almacenLocal(): Pick<Storage, "getItem"> | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
 
 /** En cuántos ms volver a mirar la lista, o null si no hace falta hasta que pase algo (volver a la app, internet). */
 export function proximaRevision(

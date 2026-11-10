@@ -1,7 +1,8 @@
-// La parte de la app de «🎙️ Dictar receta» (lib/dictados/cliente.ts, pendientes.ts y reglas.ts) contra el
-// servidor de verdad en el mismo proceso: fetch apunta a manejarApi (servidor/dictados.ts) y a api-salud.mts,
-// con Blobs en memoria, IndexedDB falsa (idb-falso.ts), el simulador de Gemini en 127.0.0.1 y la corrida en
-// segundo plano disparada como en Netlify. Sin red ni clave real.
+// La parte de la app de «🎙️ Dictar receta» (lib/dictados/cliente.ts, pendientes.ts, reglas.ts y motor.ts)
+// contra el servidor de verdad en el mismo proceso: fetch apunta a manejarApi (servidor/dictados.ts), a
+// api-salud.mts y a api-datos.mts (para RepositorioNube), con Blobs en memoria, IndexedDB falsa
+// (idb-falso.ts), el simulador de Gemini en 127.0.0.1 y la corrida en segundo plano disparada como en
+// Netlify. Sin red ni clave real.
 //   node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/cliente.test.ts
 import { resolveObjectURL } from "node:buffer";
 import { reiniciarBlobs } from "@netlify/blobs";
@@ -11,8 +12,11 @@ import { AccesoRevocado, SinConexion } from "../../lib/datos/nube.ts";
 import * as cliente from "../../lib/dictados/cliente.ts";
 import { RechazoDictado, SinNube } from "../../lib/dictados/cliente.ts";
 import * as pendientes from "../../lib/dictados/pendientes.ts";
-import { CADA_LOCALES_MS, CADA_MS, ESPERA_SUBIDO_MS, MAX_INTENTOS_SOLOS, debeReintentar, proximaRevision, subeSolo, yaGuardados } from "../../lib/dictados/reglas.ts";
-import { ID_DICTADO, MAX_PENDIENTES, type CodigoError, type DictadoPublico } from "../../lib/dictados/tipos.ts";
+import { CADA_LOCALES_MS, CADA_MS, ESPERA_SUBIDO_MS, MAX_INTENTOS_SOLOS, debeReintentar, porLimpiar, proximaRevision, recetasConfirmadas, subeSolo, yaGuardados } from "../../lib/dictados/reglas.ts";
+import { crearMotor } from "../../lib/dictados/motor.ts";
+import { RepositorioNube } from "../../lib/datos/repositorioNube.ts";
+import type { Receta } from "../../lib/datos/tipos.ts";
+import { ID_DICTADO, MAX_PENDIENTES, MAX_SEGUNDOS, type CodigoError, type DictadoPublico } from "../../lib/dictados/tipos.ts";
 import { simuladorGemini } from "./mock-gemini.mts";
 import { cabecera, grabadoChrome } from "./audios.ts";
 import { instalarIDBFalso } from "./idb-falso.ts";
@@ -45,14 +49,19 @@ const deps: DepsDictados = {
 const api = manejarApi(deps);
 const proceso = manejarProceso(deps);
 const salud = (await import("../../netlify/functions/api-salud.mts")).default as unknown as () => Promise<Response>;
+const apiDatos = (await import("../../netlify/functions/api-datos.mts")).default as unknown as (req: Request, ctx: unknown) => Promise<Response>;
 async function esperar() {
   while (corridas.length) await corridas.shift();
 }
 
-// fetch de la app → el handler. `cortes`: los próximos N pedidos fallan como sin red; `caida`: responde 503.
-const pedidos: { metodo: string; ruta: string; status: number; auth: boolean }[] = [];
+// fetch de la app → el handler. `cortes`: los próximos N pedidos fallan como sin red; `caida`: responde 503;
+// `falsa`: si devuelve una respuesta, esa va en vez de la del servidor (para lo que el servidor de esta
+// versión todavía no hace o no se puede provocar).
+const pedidos: { metodo: string; ruta: string; busqueda: string; status: number; auth: boolean }[] = [];
 let cortes = 0;
 let caida = 0;
+let falsa: ((metodo: string, url: URL) => Response | undefined) | undefined;
+let enVuelo = 0;
 const fetchReal = globalThis.fetch;
 globalThis.fetch = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(entrada), "http://sitio.test");
@@ -63,7 +72,12 @@ globalThis.fetch = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
   }
   const req = new Request(url, init);
   let r: Response;
-  if (caida > 0) {
+  const clave = /^\/api\/datos(?:\/([^/]+))?$/.exec(url.pathname);
+  enVuelo++;
+  try {
+  if (falsa?.(req.method, url)) {
+    r = falsa(req.method, url)!;
+  } else if (caida > 0) {
     caida--;
     r = new Response("Bad gateway", { status: 503 });
   } else if (url.pathname === "/api/salud") {
@@ -76,8 +90,12 @@ globalThis.fetch = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
       if (antes === undefined) delete process.env.GEMINI_API_KEY;
       else process.env.GEMINI_API_KEY = antes;
     }
-  } else r = await api(req);
-  pedidos.push({ metodo: req.method, ruta: url.pathname, status: r.status, auth: !!req.headers.get("authorization") });
+  } else if (clave) r = await apiDatos(req, { params: clave[1] ? { clave: clave[1] } : {} });
+  else r = await api(req);
+  } finally {
+    enVuelo--;
+  }
+  pedidos.push({ metodo: req.method, ruta: url.pathname, busqueda: url.search, status: r.status, auth: !!req.headers.get("authorization") });
   return r;
 }) as typeof fetch;
 
@@ -99,6 +117,23 @@ const equipo = await C.nuevoEquipo("fcli", "iPhone");
 const WEBM = grabadoChrome();
 const blobDe = (b: Uint8Array, tipo = "audio/webm") => new Blob([b], { type: tipo });
 const SIN_ESPERAS = { esperas: [0, 0] };
+const dormir = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+/** Espera a que no quede nada en vuelo (pedidos, subidas, IndexedDB falsa, corridas de Gemini). */
+async function calma() {
+  for (let i = 0; i < 400; i++) {
+    await dormir(5);
+    if (enVuelo === 0 && !cliente.subiendoAhora().length) {
+      await dormir(15);
+      if (enVuelo === 0 && !cliente.subiendoAhora().length) return esperar();
+    }
+  }
+}
+/** Pone recetas rec_<id> en la colección de la familia en la nube (como si un equipo las hubiera guardado). */
+async function recetaEnNube(...ids: string[]) {
+  const actual = (await C.leerColeccion("fcli", "recetas")) as { datos: O[]; version: number } | null;
+  const datos = [...(actual?.datos ?? []), ...ids.map((id) => ({ id: `rec_${id}`, nombre: "Receta dictada", emoji: "🍲", porciones: 4, ingredientes: [], pasos: [] }))];
+  await C.guardarColeccion("fcli", "recetas", datos, actual?.version ?? 0);
+}
 
 // ---------------------------------------------------------------------------------------------
 seccion("Ids y copias locales");
@@ -182,8 +217,8 @@ await caso("sin nube", async () => {
   await pendientes.guardar(p);
   igual("subirPendiente sin nube: sin_conexion, sin pedir nada", [await cliente.subirPendiente(p, SIN_ESPERAS), pedidos.length], [{ ok: false, motivo: "sin_conexion" }, 0]);
   ok("…y la copia queda", (await pendientes.leer(p.id)) !== null);
-  await cliente.descartarDictado(p.id);
-  ok("descartar sin nube borra la copia del equipo", (await pendientes.leer(p.id)) === null && pedidos.length === 0);
+  ok("descartarBorrador sin nube → descartado", (await cliente.descartarBorrador(p.id)) === "descartado");
+  ok("…borra la copia del equipo y no pide nada", (await pendientes.leer(p.id)) === null && pedidos.length === 0);
 });
 
 conectar(equipo.token, equipo.equipoId);
@@ -221,10 +256,10 @@ await caso("flujo", async () => {
   ok("pedir otra versión → vuelve a la cola sin borrador (202)", otraVersion?.estado === "subido" && !otraVersion.borrador && pedidos.at(-1)?.status === 202, otraVersion);
   await esperar();
   ok("…y queda lista otra vez", (await cliente.leerDictado(p.id))?.estado === "listo");
-  await cliente.marcarGuardado(p.id, `rec_${p.id}`);
-  ok("marcarGuardado → sale de la lista", (await cliente.leerDictado(p.id)) === null && (await cliente.listarDictados()).dictados.length === 0);
-  await cliente.marcarGuardado(p.id, `rec_${p.id}`);
-  ok("marcarGuardado otra vez → ok (idempotente)", pedidos.at(-1)?.status === 200);
+  await recetaEnNube(p.id); // la receta llegó a Recetas en la nube
+  ok("marcarGuardado → true", (await cliente.marcarGuardado(p.id, `rec_${p.id}`)) === true);
+  ok("…y sale de la lista", (await cliente.leerDictado(p.id)) === null && (await cliente.listarDictados()).dictados.length === 0);
+  ok("marcarGuardado otra vez → true (idempotente)", (await cliente.marcarGuardado(p.id, `rec_${p.id}`)) === true && pedidos.at(-1)?.status === 200);
   const t2 = await cliente.leerTexto(p.id);
   ok("lo que se dijo queda en la nube con la receta", t2?.transcripcion === d?.transcripcion && t2?.recetaId === `rec_${p.id}`);
   ok("y el audio también", (await cliente.bajarAudio(p.id)).startsWith("blob:"));
@@ -234,26 +269,59 @@ await caso("flujo", async () => {
   idListo = p.id;
 });
 
-seccion("Descartar");
+seccion("Descartar un borrador o quitar el audio de una receta guardada");
 await caso("descartar", async () => {
-  await cliente.descartarDictado(idListo);
-  ok("descartar uno guardado borra el audio y lo que se dijo", (await cliente.bajarAudio(idListo)) === "borrado" && (await cliente.leerTexto(idListo)) === null);
-  await cliente.descartarDictado(idListo);
-  ok("descartar otra vez → ok (idempotente)", pedidos.at(-1)?.status === 200);
+  await cliente.quitarAudio(idListo);
+  ok("quitarAudio de uno guardado manda DELETE sin ?borrador", pedidos.at(-1)?.metodo === "DELETE" && pedidos.at(-1)?.busqueda === "", pedidos.at(-1));
+  ok("…y borra el audio y lo que se dijo", (await cliente.bajarAudio(idListo)) === "borrado" && (await cliente.leerTexto(idListo)) === null);
+  await cliente.quitarAudio(idListo);
+  ok("quitarAudio otra vez → ok (idempotente)", pedidos.at(-1)?.status === 200);
+  ok("descartarDictado (lo de antes) es quitarAudio mientras las pantallas se cambian", cliente.descartarDictado === cliente.quitarAudio);
   const p = cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion" });
   await pendientes.guardar(p);
   dispararActivo = false;
   ok("sube", (await cliente.subirPendiente(p, SIN_ESPERAS)).ok);
   await pendientes.guardar(p); // como si la copia no se hubiera alcanzado a borrar
-  await cliente.descartarDictado(p.id);
-  ok("descartar uno en cola: no existe más, ni el audio, ni la copia", (await cliente.leerDictado(p.id)) === null && (await cliente.bajarAudio(p.id)) === "borrado" && (await pendientes.leer(p.id)) === null);
+  ok("descartarBorrador de uno en cola → descartado", (await cliente.descartarBorrador(p.id)) === "descartado");
+  ok("…con DELETE ?borrador=1", pedidos.at(-1)?.metodo === "DELETE" && pedidos.at(-1)?.busqueda === "?borrador=1", pedidos.at(-1));
+  ok("…no existe más, ni el audio, ni la copia", (await cliente.leerDictado(p.id)) === null && (await cliente.bajarAudio(p.id)) === "borrado" && (await pendientes.leer(p.id)) === null);
   ok("procesar uno que ya no existe → null", (await cliente.procesarDictado(p.id)) === null);
   const q = cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion" });
   await pendientes.guardar(q);
   cortes = 1;
   let e: unknown;
-  await cliente.descartarDictado(q.id).catch((x) => (e = x));
+  await cliente.descartarBorrador(q.id).catch((x) => (e = x));
   ok("sin red al descartar: SinConexion, pero la copia del equipo ya se borró", e instanceof SinConexion && (await pendientes.leer(q.id)) === null);
+  dispararActivo = true;
+  // Otro equipo ya guardó la receta y la revisión vieja de este la descarta (hallazgos 2 y 6): la nube no
+  // borra nada y lo dice.
+  const g = cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion" });
+  await pendientes.guardar(g);
+  ok("sube", (await cliente.subirPendiente(g, SIN_ESPERAS)).ok);
+  await esperar();
+  await recetaEnNube(g.id);
+  ok("el otro equipo la guarda", (await cliente.marcarGuardado(g.id, `rec_${g.id}`)) === true);
+  await pendientes.guardar(g); // una copia que sobró en este equipo
+  ok("descartarBorrador de una receta que ya se guardó → «guardada»", (await cliente.descartarBorrador(g.id)) === "guardada", pedidos.at(-1));
+  const audio = await cliente.bajarAudio(g.id);
+  ok("…el audio y lo que se dijo siguen en la nube", audio.startsWith("blob:") && (await cliente.leerTexto(g.id))?.recetaId === `rec_${g.id}`);
+  if (audio.startsWith("blob:")) URL.revokeObjectURL(audio);
+  ok("…y la copia sobrante del equipo se borró", (await pendientes.leer(g.id)) === null);
+  await cliente.quitarAudio(g.id);
+  ok("quitarAudio sí lo borra", (await cliente.bajarAudio(g.id)) === "borrado");
+});
+
+seccion("Los segundos de una grabación nunca pasan de 900 (hallazgo 14)");
+await caso("segundos", async () => {
+  ok("nuevoPendiente de una grabación de 900,6 s → 900", cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion", segundos: 900.6 }).segundos === MAX_SEGUNDOS);
+  ok("un archivo no se acota (la pantalla ya rechazó los largos)", cliente.nuevoPendiente(blobDe(WEBM), { origen: "archivo", segundos: 901 }).segundos === 901);
+  // Una copia guardada por la versión anterior con segundos = 901: antes el servidor la rechazaba siempre (413).
+  const vieja = { ...cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion" }), segundos: 901 };
+  await pendientes.guardar(vieja);
+  dispararActivo = false;
+  const r = await cliente.subirPendiente(vieja, SIN_ESPERAS);
+  ok("una copia vieja con 901 s sube (manda 900)", r.ok && r.dictado.segundos === MAX_SEGUNDOS && pedidos.at(-1)?.busqueda.includes("segundos=900"), r);
+  await cliente.descartarBorrador(vieja.id);
   dispararActivo = true;
 });
 
@@ -287,7 +355,7 @@ await caso("red", async () => {
   cortes = 1;
   ok("salud sin red → null", (await cliente.salud()) === null);
   await esperar();
-  for (const d of (await cliente.listarDictados()).dictados) await cliente.descartarDictado(d.id);
+  for (const d of (await cliente.listarDictados()).dictados) await cliente.descartarBorrador(d.id);
 });
 
 seccion("Rechazos");
@@ -301,8 +369,8 @@ await caso("rechazos", async () => {
   await pendientes.guardar(grande);
   const r2 = await cliente.subirPendiente(grande, SIN_ESPERAS);
   ok("4.000.001 bytes → rechazado «máximo son 4 MB»", !r2.ok && r2.motivo === "rechazado" && /máximo son 4 MB/.test(r2.mensaje));
-  await cliente.descartarDictado(caf.id);
-  await cliente.descartarDictado(grande.id);
+  await cliente.descartarBorrador(caf.id);
+  await cliente.descartarBorrador(grande.id);
   // 20 sin revisar: el 21 queda «lleno» y se reintenta sola cuando haya cupo.
   dispararActivo = false;
   for (let n = 0; n < MAX_PENDIENTES; n++) await cliente.subirPendiente(cliente.nuevoPendiente(blobDe(cabecera("ogg", 200, n)), { origen: "grabacion" }), SIN_ESPERAS);
@@ -312,10 +380,10 @@ await caso("rechazos", async () => {
   ok("el 21 → lleno, con el texto del servidor", !r3.ok && r3.motivo === "lleno" && /Hay 20 recetas dictadas sin revisar/.test(r3.mensaje), r3);
   igual("…marcado para reintentar con cupo", (await pendientes.leer(p21.id))?.rechazo?.reintentar, true);
   const lista = (await cliente.listarDictados()).dictados;
-  await cliente.descartarDictado(lista[0].id);
+  await cliente.descartarBorrador(lista[0].id);
   const r4 = await cliente.subirPendiente((await pendientes.leer(p21.id))!, SIN_ESPERAS);
   ok("con cupo sube y la copia se borra", r4.ok && (await pendientes.leer(p21.id)) === null);
-  for (const d of (await cliente.listarDictados()).dictados) await cliente.descartarDictado(d.id);
+  for (const d of (await cliente.listarDictados()).dictados) await cliente.descartarBorrador(d.id);
   dispararActivo = true;
   let e: unknown;
   await cliente.procesarDictado("MAL").catch((x) => (e = x));
@@ -324,10 +392,15 @@ await caso("rechazos", async () => {
   await pendientes.guardar(q);
   dispararActivo = false;
   await cliente.subirPendiente(q, SIN_ESPERAS);
+  await recetaEnNube(q.id);
   e = undefined;
   await cliente.marcarGuardado(q.id, `rec_${q.id}`).catch((x) => (e = x));
   ok("marcarGuardado antes de estar listo → RechazoDictado «Todavía no está listo»", e instanceof RechazoDictado && e.message === "Todavía no está listo" && e.status === 409);
-  await cliente.descartarDictado(q.id);
+  falsa = (metodo, url) =>
+    metodo === "POST" && url.pathname === `/api/dictados/${q.id}/guardado` ? Response.json({ error: "La receta todavía no está guardada", codigo: "RECETA_NO_GUARDADA" }, { status: 409 }) : undefined;
+  ok("marcarGuardado con 409 RECETA_NO_GUARDADA → false (reintentar más tarde, no es un error)", (await cliente.marcarGuardado(q.id, `rec_${q.id}`)) === false);
+  falsa = undefined;
+  await cliente.descartarBorrador(q.id);
   dispararActivo = true;
 });
 
@@ -348,7 +421,7 @@ await caso("clave", async () => {
   const d = await cliente.procesarDictado(p.id);
   await esperar();
   ok("…y queda listo", d?.estado === "subido" && (await cliente.leerDictado(p.id))?.estado === "listo");
-  await cliente.descartarDictado(p.id);
+  await cliente.descartarBorrador(p.id);
   globalThis.__blobsHook = async (op: string, clave: string) => {
     if (op === "get" && clave === "registro/primera") throw new Error("Blobs caído");
   };
@@ -365,6 +438,160 @@ await caso("clave", async () => {
   await cliente.bajarAudio(p.id).catch((x) => (e = x));
   ok("…y al bajar el audio", e instanceof AccesoRevocado);
   conectar(equipo.token, equipo.equipoId);
+});
+
+
+// ---------------------------------------------------------------------------------------------
+seccion("Lo automático corre sin la pestaña Recetas (motor.ts; hallazgos 12 y 24)");
+// El motor tal como lo enciende el Panel (sin pantalla de Recetas montada), con "online",
+// "visibilitychange" y el temporizador en manos de la prueba.
+const ventana = new EventTarget();
+const documento = Object.assign(new EventTarget(), { visibilityState: "visible" });
+let tempo: { fn: () => void; ms: number } | null = null;
+let adelanto = 0; // ms que el reloj del motor va adelante del servidor
+let recetasApp = new Set<string>();
+const motor = crearMotor();
+const apagarMotor = motor.encender({
+  recetaIds: () => recetasApp,
+  ventana,
+  documento,
+  ahora: () => Date.now() + desfase + adelanto,
+  ponerTemporizador: (fn, ms) => (tempo = { fn, ms }),
+  quitarTemporizador: () => (tempo = null),
+  esperasSubida: [0, 0],
+});
+const enLista = (id: string) => motor.leer().lista?.dictados.find((d) => d.id === id);
+/** Como si se cumpliera el temporizador del motor. */
+function cumplir() {
+  const t = tempo;
+  tempo = null;
+  t?.fn();
+}
+const pidio = (desde: number, metodo: string, ruta: string, busqueda?: string) =>
+  pedidos.slice(desde).some((x) => x.metodo === metodo && x.ruta === ruta && (busqueda === undefined || x.busqueda === busqueda));
+
+await caso("subidas que dejó la ventana", async () => {
+  await calma();
+  ok("al encenderse lee la lista", motor.encendido && motor.leer().lista !== null && !motor.leer().sinConexion);
+  // La ventana de dictar guarda la copia y sube; no hay red.
+  const p = cliente.nuevoPendiente(blobDe(cabecera("ogg", 300, 41), "audio/ogg"), { origen: "grabacion", segundos: 12 });
+  await pendientes.guardar(p);
+  await calma();
+  ok("el motor ve el audio que guardó la ventana", motor.leer().locales.some((x) => x.id === p.id));
+  cortes = 3;
+  const r = await cliente.subirPendiente(p, SIN_ESPERAS);
+  ok("la ventana no pudo subirlo (sin_conexion)", !r.ok && r.motivo === "sin_conexion", r);
+  await calma();
+  ok("el motor se enteró y vuelve a mirar en un minuto", tempo?.ms === CADA_LOCALES_MS && motor.leer().subiendo.length === 0, tempo?.ms);
+  const antes = pedidos.length;
+  ventana.dispatchEvent(new Event("online"));
+  await calma();
+  ok("al volver internet lo sube solo", pidio(antes, "PUT", `/api/dictados/${p.id}`) && !!enLista(p.id));
+  ok("…y la copia del equipo se borró", (await pendientes.leer(p.id)) === null && !motor.leer().locales.some((x) => x.id === p.id));
+
+  // Sin evento «online» (la nube devolvió 5xx o se demoró): lo sube el temporizador, respetando la espera.
+  const q = cliente.nuevoPendiente(blobDe(cabecera("ogg", 300, 42), "audio/ogg"), { origen: "grabacion", segundos: 8 });
+  await pendientes.guardar(q);
+  cortes = 3;
+  await cliente.subirPendiente(q, SIN_ESPERAS);
+  await calma();
+  ok("programado en CADA_LOCALES_MS", tempo?.ms === CADA_LOCALES_MS, tempo?.ms);
+  let n = pedidos.length;
+  cumplir(); // mira antes de que pase el minuto: no insiste
+  await calma();
+  ok("antes del minuto mira la lista pero no lo vuelve a subir", !pidio(n, "PUT", `/api/dictados/${q.id}`) && pidio(n, "GET", "/api/dictados"));
+  adelanto += CADA_LOCALES_MS;
+  n = pedidos.length;
+  cumplir();
+  await calma();
+  ok("pasado el minuto lo sube solo", pidio(n, "PUT", `/api/dictados/${q.id}`) && !!enLista(q.id) && (await pendientes.leer(q.id)) === null);
+
+  // Con la app en segundo plano, el temporizador no hace nada; al volver, mira.
+  documento.visibilityState = "hidden";
+  n = pedidos.length;
+  cumplir();
+  await calma();
+  ok("escondida no pide nada", pedidos.length === n);
+  documento.visibilityState = "visible";
+  documento.dispatchEvent(new Event("visibilitychange"));
+  await calma();
+  ok("al volver a la app mira la lista", pidio(n, "GET", "/api/dictados"));
+  for (const id of [p.id, q.id]) await motor.descartar(id);
+  ok("motor.descartar manda DELETE ?borrador=1 y lo saca de la lista", pidio(n, "DELETE", `/api/dictados/${q.id}`, "?borrador=1") && !enLista(q.id));
+});
+
+await caso("reintentos solos", async () => {
+  adelanto = 0;
+  dispararActivo = false; // el disparo a la función en segundo plano no llega
+  const p = cliente.nuevoPendiente(blobDe(cabecera("ogg", 300, 43), "audio/ogg"), { origen: "grabacion", segundos: 20 });
+  await pendientes.guardar(p);
+  await cliente.subirPendiente(p, SIN_ESPERAS);
+  await calma();
+  ok("queda «subido» y el motor mira cada 20 s", (await cliente.leerDictado(p.id))?.estado === "subido" && enLista(p.id)?.estado === "subido" && tempo?.ms === CADA_MS, [enLista(p.id)?.estado, tempo?.ms]);
+  dispararActivo = true;
+  adelanto = ESPERA_SUBIDO_MS + 1000;
+  const n = pedidos.length;
+  cumplir();
+  await calma();
+  ok("pasados 30 s pide «procesar» solo", pidio(n, "POST", `/api/dictados/${p.id}/procesar`));
+  await motor.refrescar();
+  ok("…y queda listo", enLista(p.id)?.estado === "listo", enLista(p.id)?.estado);
+  idListo = p.id;
+});
+
+seccion("La limpieza no toma la receta optimista como guardada (hallazgo 9)");
+await caso("limpieza", async () => {
+  const id = idListo;
+  const repo = new RepositorioNube({ token: equipo.token, equipoId: equipo.equipoId, familia: { id: "fcli", nombre: "Familia" } });
+  await repo.cargar();
+  const enNube = ((await C.leerColeccion("fcli", "recetas")) as { datos: Receta[] } | null)?.datos ?? [];
+  const receta: Receta = { id: `rec_${id}`, nombre: "Charquicán", emoji: "🍲", porciones: 4, ingredientes: [], pasos: ["Pica todo."], dictado: { id, fecha: new Date().toISOString() } };
+  // «Guardar receta»: la app la muestra al tiro (lib/store.tsx), antes de que el PUT llegue a la nube.
+  recetasApp = new Set([`rec_${id}`]);
+  let n = pedidos.length;
+  await motor.refrescar();
+  await calma();
+  ok("mientras el guardado va en camino, no marca el dictado como guardado", !pidio(n, "POST", `/api/dictados/${id}/guardado`));
+  ok("…y el borrador sigue en la nube", (await cliente.leerDictado(id))?.borrador?.id === `rec_${id}`);
+  cortes = 1;
+  let e: unknown;
+  await repo.guardar("recetas", [...enNube, receta]).catch((x) => (e = x));
+  ok("el PUT de recetas falla (sin red)", e instanceof SinConexion);
+  ok("…la copia del equipo no tiene la receta", !recetasConfirmadas()?.has(`rec_${id}`));
+  n = pedidos.length;
+  await motor.refrescar();
+  await calma();
+  ok("con el guardado fallido tampoco lo marca: el borrador no se pierde", !pidio(n, "POST", `/api/dictados/${id}/guardado`) && !!(await cliente.leerDictado(id)));
+  recetasApp = new Set(); // la app deshace la receta que no se guardó
+  // Ahora sí se guarda.
+  recetasApp = new Set([`rec_${id}`]);
+  await repo.guardar("recetas", [...enNube, receta]);
+  ok("la copia del equipo tiene la receta después del 200", !!recetasConfirmadas()?.has(`rec_${id}`));
+  // Si la nube responde que todavía no la tiene (409 RECETA_NO_GUARDADA): no es error, se reintenta.
+  falsa = (metodo, url) =>
+    metodo === "POST" && url.pathname === `/api/dictados/${id}/guardado` ? Response.json({ error: "La receta todavía no está guardada en Recetas.", codigo: "RECETA_NO_GUARDADA" }, { status: 409 }) : undefined;
+  n = pedidos.length;
+  await motor.refrescar();
+  await calma();
+  falsa = undefined;
+  ok("con la receta confirmada lo marca; un 409 RECETA_NO_GUARDADA no lo da por hecho", pidio(n, "POST", `/api/dictados/${id}/guardado`) && !!(await cliente.leerDictado(id)) && !motor.leer().sinConexion);
+  n = pedidos.length;
+  await motor.refrescar();
+  await calma();
+  ok("en la vuelta siguiente lo vuelve a intentar y queda guardado", pidio(n, "POST", `/api/dictados/${id}/guardado`) && (await cliente.leerDictado(id)) === null);
+  ok("…sale de la lista y lo que se dijo queda con la receta", !enLista(id) && (await cliente.leerTexto(id))?.recetaId === `rec_${id}`);
+  await cliente.quitarAudio(id);
+});
+
+await caso("apagar", async () => {
+  apagarMotor();
+  ok("apagado: sin lista ni temporizador", !motor.encendido && motor.leer().lista === null && tempo === null && motor.proxima === null, { encendido: motor.encendido, lista: motor.leer().lista, tempo, proxima: motor.proxima });
+  const n = pedidos.length;
+  ventana.dispatchEvent(new Event("online"));
+  documento.dispatchEvent(new Event("visibilitychange"));
+  await motor.refrescar();
+  await calma();
+  ok("ya no escucha ni pide nada", pedidos.length === n);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -386,6 +613,15 @@ await caso("reglas", () => {
   ok("los que no son reintentables nunca, aunque traigan hora", (["clave_invalida", "formato", "bloqueado", "audio_perdido", "verificacion"] as CodigoError[]).every((c) => !debeReintentar(err(c, {}, ahora - 1), ahora, "ok")));
   const recetas = new Set([`rec_${"a".repeat(24)}`]);
   igual("yaGuardados: sólo los listos cuya receta está", yaGuardados([{ id: "a".repeat(24), estado: "listo" }, { id: "a".repeat(24), estado: "error" }, { id: "b".repeat(24), estado: "listo" }], recetas), [{ id: "a".repeat(24), estado: "listo" }]);
+  const dos = [{ id: "a".repeat(24), estado: "listo" as const }, { id: "b".repeat(24), estado: "listo" as const }];
+  const enApp = new Set([`rec_${"a".repeat(24)}`, `rec_${"b".repeat(24)}`]);
+  igual("porLimpiar: sólo los que la nube confirmó (no lo optimista)", porLimpiar(dos, enApp, new Set([`rec_${"b".repeat(24)}`])).map((d) => d.id), ["b".repeat(24)]);
+  igual("porLimpiar: confirmada en la nube pero ya no en la app → no", porLimpiar(dos, new Set(), new Set(enApp)), []);
+  igual("porLimpiar: sin saber qué confirmó la nube (null), lo de la app (decide el servidor)", porLimpiar(dos, enApp, null).length, 2);
+  const guardado = (v: string | null, falla = false) => ({ getItem: (k: string) => (falla ? (() => { throw new Error("SecurityError"); })() : k === "calendario-familiar:v1:recetas" ? v : null) });
+  igual("recetasConfirmadas lee la copia del equipo", [...(recetasConfirmadas(guardado(JSON.stringify([{ id: "rec_x" }, { id: 3 }, null]))) ?? [])], ["rec_x"]);
+  igual("…sin copia: ninguna", recetasConfirmadas(guardado(null))?.size, 0);
+  ok("…dañada, bloqueada o sin localStorage: null", recetasConfirmadas(guardado("{no")) === null && recetasConfirmadas(guardado("{}")) === null && recetasConfirmadas(guardado("[]", true)) === null && recetasConfirmadas(null) === null);
   igual("proximaRevision: en camino → cada 20 s", [proximaRevision([{ estado: "subido" }], ahora), proximaRevision([{ estado: "procesando" }], ahora), proximaRevision([], ahora, { subiendo: true })], [CADA_MS, CADA_MS, CADA_MS]);
   igual("proximaRevision: nada → null", proximaRevision([{ estado: "listo" }], ahora), null);
   igual("proximaRevision: un error con hora → a esa hora (+1 s)", proximaRevision([{ estado: "error", error: { codigo: "ocupado", reintentable: true, proximo: ahora + 600_000 } }], ahora), 601_000);

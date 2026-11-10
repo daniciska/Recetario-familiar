@@ -67,7 +67,12 @@ const opcional = (x: unknown, max?: number) => linea(x, max) || undefined;
 export type Interpretado = { ok: true; datos: unknown } | { ok: false; error: string; transcripcion?: string };
 
 export function interpretar(texto: string): Interpretado {
-  const t = texto.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  // Sin expresiones que vuelvan atrás sobre todo el texto: /\s*```$/ tardaba O(n²) con un tramo largo de
+  // espacios seguido de otra cosa (lo que puede escribir Gemini cuando se enreda).
+  let t = texto.trim();
+  if (t.startsWith("```")) t = t.replace(/^```(?:json)?/i, "");
+  if (t.endsWith("```")) t = t.slice(0, -3);
+  t = t.trim();
   try {
     return { ok: true, datos: JSON.parse(t) };
   } catch {
@@ -190,16 +195,25 @@ function ingrediente(x: unknown, op: Required<OpcionesNormalizar>, transcripcion
     avisos.push(`La cantidad venía mal (${String(x.cantidad)})`);
     cantidad = null;
   }
+  if (cantidad != null && u !== "al gusto") {
+    // Menos de 1 kg o 1 l va en g o ml (como pide la instrucción), así no se redondea a 0 kg.
+    if ((u === "kg" || u === "l") && cantidad < 1) {
+      cantidad *= 1000;
+      u = u === "kg" ? "g" : "ml";
+    }
+    cantidad = redondear(cantidad, u);
+    // Tan chica que se redondea a 0: no se inventa otra (antes quedaba en 0,25 de la unidad): se revisa.
+    if (cantidad === 0) {
+      avisos.push(`La cantidad venía mal (${linea(String(x.cantidad), 20)} ${linea(x.unidad, 20)})`);
+      cantidad = null;
+    }
+  }
   if (u === "al gusto") cantidad = null;
   else if (cantidad == null) {
     if (u === "pizca") cantidad = 1;
     else u = "al gusto";
   }
-  if (cantidad != null) {
-    cantidad = redondear(cantidad, u);
-    if (cantidad === 0) cantidad = u === "g" || u === "ml" ? 1 : 0.25;
-    if (cantidad > MAXIMO[u]) avisos.push("Cantidad muy alta");
-  }
+  if (cantidad != null && cantidad > MAXIMO[u]) avisos.push("Cantidad muy alta");
 
   let estimado = typeof x.estimado === "boolean" ? x.estimado : comoLoDijo ? VAGO.test(sinTildes(comoLoDijo)) : false;
   if (un.estimado || num.rango) estimado = true;
@@ -252,8 +266,10 @@ function listaTextos(x: unknown, max: number, largo = LIMITES.largoPaso): { item
   if (!Array.isArray(x)) return { items: [], cortada: false };
   const items: string[] = [];
   for (const y of x) {
+    // Quita la numeración ("1.", "2)", "Paso 3:", "4 -") pero no el comienzo de un decimal ("1.5 litros"),
+    // una hora ("1:30") ni un rango ("10-15 minutos", "2 – 3 gotas").
     const t = linea(y, largo)
-      .replace(/^(paso\s*)?\d{1,2}\s*[.):\-–]\s*/i, "")
+      .replace(/^(paso\s*)?\d{1,2}\s*(?:[.):](?!\d)|[-–](?!\s*\d))\s*/i, "")
       .replace(/^[-•*·–]\s*/, "")
       .trim();
     if (t && items[items.length - 1] !== t) items.push(t);
@@ -330,8 +346,12 @@ export function normalizar(x: unknown, opciones: OpcionesNormalizar = {}): Borra
     porciones = 100;
     avisos.push("Porciones muy altas: quedó en 100, revisa.");
   }
-  if (esReceta && porcionesEstimadas && !dudas.some((q) => /porci|personas|alcanza|rinde|salen/i.test(q)))
-    dudas.push("¿Para cuántas personas alcanza?");
+  const preguntaPorciones = () => dudas.some((q) => /porci|personas|alcanza|rinde|salen/i.test(q));
+  // En la app las porciones son personas (las compras se escalan por personas): muchas porciones suelen ser
+  // las unidades que salen ("salen como 40"), que la familia tiene que cambiar por personas.
+  if (esReceta && porciones > 12 && !preguntaPorciones())
+    dudas.push(`¿Son ${porciones} personas, o son las unidades que salen? Las porciones son personas: con ellas se calculan las compras.`);
+  if (esReceta && porcionesEstimadas && !preguntaPorciones()) dudas.push("¿Para cuántas personas alcanza?");
 
   const t = numero(d.tiempo_min ?? d.tiempoMin).n;
   let tiempoMin: number | undefined = t != null && t >= 1 ? Math.round(t) : undefined;

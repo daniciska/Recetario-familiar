@@ -20,9 +20,9 @@ import {
 } from "../../servidor/dictados.ts";
 import { reinicioCuota } from "../../servidor/gemini.ts";
 import { AVISO_RESCATE } from "../../servidor/receta-ia/normalizar-receta.ts";
-import { MAX_PENDIENTES } from "../../lib/dictados/tipos.ts";
+import { MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, RECETA_NO_GUARDADA } from "../../lib/dictados/tipos.ts";
 import { simuladorGemini, type Simulador } from "./mock-gemini.mts";
-import { cabecera, conFfmpeg, grabadoChrome } from "./audios.ts";
+import { cabecera, conDuracion, conFfmpeg, grabadoChrome } from "./audios.ts";
 import { CASOS } from "./casos.ts";
 import { caso, info, ok, seccion, terminar } from "./arnes.ts";
 
@@ -112,6 +112,9 @@ async function limpiar(token: string) {
   const l = await pedir("GET", "/api/dictados", { token });
   for (const d of l.datos.dictados ?? []) await pedir("DELETE", `/api/dictados/${d.id}`, { token });
 }
+/** La colección «recetas» de la familia (lo que hace el PUT /api/datos/recetas del equipo al guardar). */
+const ponerRecetas = (f: string, recetas: O[]) => C.reemplazarColeccion(f, "recetas", recetas);
+const existe = async (clave: string) => !!(await almacenAudios().getMetadata(clave));
 /** Sube, deja correr a Gemini y devuelve el detalle. */
 async function dictarYEsperar(token: string, bytes: Uint8Array, q: Record<string, string | number> = {}) {
   const s = await subir(token, bytes, q);
@@ -551,6 +554,7 @@ await caso("D29", async () => {
   const { id, d } = await dictarYEsperar(token, WEBM);
   r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: "../malo" } });
   ok("D29 recetaId inválido → 400", r.status === 400);
+  await ponerRecetas("fam1", [d!.borrador]); // el equipo guardó la receta en la colección
   r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: d!.borrador.id } });
   ok("D29 guardado → 200", r.status === 200 && r.datos.ok === true);
   ok("D29 borra el registro", !(await leerDictado("fam1", id)) && (await pedir("GET", `/api/dictados/${id}`, { token })).status === 410);
@@ -569,6 +573,7 @@ await caso("D29", async () => {
   r = await pedir("GET", `/api/dictados/${pendiente.id}/texto`, { token });
   ok("D29 texto de un pendiente sin transcripción → 410", r.status === 410);
   await pedir("DELETE", `/api/dictados/${id}`, { token });
+  await ponerRecetas("fam1", []);
   await limpiar(token);
 });
 await caso("D30", async () => {
@@ -724,6 +729,140 @@ await caso("D37", async () => {
   } finally {
     (globalThis as O).__blobsSinEtag = false;
   }
+});
+
+seccion("D38 Rescate: marcado, y nunca por un corte pasajero");
+await caso("D38", async () => {
+  antes();
+  sim.guion("*", ["max_tokens", "max_tokens"]);
+  const r = await dictarYEsperar(token, WEBM);
+  ok("D38 dos MAX_TOKENS → listo con rescate: true", r.d?.estado === "listo" && r.d.rescate === true && r.d.borrador.ingredientes.length === 0, r.d);
+  const fila = (await pedir("GET", "/api/dictados", { token })).datos.dictados.find((x: O) => x.id === r.id);
+  ok("D38 … también en la lista (para ofrecer «Pedir otra versión»)", fila?.rescate === true, fila);
+  ok("D38 un borrador normal no trae rescate", !("rescate" in ((await dictarYEsperar(token, cabecera("webm", 3000, 16))).d ?? {})));
+  await pedir("POST", `/api/dictados/${r.id}/procesar`, { token, cuerpo: { otraVez: true } });
+  await esperar();
+  const d2 = await detalle(token, r.id);
+  ok("D38 otra versión que sale entera → sin rescate y con ingredientes", d2?.estado === "listo" && !("rescate" in d2) && d2.borrador.ingredientes.length > 0, d2);
+  antes();
+  sim.guion("gemini-3.8-flash", ["json_malo", "503", "503", "503"]);
+  sim.guion("gemini-3.5-flash-lite", ["503", "503", "503"]);
+  const r2 = await dictarYEsperar(token, cabecera("webm", 3000, 13));
+  ok(
+    "D38 JSON dañado y después 503 → error ocupado reintentable, no un borrador vacío",
+    r2.d?.estado === "error" && r2.d.error?.codigo === "ocupado" && r2.d.error.reintentable && !r2.d.borrador && !r2.d.rescate,
+    r2.d,
+  );
+  antes();
+  sim.guion("gemini-3.8-flash", ["json_malo", "429dia"]);
+  sim.guion("gemini-3.5-flash-lite", ["429dia"]);
+  const r3 = await dictarYEsperar(token, cabecera("webm", 3000, 14));
+  ok("D38 JSON dañado y después la cuota del día → error cuota_dia", r3.d?.estado === "error" && r3.d.error?.codigo === "cuota_dia" && !r3.d.borrador, r3.d);
+  await limpiar(token);
+});
+
+seccion("D39 «Pedir otra versión» que falla no pierde el borrador");
+await caso("D39", async () => {
+  antes();
+  const r0 = await dictarYEsperar(token, WEBM);
+  const ids = (d: O | undefined) => (d?.borrador?.ingredientes ?? []).map((i: O) => i.id).join();
+  const antesIds = ids(r0.d);
+  sim.guion("*", [{ lento: 300, luego: "429dia" }, "429dia"]);
+  const p = await pedir("POST", `/api/dictados/${r0.id}/procesar`, { token, cuerpo: { otraVez: true } });
+  ok("D39 otra versión → 202 sin el borrador en la respuesta", p.status === 202 && !p.datos.dictado.borrador, p.datos);
+  await new Promise((x) => setTimeout(x, 80));
+  const t = await pedir("GET", `/api/dictados/${r0.id}/texto`, { token });
+  ok("D39 mientras Gemini vuelve a escuchar, lo que se dijo sigue disponible", t.status === 200 && t.datos.transcripcion === r0.d!.transcripcion, t);
+  const fila = (await pedir("GET", "/api/dictados", { token })).datos.dictados.find((x: O) => x.id === r0.id);
+  ok("D39 … y la lista sigue mostrando el nombre", fila?.estado === "procesando" && fila.nombre === r0.d!.nombre, fila);
+  await esperar();
+  let d = await detalle(token, r0.id);
+  ok("D39 cuota del día en la otra versión → vuelve el borrador anterior (listo, mismos ingredientes)", d?.estado === "listo" && ids(d) === antesIds, d);
+  ok("D39 … con la transcripción y el error cuota_dia como aviso", d?.transcripcion === r0.d!.transcripcion && d?.error?.codigo === "cuota_dia" && d.error.reintentable === true, d?.error);
+  ok("D39 … y el registro no se queda con `anterior`", !(await leerDictado("fam1", r0.id))?.d.anterior);
+  const n0 = sim.generar().length;
+  await pedir("POST", `/api/dictados/${r0.id}/procesar`, { token, cuerpo: {} });
+  await esperar();
+  ok("D39 «Intentar de nuevo» sobre ese borrador no vuelve a llamar a Gemini", sim.generar().length === n0 && (await detalle(token, r0.id))?.estado === "listo");
+  sim.guion("*", ["safety"]);
+  await pedir("POST", `/api/dictados/${r0.id}/procesar`, { token, cuerpo: { otraVez: true } });
+  await esperar();
+  d = await detalle(token, r0.id);
+  ok("D39 bloqueado (no reintentable) en la otra versión → también vuelve el borrador", d?.estado === "listo" && ids(d) === antesIds && d.error?.codigo === "bloqueado", d?.error);
+  await pedir("POST", `/api/dictados/${r0.id}/procesar`, { token, cuerpo: { otraVez: true } });
+  await esperar();
+  d = await detalle(token, r0.id);
+  ok("D39 después, una otra versión que sale bien → borrador nuevo y sin error", d?.estado === "listo" && !d.error && ids(d) !== antesIds && ids(d) !== "", d);
+  await limpiar(token);
+});
+
+seccion("D40 Descartar un borrador que otro equipo ya guardó");
+await caso("D40", async () => {
+  antes();
+  const { id, d } = await dictarYEsperar(token, WEBM);
+  await ponerRecetas("fam1", [d!.borrador]);
+  let r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: d!.borrador.id } });
+  ok("D40 el iPhone guarda la receta → 200", r.status === 200, r);
+  // La pared seguía con la revisión abierta y la descarta ("no hay receta guardada").
+  r = await pedir("DELETE", `/api/dictados/${id}?borrador=1`, { token: tokenPared });
+  ok("D40 DELETE ?borrador=1 de una receta ya guardada → 200 {ok, guardada: true}", r.status === 200 && r.datos.ok === true && r.datos.guardada === true, r.datos);
+  ok("D40 … y no borra ni el audio ni lo que se dijo", (await existe(claveAudio("fam1", id))) && (await existe(claveTexto("fam1", id))));
+  ok("D40 … el audio de la receta se sigue escuchando", (await pedir("GET", `/api/dictados/${id}/audio`, { token })).status === 200);
+  const b = await dictarYEsperar(token, cabecera("webm", 3000, 15));
+  r = await pedir("DELETE", `/api/dictados/${b.id}?borrador=1`, { token });
+  ok("D40 ?borrador=1 de un borrador sin guardar → lo borra entero", r.status === 200 && !r.datos.guardada && !(await leerDictado("fam1", b.id)) && !(await existe(claveAudio("fam1", b.id))), r.datos);
+  r = await pedir("DELETE", `/api/dictados/${b.id}?borrador=1`, { token });
+  ok("D40 … repetido → 200", r.status === 200 && r.datos.ok === true);
+  r = await pedir("DELETE", `/api/dictados/${id}`, { token });
+  ok("D40 sin ?borrador=1 (quitar el audio de la receta) → borra el audio y lo que se dijo", r.status === 200 && !(await existe(claveAudio("fam1", id))) && !(await existe(claveTexto("fam1", id))));
+  await ponerRecetas("fam1", []);
+  await limpiar(token);
+});
+
+seccion("D41 «Guardado» sólo con la receta en la colección");
+await caso("D41", async () => {
+  antes();
+  await ponerRecetas("fam1", [{ id: "rec_otra", nombre: "Porotos" }]);
+  const { id, d } = await dictarYEsperar(token, WEBM);
+  let r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: d!.borrador.id } });
+  ok(`D41 el PUT de la colección no llegó → 409 {codigo: ${RECETA_NO_GUARDADA}}`, r.status === 409 && r.datos.codigo === RECETA_NO_GUARDADA && typeof r.datos.error === "string", r);
+  ok("D41 … el registro sigue (la revisión no se pierde) y no hay .texto", (await leerDictado("fam1", id))?.d.estado === "listo" && !(await existe(claveTexto("fam1", id))));
+  await ponerRecetas("fam1", [{ id: "rec_otra", nombre: "Porotos" }, d!.borrador]);
+  r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: d!.borrador.id } });
+  ok("D41 cuando la colección ya la tiene → 200, sale de la lista y queda el .texto", r.status === 200 && !(await leerDictado("fam1", id)) && (await existe(claveTexto("fam1", id))), r);
+  await ponerRecetas("fam1", []);
+  await pedir("DELETE", `/api/dictados/${id}`, { token });
+  await limpiar(token);
+});
+
+seccion("D42 El tope de 15 minutos sale de los bytes, no sólo de ?segundos");
+await caso("D42", async () => {
+  antes();
+  dispararActivo = false;
+  const put = (bytes: Uint8Array, q = "") => pedir("PUT", `/api/dictados/${nuevoId()}${q ? `?${q}` : ""}`, { token, cuerpo: bytes });
+  const largo = (r: { status: number; datos: O }) => r.status === 413 && /más de 15 minutos/.test(r.datos.error);
+  let r = await put(conDuracion("ogg", 1000, 500_000));
+  ok("D42 .opus de 16:40 sin ?segundos → 413 «más de 15 minutos»", largo(r), r.datos);
+  r = await put(conDuracion("ogg", 1000, 500_000), "segundos=60");
+  ok("D42 … aunque el equipo diga 60 s", largo(r), r.datos);
+  r = await put(conDuracion("webm", 960, 300_000), "origen=grabacion");
+  ok("D42 WebM de MediaRecorder (sin Duration) de 16 min → 413", largo(r), r.datos);
+  r = await put(conDuracion("mp4", 1200, 300_000));
+  ok("D42 m4a de 20 min → 413", largo(r), r.datos);
+  r = await put(conDuracion("wav", 1000, 600_000));
+  ok("D42 wav de 16:40 → 413", largo(r), r.datos);
+  r = await put(conDuracion("ogg", 600, 300_000));
+  ok("D42 .opus de 10 min sin ?segundos → 201 con segundos = 600 (de los bytes)", r.status === 201 && r.datos.dictado.segundos === 600, r.datos);
+  r = await put(conDuracion("ogg", 905, 300_000));
+  ok("D42 15:05 (dentro del margen) → 201", r.status === 201, r.datos);
+  r = await put(cabecera("ogg", MAX_AUDIO_SIN_DURACION + 1, 21));
+  ok("D42 sin duración en los bytes ni ?segundos y más de 1,8 MB → 413 «No se pudo saber cuánto dura»", r.status === 413 && /No se pudo saber cuánto dura/.test(r.datos.error), r.datos);
+  r = await put(cabecera("ogg", 2_000_000, 22), "segundos=300");
+  ok("D42 … con ?segundos=300 → 201 (se usa lo del equipo)", r.status === 201 && r.datos.dictado.segundos === 300, r.datos);
+  r = await put(cabecera("ogg", MAX_AUDIO_SIN_DURACION, 23));
+  ok("D42 sin duración y justo 1,8 MB → 201", r.status === 201, r.datos);
+  ok("D42 nada llegó a Gemini", sim.generar().length === 0);
+  await limpiar(token);
 });
 
 seccion("D33 La clave nunca sale; Gemini nunca da 401 ni 5xx");

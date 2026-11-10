@@ -54,22 +54,46 @@ export function useWakeLock(activo = true) {
   }, [activo]);
 }
 
+/** Cada cuánto se pregunta si se publicó una versión nueva (un HEAD a la página: no despierta funciones). */
+export const REVISAR_VERSION = 10 * 60_000;
+/** Visto algo distinto, se confirma a este plazo (no a los 10 minutos). */
+const CONFIRMAR_VERSION = 60_000;
+
+/** Lo que identifica lo publicado: la ETag de la página (Netlify la calcula del contenido) o su fecha. */
+function huellaPublicada(r: Response): string | null {
+  const e = r.headers.get("etag") ?? r.headers.get("last-modified");
+  return e ? e.replace(/^W\//, "") : null; // con o sin compresión es la misma página
+}
+
+/** Hay un campo de texto en uso (lo escrito a medias se perdería al recargar). */
+function escribiendo(): boolean {
+  const a = document.activeElement as HTMLElement | null;
+  if (!a) return false;
+  if (a.isContentEditable || a.tagName === "TEXTAREA") return true;
+  return a.tagName === "INPUT" && !/^(checkbox|radio|button|submit|reset|range|color|file)$/i.test((a as HTMLInputElement).type);
+}
+
 /**
  * Auto-refresco: recarga la página una vez al día de madrugada (toma versiones nuevas
- * del deploy y limpia memoria en tablets que pasan meses encendidos).
+ * del deploy y limpia memoria en tablets que pasan meses encendidos) y, además, poco después de que
+ * se publique una versión nueva: cada 10 minutos, con la pantalla visible, un HEAD a la página compara
+ * su ETag con la del momento en que se abrió; si cambió y sigue igual un minuto después (no es un
+ * servidor a medio actualizar), recarga apenas se pueda. Así la tablet de la pared no se queda horas con
+ * la versión anterior (ver README → «Menú por espacios», límites de la transición).
  *
  * Sólo recarga si el servidor responde (sin internet, recargar dejaría la pantalla de error
  * del navegador), si nadie tocó la pantalla en los últimos 2 minutos y si no hay cambios que
- * vivan sólo en memoria. Una ventana abierta la frena siempre, salvo de madrugada (entre `hora` y
- * las 06:00) si nadie la toca hace una hora: esa se da por olvidada y se limpia. `hora` debe ser
- * anterior a las 06:00. Si no se puede, lo reintenta cada 5 minutos; si el equipo
- * estaba suspendido a esa hora, lo intenta al despertar, cuando se cumplan esas condiciones.
+ * vivan sólo en memoria. Una ventana abierta o un campo de texto en uso la frenan siempre, salvo de
+ * madrugada (entre `hora` y las 06:00) si nadie toca la pantalla hace una hora: esa se da por olvidada
+ * y se limpia. `hora` debe ser anterior a las 06:00. Si no se puede, lo reintenta cada 5 minutos; si el
+ * equipo estaba suspendido a esa hora, lo intenta al despertar, cuando se cumplan esas condiciones.
  */
 export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false) {
   const [objetivo] = useState(() => `${ahora.hora < hora ? ahora.fecha : sumarDias(ahora.fecha, 1)} ${hora}`);
   const probando = useRef(false);
   const ultimoIntento = useRef(0);
   const ultimoToque = useRef(0);
+  const version = useRef({ base: null as string | null, vista: null as string | null, proxima: 0, revisando: false, nueva: false });
   const bloqueadaRef = useRef(bloqueada);
   useEffect(() => {
     bloqueadaRef.current = bloqueada;
@@ -102,10 +126,34 @@ export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false
       // (una receta mientras se cocina, un formulario a medio llenar) siempre la frena.
       const h = ahoraEnSantiago().hora;
       const olvidada = h >= hora && h < "06:00" && quieto >= 60 * 60_000;
-      if (document.querySelector('[role="dialog"]') && !olvidada) return false;
+      if ((document.querySelector('[role="dialog"]') || escribiendo()) && !olvidada) return false;
       return navigator.onLine !== false;
     };
-    if (`${ahora.fecha} ${ahora.hora}` < objetivo) return;
+    const v = version.current;
+    if (!v.nueva && !v.revisando && Date.now() >= v.proxima && !document.hidden && navigator.onLine !== false) {
+      v.revisando = true;
+      v.proxima = Date.now() + REVISAR_VERSION;
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 10_000);
+      fetch(location.pathname, { method: "HEAD", cache: "no-store", signal: ctrl.signal })
+        .then((r) => {
+          const h = r.ok ? huellaPublicada(r) : null;
+          if (!h) return; // sin ETag ni fecha (otro servidor): queda sólo la recarga de madrugada
+          if (v.base === null) v.base = h;
+          else if (h === v.base) v.vista = null;
+          else if (h === v.vista) v.nueva = true;
+          else {
+            v.vista = h;
+            v.proxima = Date.now() + CONFIRMAR_VERSION;
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          clearTimeout(t);
+          v.revisando = false;
+        });
+    }
+    if (!v.nueva && `${ahora.fecha} ${ahora.hora}` < objetivo) return;
     if (probando.current || Date.now() - ultimoIntento.current < 5 * 60_000 || !sePuede()) return;
     probando.current = true;
     ultimoIntento.current = Date.now();

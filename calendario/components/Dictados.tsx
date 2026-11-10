@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useCandado } from "@/lib/candado";
 import * as cliente from "@/lib/dictados/cliente";
 import type { EstadoDictados, LocalVista } from "@/lib/dictados/useDictados";
-import { TEXTOS, botonesDictado, chip, chipLocal, mensajeError, resumir, situacion, textoAviso, tituloDictado } from "@/lib/dictados/textos";
+import { TEXTOS, botonesDictado, chip, chipLocal, mensajeError, resumir, sePuedeRevisar, situacion, textoAviso, tituloDictado } from "@/lib/dictados/textos";
 import type { DictadoPublico } from "@/lib/dictados/tipos";
 import { BotonEscuchar, mensajeNube } from "./Escuchar";
 import { Boton, Modal, Vacio, cx } from "./ui";
@@ -88,11 +88,18 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
         .finally(() => setOcupado(false));
     });
 
+  // Con el dictado recién pedido (la lista puede estar vieja: desde otro equipo pueden haber pedido otra
+  // versión). Sólo se abre un «listo» que trae borrador; si no, se avisa y la lista se pone al día.
   const revisar = () =>
     hacer(async () => {
       const completo = await cliente.leerDictado(x.id);
       if (!completo) {
         setMsg(TEXTOS.yaNoExiste);
+        void d.refrescar();
+        return;
+      }
+      if (!sePuedeRevisar(completo)) {
+        setMsg(TEXTOS.yaCambio);
         void d.refrescar();
         return;
       }
@@ -104,7 +111,7 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
       if (!r) setMsg(TEXTOS.yaNoExiste);
     });
 
-  const detalle = x.estado === "error" ? mensajeError(x) : s === "no_receta" ? TEXTOS.noReceta(x.motivo) : null;
+  const detalle = x.estado === "error" ? mensajeError(x) : s === "no_receta" ? TEXTOS.noReceta(x.motivo) : s === "lista" && x.rescate ? TEXTOS.rescate : null;
   return (
     <li className="rounded-2xl bg-superficie-2 p-3">
       <div className="flex flex-wrap items-center gap-3">

@@ -15,7 +15,7 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 | ✅ Tareas | Quehaceres de hoy: en el tablet, una columna por persona. Pueden ser de una vez, de todos los días o de algunos días, con momento (mañana / tarde / noche). Cada uno puede dar **estrellas** ⭐ a quien lo hace (si es “Quien pueda”, se elige quién lo hizo); con las estrellas se **canjean premios** (🏆 Premios). |
 | ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, **PIN para hacer cambios**, respaldo (descargar / cargar), volver a los datos de ejemplo, **🎙️ Recetas por audio (Gemini)** (*Probar conexión*) y **📅 Calendario del iPhone** (conectar Google Calendar o iCloud; con Google, quién es el dueño del calendario y a quién se invita). |
 
-Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al día y la semana nuevos), modo noche automático (por defecto 20:30–07:00, sin destello al recargar de noche), la pantalla se mantiene encendida (Wake Lock) y se recarga sola cada madrugada a las 03:30 para tomar versiones nuevas. La recarga sólo ocurre si hay internet, nadie tocó la pantalla en los últimos 2 minutos y no hay ninguna ventana abierta (una receta mientras se cocina, un formulario); si no, lo reintenta cada 5 minutos. La única excepción: una ventana que quedó abierta de madrugada sin que nadie la toque en una hora se da por olvidada y se cierra con la recarga.
+Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al día y la semana nuevos), modo noche automático (por defecto 20:30–07:00, sin destello al recargar de noche), la pantalla se mantiene encendida (Wake Lock) y se recarga sola cada madrugada a las 03:30 y también unos minutos después de que se publique una versión nueva (cada 10 minutos un `HEAD` a la página compara su ETag con la de cuando se abrió; no despierta funciones). La recarga sólo ocurre si hay internet, nadie tocó la pantalla en los últimos 2 minutos y no hay ninguna ventana abierta (una receta mientras se cocina, un formulario) ni un campo de texto en uso; si no, lo reintenta cada 5 minutos. La única excepción: una ventana que quedó abierta de madrugada sin que nadie la toque en una hora se da por olvidada y se cierra con la recarga.
 
 **Vuelta sola al calendario:** en el equipo marcado como *pantalla de la pared* (Familia → Este equipo), si nadie lo toca en 5 minutos vuelve al calendario de esta semana. No lo hace si hay una ventana abierta (una receta mientras se cocina, un formulario a medio llenar). En el teléfono no ocurre nunca. Un tablet táctil grande y apaisado se marca solo como pantalla de pared; se puede cambiar a mano.
 
@@ -84,7 +84,7 @@ servidor/dictados.ts          «Dictar receta»: API de los dictados y la corrid
 servidor/gemini.ts            Gemini por REST: clave, modelos, tipo de audio, errores y reintentos
 servidor/receta-ia/           instrucción y esquema JSON para Gemini; normalizar-receta.ts pasa su respuesta a una Receta
 servidor/conservar.ts         repone lo que borraría un equipo con la versión anterior (se quita en enero de 2027)
-lib/dictados/                 lado de la app: grabadora, copia en IndexedDB, subida, reglas, textos y useDictados
+lib/dictados/                 lado de la app: grabadora, copia en IndexedDB, subida, reglas, textos, motor.ts (lo automático, en cualquier pestaña) y useDictados
 components/DictarReceta.tsx   grabar o subir un audio y seguir el avance hasta «✅ ¡Lista!»
 components/Dictados.tsx       aviso en Recetas y la lista «🎙️ Dictadas»
 components/Escuchar.tsx       escuchar el audio y «Ver lo que se dijo»
@@ -188,7 +188,7 @@ En el panel, el ID es `c_familia@group.calendar.google.com`. `SIM_ROL=writer` lo
 **Qué hace:** en *📖 Recetas → 🎙️ Dictar receta* se cuenta una receta en voz alta, como se le explicaría a alguien en la cocina (cómo se llama, para cuántos alcanza, los ingredientes con sus cantidades aunque sean «al ojo», y los pasos), o se sube un audio que ya existe (nota de voz de WhatsApp, Notas de Voz, m4a, mp3…). Gemini (Google) la escucha y la deja como **borrador**, que alguien de la familia revisa antes de guardarla:
 - las cantidades vagas («un puñado», «lo que pida») pasan a cantidades medibles marcadas **≈ estimada**, que se corrigen con un toque (y se ven con «≈» en la receta y en la vista previa de la lista de compras);
 - cada ingrediente guarda cómo se dijo («Dijo: «un chorrito»»), y lo que Gemini no entendió queda en **❓ Dudas de Gemini**;
-- el escalado por porciones lo sigue haciendo la app (exacto, sin IA);
+- el escalado por porciones lo sigue haciendo la app (exacto, sin IA); las porciones son **personas**: si se dice «salen como 40», Gemini estima para cuántas personas alcanza, deja «Salen como 40» en la nota y lo pregunta en las dudas;
 - una receta dictada se puede volver a escuchar (▶️) y leer (*📝 Ver lo que se dijo*).
 
 **Cómo se usa:**
@@ -198,8 +198,9 @@ En el panel, el ID es `c_familia@group.calendar.google.com`. `SIM_ROL=writer` lo
 4. **Revisar receta**: corregir lo marcado con ≈, responder las dudas (*✓ Resuelta*; las que queden se guardan con la receta) → **Guardar receta**. *Después* deja la revisión a medias en ese equipo y la retoma donde quedó. Si Gemini dice que no parece una receta: *Revisar igual* o *Pedir otra versión*. *🗑 Descartar* borra el audio y lo que escribió Gemini.
 
 **Reglas:**
-- Hasta 15 minutos y 4 MB por audio, y hasta 20 recetas dictadas sin revisar por familia.
-- Sin internet, el audio queda guardado en el equipo (IndexedDB) y se sube solo cuando vuelve.
+- Hasta 15 minutos y 4 MB por audio, y hasta 20 recetas dictadas sin revisar por familia. La nube lee la duración del propio audio (opus, webm, m4a, mp3, wav, flac, aac); si no se puede saber y el equipo tampoco la sabe, el máximo es 1,8 MB.
+- *Pedir otra versión* guarda el borrador anterior hasta que llega el nuevo: si Gemini falla, vuelve el de antes con el aviso.
+- Sin internet, el audio queda guardado en el equipo (IndexedDB) y se sube solo cuando vuelve, con la app abierta en cualquier pestaña (no hace falta tener Recetas a la vista).
 - Si falta la clave, Google está ocupado o se acabó la cuota del día, el audio espera en la nube y se pasa a receta solo después (la lista dice *⏳ Se reintenta sola* o *⏳ Esperando a Gemini*). Lo que necesita a alguien (*⚠️ Necesita ayuda*: clave inválida, verificar la cuenta de Google, un formato que Gemini no lee…) dice qué hacer y trae *Intentar de nuevo*; mientras tanto el audio sigue guardado.
 - Los audios y lo que se dijo quedan en la nube y **no van en el respaldo**. Al guardar la receta se conservan para escucharlos; al editarla, *🗑 Borrar el audio (la receta queda)*, y al borrar la receta se ofrece borrar también el audio.
 - Los cupos del plan gratis no son públicos (unos 20 pedidos al día con 3.8 Flash, según terceros): cuando se acaban se usa el modelo siguiente y, si se acaban todos, se sigue al otro día.
@@ -228,7 +229,7 @@ node --experimental-transform-types --no-warnings --import ./pruebas/registrar.m
 GEMINI_API_KEY=clave-de-prueba GEMINI_API_URL=http://127.0.0.1:8787 NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions
 ```
 
-`GEMINI_API_URL` es sólo para pruebas: el código la ignora si no es `http://127.0.0.1` o `http://localhost` (una variable mal puesta no puede mandar la clave a otro sitio), y sólo entonces vale `GEMINI_TIMEOUT_MS`. Al simulador se le piden errores con `POST /__guion` (p. ej. `[{"modelo":"*","accion":"429dia"}]`; las acciones están al comienzo del archivo); `--mimes-extra audio/mp4` y `--sin-response-format` imitan otras respuestas de Google. Las pruebas automáticas (formatos de audio, Gemini con el simulador, la API y la corrida con un reloj falso, datos con equipos viejos y nuevos, cliente) se corren con `bash pruebas/correr.sh recetas`. La prueba en el navegador es manual: `npm run build && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/navegador.e2e.mjs --puerto 8900` (Chrome con micrófono falso, un tablet y un iPhone de la misma familia, `netlify dev` con las funciones reales; necesita Chrome, Playwright, ffmpeg y netlify-cli; usa los puertos N y N+1).
+`GEMINI_API_URL` es sólo para pruebas: el código la ignora si no es `http://127.0.0.1` o `http://localhost` (una variable mal puesta no puede mandar la clave a otro sitio), y sólo entonces vale `GEMINI_TIMEOUT_MS`. Al simulador se le piden errores con `POST /__guion` (p. ej. `[{"modelo":"*","accion":"429dia"}]`; las acciones están al comienzo del archivo); `--mimes-extra audio/mp4` y `--sin-response-format` imitan otras respuestas de Google. Las pruebas automáticas (formatos de audio, Gemini con el simulador, la API y la corrida con un reloj falso, datos con equipos viejos y nuevos, cliente y lo automático, grabadora con un navegador falso) se corren con `bash pruebas/correr.sh recetas`. La prueba en el navegador es manual: `npm run build && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/navegador.e2e.mjs --puerto 8900` (Chrome con micrófono falso, un tablet y un iPhone de la misma familia, `netlify dev` con las funciones reales; necesita Chrome, Playwright, ffmpeg y netlify-cli; usa los puertos N y N+1).
 
 ## Modo kiosko en el tablet
 

@@ -305,4 +305,79 @@ seccion("K. Borrador de rescate");
   ok("K3 aRecetaApp del rescate es una Receta válida", r.id === `rec_${ENLACE.id}` && r.porciones === 4 && r.ingredientes.length === 0, r);
 }
 
+// ---------- L. Arreglos de la revisión ----------
+seccion("L. Números en pasos, cantidades chicas, cercas y porciones");
+{
+  const base = (ing: O[], extra: O = {}) => ({ ...CASOS[0].esperado, ingredientes: ing, ...extra });
+  const uno = (x: O) => normalizar(base([{ nombre: "Cebolla", como_lo_dijo: null, estimado: false, categoria: "Otros", nota: null, ...x }]), op).ingredientes[0];
+
+  // Rangos, decimales y horas al comienzo de un paso no son numeración.
+  let b = normalizar(
+    base(CASOS[0].esperado.ingredientes, {
+      pasos: ["10-15 minutos al horno moderado.", "1.5 litros de agua hirviendo encima.", "2-3 gotas de limón.", "1:30 horas a fuego lento.", "10 – 15 min más.", "2. Revuelve.", "3) Sirve.", "1.- Pica la cebolla.", "Paso 4 - Hornea.", "5 - 6 papas."],
+      secretos: ["2-3 gotas de limón evitan que se oxide.", "1,5 kilos rinden más.", "1. Que no hierva."],
+      dudas: ["1.5 o 2 tazas de harina?"],
+    }),
+    op,
+  );
+  ok(
+    "L1 pasos: «10-15 min», «1.5 litros», «2-3 gotas», «1:30 horas», «10 – 15 min» y «5 - 6 papas» quedan enteros",
+    JSON.stringify(b.pasos) ===
+      JSON.stringify(["10-15 minutos al horno moderado.", "1.5 litros de agua hirviendo encima.", "2-3 gotas de limón.", "1:30 horas a fuego lento.", "10 – 15 min más.", "Revuelve.", "Sirve.", "Pica la cebolla.", "Hornea.", "5 - 6 papas."]),
+    b.pasos,
+  );
+  ok("L2 secretos y dudas: lo mismo", JSON.stringify(b.secretos) === JSON.stringify(["2-3 gotas de limón evitan que se oxide.", "1,5 kilos rinden más.", "Que no hierva."]) && b.dudas[0] === "1.5 o 2 tazas de harina?", [b.secretos, b.dudas]);
+
+  // Cantidades que se redondean a 0: nunca 0,25 de la unidad grande.
+  let x = uno({ cantidad: 0.004, unidad: "l" });
+  ok("L3 0.004 l → 4 ml (menos de 1 l va en ml), sin revisar", x.cantidad === 4 && x.unidad === "ml" && !x.revisar, x);
+  x = uno({ cantidad: 0.5, unidad: "kg" });
+  ok("L4 0.5 kg → 500 g", x.cantidad === 500 && x.unidad === "g", x);
+  x = uno({ cantidad: 1.5, unidad: "kg" });
+  ok("L5 1.5 kg se queda en kg", x.cantidad === 1.5 && x.unidad === "kg", x);
+  x = uno({ cantidad: 0.0001, unidad: "kg" });
+  ok("L6 0.0001 kg (0,1 g) → al gusto + revisar «venía mal», no 0,25 kg", x.cantidad === null && x.unidad === "al gusto" && /venía mal \(0\.0001 kg\)/.test(x.revisar ?? ""), x);
+  x = uno({ cantidad: 0.004, unidad: "cdta" });
+  ok("L7 0.004 cdta → al gusto + revisar, no 0,25 cdta", x.cantidad === null && x.unidad === "al gusto" && /venía mal/.test(x.revisar ?? ""), x);
+  x = uno({ cantidad: 0.3, unidad: "g" });
+  ok("L8 0.3 g → al gusto + revisar (antes quedaba en 1 g)", x.cantidad === null && /venía mal/.test(x.revisar ?? ""), x);
+  x = uno({ cantidad: 0.001, unidad: "pizca" });
+  ok("L9 0.001 pizca → 1 pizca, marcada para revisar", x.cantidad === 1 && x.unidad === "pizca" && /venía mal/.test(x.revisar ?? ""), x);
+  const juntos = normalizar(
+    base([
+      { nombre: "Cebolla", como_lo_dijo: null, cantidad: 0.5, unidad: "kg", estimado: false, categoria: "Verduras y frutas", nota: null },
+      { nombre: "Cebolla", como_lo_dijo: null, cantidad: 200, unidad: "g", estimado: false, categoria: "Verduras y frutas", nota: null },
+    ]),
+    op,
+  ).ingredientes;
+  ok("L10 0.5 kg + 200 g del mismo ingrediente → 700 g", juntos.length === 1 && juntos[0].cantidad === 700 && juntos[0].unidad === "g", juntos);
+
+  // Las cercas de código se quitan sin volver atrás (antes: 4 s con 60.000 espacios).
+  const raro = `{"transcripcion":"hola","nombre":"x"${" ".repeat(60_000)}}`;
+  let t0 = performance.now();
+  let r = interpretar(raro);
+  const ms = performance.now() - t0;
+  ok("L11 JSON con 60.000 espacios antes de la llave final → se lee en menos de 150 ms", r.ok && ms < 150, Math.round(ms));
+  t0 = performance.now();
+  r = interpretar("```json\n" + raro.slice(0, -1) + "x".repeat(10) + " ".repeat(60_000) + "?");
+  ok("L12 … y uno roto igual de raro tampoco tarda", !r.ok && performance.now() - t0 < 150, Math.round(performance.now() - t0));
+  r = interpretar("```JSON\n{\"a\":1}\n```");
+  ok("L13 ```JSON … ``` se sigue leyendo", r.ok && (r.datos as O).a === 1, r);
+  r = interpretar("```\n{\"a\":2}```");
+  ok("L14 ``` sin json y sin salto final", r.ok && (r.datos as O).a === 2, r);
+
+  // Porciones = personas: muchas porciones suelen ser las unidades que salen.
+  b = normalizar(base(CASOS[0].esperado.ingredientes, { porciones: 40, porciones_estimadas: false, dudas: [] }), op);
+  ok("L15 porciones 40 → duda «¿Son 40 personas, o son las unidades que salen?»", b.porciones === 40 && b.dudas.some((q) => /¿Son 40 personas, o son las unidades que salen\?/.test(q)), b.dudas);
+  b = normalizar(base(CASOS[0].esperado.ingredientes, { porciones: 40, porciones_estimadas: false, dudas: ["¿Para cuántas personas alcanzan las 40?"] }), op);
+  ok("L16 … si Gemini ya preguntó por las personas, no se repite", b.dudas.length === 1, b.dudas);
+  b = normalizar(base(CASOS[0].esperado.ingredientes, { porciones: 12, porciones_estimadas: false, dudas: [] }), op);
+  ok("L17 12 porciones → sin esa duda", !b.dudas.some((q) => /personas/.test(q)), b.dudas);
+  b = normalizar(base(CASOS[0].esperado.ingredientes, { porciones: 30, porciones_estimadas: true, dudas: [] }), op);
+  ok("L18 30 estimadas → una sola duda de porciones (la de las unidades)", b.dudas.filter((q) => /personas/.test(q)).length === 1 && /¿Son 30 personas/.test(b.dudas[0]), b.dudas);
+  for (const c of CASOS.filter((y) => /salen como/i.test(y.partes.join(" ")))) {
+    ok(`L19 ${c.id}: «salen como…» → porciones en personas (≤ 12), estimadas, y lo que sale en la nota`, c.esperado.porciones! <= 12 && c.esperado.porciones_estimadas && /salen como \d+/i.test(c.esperado.nota ?? ""), c.esperado.porciones);
+  }
+}
+
 await terminar();

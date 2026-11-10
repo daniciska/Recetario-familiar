@@ -18,10 +18,14 @@ import {
   mmss,
   momentoCorto,
   resumir,
+  sePuedeRevisar,
   situacion,
   textoAviso,
+  textoMicrofono,
   tituloDictado,
+  vistaAvance,
   type Situacion,
+  type SubidaVista,
 } from "../../lib/dictados/textos.ts";
 import { MAX_INTENTOS_SOLOS } from "../../lib/dictados/reglas.ts";
 import { ERRORES_REINTENTABLES, esReintentable, type CodigoError, type DictadoPublico, type EstadoDictado } from "../../lib/dictados/tipos.ts";
@@ -136,6 +140,10 @@ await caso("chips", () => {
   igual("botones: con error → Intentar de nuevo", botonesDictado(conError("clave_invalida")), ["intentar"]);
   igual("botones: audio perdido → nada (sólo Descartar)", botonesDictado(conError("audio_perdido")), []);
   igual("botones: en cola o con Gemini → nada", [botonesDictado(d("subido")), botonesDictado(d("procesando"))], [[], []]);
+  // Hallazgo 0: el borrador de rescate (Gemini cortó: sin ingredientes ni pasos) dice «Toca «Pedir otra versión»».
+  igual("botones: borrador de rescate → Revisar y Pedir otra versión", botonesDictado(d("listo", { esReceta: true, rescate: true })), ["revisar", "otra_version"]);
+  igual("botones: un listo normal no ofrece otra versión", botonesDictado(d("listo", { esReceta: true, rescate: false })), ["revisar"]);
+  ok("el texto del rescate nombra el botón que aparece", TEXTOS.rescate.includes(`«${TEXTOS.otraVersion}»`), TEXTOS.rescate);
 });
 
 seccion("Aviso de Recetas");
@@ -144,11 +152,32 @@ await caso("aviso", () => {
   igual("una lista", textoAviso(resumir([d("listo")])), "🎙️ 1 lista para revisar →");
   igual("dos listas (y otras en camino)", textoAviso(resumir([d("listo"), d("listo"), d("subido")])), "🎙️ 2 listas para revisar →");
   igual("una en camino", textoAviso(resumir([d("procesando")])), "🎙️ Gemini está pasando 1 receta…");
-  igual("tres en camino (cola, Gemini, esperando clave)", textoAviso(resumir([d("subido"), d("procesando"), conError("sin_clave")])), "🎙️ Gemini está pasando 3 recetas…");
+  igual("dos en camino (cola y Gemini); la que espera la clave no se cuenta como «pasando»", textoAviso(resumir([d("subido"), d("procesando"), conError("sin_clave")])), "🎙️ Gemini está pasando 2 recetas…");
+  // Hallazgo 26: lo que espera dice qué espera (no «Gemini está pasando…»).
+  igual("esperando la clave (puede durar días)", textoAviso(resumir([conError("sin_clave")])), "⏳ 1 receta dictada espera que conecten Gemini (falta la clave) →");
+  igual("dos esperando la clave (una con solo_ai_gateway)", textoAviso(resumir([conError("sin_clave"), conError("solo_ai_gateway")])), "⏳ 2 recetas dictadas esperan que conecten Gemini (falta la clave) →");
+  const p1 = reinicioCuota(Date.parse("2026-11-09T20:00:00Z"));
+  igual(
+    "cuota del día: con la hora en que se pasa sola",
+    textoAviso(resumir([d("error", { error: { codigo: "cuota_dia", reintentable: true, proximo: p1 }, intentos: 2 })])),
+    "⏳ 1 receta dictada espera la cuota de Gemini (se pasa sola después de las 05:05) →",
+  );
+  igual("cuota del día sin hora", textoAviso(resumir([conError("cuota_dia")])), "⏳ 1 receta dictada espera la cuota de Gemini (se pasa sola mañana) →");
+  igual("ocupado o se cortó: se reintenta sola", textoAviso(resumir([conError("ocupado"), conError("se_corto")])), "⏳ 2 recetas dictadas se reintentan solas en unos minutos →");
+  ok("ningún aviso de espera dice que Gemini está pasando la receta", [conError("sin_clave"), conError("cuota_dia"), conError("ocupado")].every((x) => !/está pasando/.test(textoAviso(resumir([x])) ?? "")));
+  igual("en camino va antes que las que esperan", textoAviso(resumir([conError("sin_clave"), d("subido")])), "🎙️ Gemini está pasando 1 receta…");
   igual("una necesita ayuda", textoAviso(resumir([conError("clave_invalida"), d("subido")])), "🎙️ 1 receta dictada necesita ayuda →");
   igual("dos necesitan ayuda (una no parece receta)", textoAviso(resumir([conError("formato"), d("listo", { esReceta: false })])), "🎙️ 2 recetas dictadas necesitan ayuda →");
   igual("audios en el equipo", [textoAviso(resumir([], 1)), textoAviso(resumir([d("subido")], 2))], ["📱 1 audio en este equipo sin subir →", "📱 2 audios en este equipo sin subir →"]);
-  igual("resumir cuenta todo", resumir([d("listo"), conError("ocupado"), conError("bloqueado"), d("listo", { esReceta: false })], 3), { listas: 1, enCamino: 1, ayuda: 2, locales: 3 });
+  igual("resumir cuenta todo", resumir([d("listo"), conError("ocupado"), conError("bloqueado"), d("listo", { esReceta: false }), d("subido"), conError("sin_clave"), conError("cuota_dia")], 3), {
+    listas: 1,
+    enCamino: 1,
+    reintento: 1,
+    cuota: 1,
+    esperando: 1,
+    ayuda: 2,
+    locales: 3,
+  });
 });
 
 seccion("Probar conexión y textos de las pantallas");
@@ -174,6 +203,68 @@ await caso("pantallas", () => {
   ok("la privacidad del plan gratis se avisa", /personas de Google pueden escucharlos/.test(TEXTOS.privacidad) && /RUT/.test(TEXTOS.privacidad));
   ok("4 pasos para sacar la nota de WhatsApp", TEXTOS.whatsappPasos.length === 4);
   igual("conAprox", [conAprox("125 g", true), conAprox("125 g", false), conAprox("", true)], ["≈ 125 g", "125 g", ""]);
+});
+
+seccion("Micrófono sin permiso (iPhone y tablet Android o Fire)");
+await caso("microfono", () => {
+  // Hallazgo 28: en la pared (Chrome, Silk o Fully Kiosk) no sirven los pasos del iPhone.
+  const android = textoMicrofono("permiso", false);
+  const iphone = textoMicrofono("permiso", true);
+  ok("iPhone o iPad: los pasos de Ajustes → Safari", /iPhone/.test(iphone) && /Safari → Micrófono/.test(iphone), iphone);
+  ok("Android o Fire: Chrome, Silk y Fully Kiosk, sin los pasos del iPhone", /Chrome/.test(android) && /Silk/.test(android) && /Fully Kiosk/.test(android) && !/iPhone|Safari/.test(android), android);
+  ok("los dos ofrecen subir un audio con 📎", /📎/.test(android) && /📎/.test(iphone));
+  igual("los demás motivos", [textoMicrofono("sin_microfono", false), textoMicrofono("sin_soporte", true), textoMicrofono("otro", false)], [TEXTOS.sinMicrofono, TEXTOS.sinGrabadora, TEXTOS.micOtro]);
+});
+
+seccion("Ventana de dictar: «a salvo», «Puedes cerrar» y cuándo preguntar antes de cerrar");
+await caso("avance", () => {
+  const sinRed: SubidaVista = { e: "sin_conexion" };
+  const lleno: SubidaVista = { e: "rechazo", motivo: "lleno", mensaje: "Hay 20 recetas dictadas sin revisar." };
+  const rechazado: SubidaVista = { e: "rechazo", motivo: "rechazado", mensaje: "El audio es muy grande (máximo 4 MB)." };
+  const yaGuardada: SubidaVista = { e: "rechazo", motivo: "ya_guardada", mensaje: "Ya está en Recetas." };
+  const v = (enEquipo: boolean | null, subida: SubidaVista | null, dictado: DictadoPublico | null = null) => vistaAvance({ enEquipo, subida, dictado });
+  // Hallazgos 10 y 21: sin copia en el equipo (IndexedDB falló) el audio sólo está en la ventana.
+  for (const [n, s] of [["sin conexión", sinRed], ["lleno", lleno], ["subiendo", { e: "subiendo" }], ["rechazado", rechazado]] as [string, SubidaVista][]) {
+    const x = v(false, s);
+    ok(`sin copia y ${n}: cerrar pregunta, ofrece la copia y no dice «Puedes cerrar»`, x.enRiesgo && x.copia && !x.pie, x);
+  }
+  const sinCopiaSinRed = v(false, sinRed);
+  ok("sin copia y sin conexión: no dice «a salvo en este equipo»", !!sinCopiaSinRed.sinConexion && !/a salvo|en este equipo y/.test(sinCopiaSinRed.sinConexion), sinCopiaSinRed.sinConexion);
+  ok("el aviso rojo sin copia dice «No la cierres» y no «Puedes cerrar»", /No la cierres/.test(TEXTOS.sinCopiaLocal) && !/Puedes cerrar/.test(TEXTOS.sinCopiaLocal));
+  ok("…y no habla de internet (también sale con «lleno»)", !/vuelva internet/.test(TEXTOS.sinCopiaLocal));
+  const conCopia = v(true, sinRed);
+  ok("con copia y sin conexión: «a salvo en este equipo», «Puedes cerrar» y sin preguntar", conCopia.sinConexion === TEXTOS.sinConexion && conCopia.pie && !conCopia.enRiesgo && !conCopia.copia, conCopia);
+  ok("con copia y «lleno»: sigue sola (se sube cuando haya cupo)", v(true, lleno).pie && !v(true, lleno).enRiesgo);
+  ok("con copia y subiendo: sigue sola", v(true, { e: "subiendo" }).pie);
+  ok("todavía guardando la copia: no dice «a salvo» ni «Puedes cerrar»", !v(null, sinRed).pie && v(null, sinRed).sinConexion === TEXTOS.sinConexionSinCopia && !v(null, { e: "subiendo" }).pie);
+  ok("rechazado (muy grande, formato): no sigue sola", !v(true, rechazado).pie);
+  ok("ya estaba en la nube (ya_guardada): nada en riesgo", !v(false, yaGuardada).enRiesgo && !v(false, yaGuardada).pie);
+  ok("sin copia pero ya en la nube: nada en riesgo", !v(false, { e: "ok" }, d("subido")).enRiesgo && v(false, { e: "ok" }, d("subido")).pie);
+  // Hallazgo 25: «Puedes cerrar esta ventana: sigue sola» sólo cuando de verdad sigue sola.
+  const pie = (x: DictadoPublico) => v(true, { e: "ok" }, x).pie;
+  ok("en cola, escribiendo, se reintenta o esperando la clave: «sigue sola»", [d("subido"), d("procesando"), conError("cuota_dia"), conError("ocupado"), conError("sin_clave")].every(pie));
+  const sinPie: [string, DictadoPublico][] = [
+    ["clave inválida", conError("clave_invalida")],
+    ["formato", conError("formato")],
+    ["bloqueado", conError("bloqueado")],
+    ["audio perdido", conError("audio_perdido")],
+    ["incompleta", conError("incompleta")],
+    ["ocupado demasiadas veces", conError("ocupado", { intentos: MAX_INTENTOS_SOLOS.ocupado })],
+    ["no parece receta", d("listo", { esReceta: false })],
+    ["lista", d("listo")],
+  ];
+  for (const [n, x] of sinPie) ok(`${n}: sin «Puedes cerrar…»`, !pie(x), situacion(x));
+  ok("con un dictado en la nube no se repite el aviso de sin conexión", v(true, sinRed, d("subido")).sinConexion === null);
+});
+
+seccion("Revisar sólo un borrador de verdad");
+await caso("revisar", () => {
+  // Hallazgo 16: desde una lista vieja, el dictado fresco puede estar en cola (pidieron otra versión) sin borrador.
+  const borrador = { id: "rec_x", nombre: "Pebre", emoji: "🌶️", porciones: 4, ingredientes: [], pasos: [] };
+  ok("listo con borrador → se abre", sePuedeRevisar(d("listo", { borrador })));
+  ok("en cola o con Gemini (otra versión pedida en otro equipo) → no", !sePuedeRevisar(d("subido")) && !sePuedeRevisar(d("procesando")));
+  ok("listo sin borrador (la lista no lo trae) → no", !sePuedeRevisar(d("listo")));
+  ok("con error o sin dictado → no", !sePuedeRevisar(conError("formato")) && !sePuedeRevisar(null));
 });
 
 await terminar();

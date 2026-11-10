@@ -163,7 +163,13 @@ export class RepositorioNube implements Repositorio {
         return new Promise<never>(() => {}); // la página se está recargando
       }
       if (!(e instanceof SinConexion)) throw e;
-      // Sin internet: se abre con la copia de este equipo.
+      // Sin internet: se abre con la copia de este equipo, pero sin fiarse de sus versiones. La versión
+      // anterior a los espacios del menú y a las recetas dictadas guardaba en la copia lo que ella misma
+      // mandó con la versión de lo que el servidor MEZCLÓ (api-datos.mts le repone lo que su normalizar
+      // descarta), así que la copia puede estar incompleta bajo una versión «al día». Se olvidan sólo en
+      // memoria: la primera revisión con red trae todas las colecciones, y un guardado anterior a esa
+      // revisión va con versionBase 0, recibe 409 y el store rehace el cambio sobre lo último.
+      this.versiones = {};
       this.marcarConexion(false);
       const local = await this.copia.cargar();
       if (local) this.estado = { ...local };

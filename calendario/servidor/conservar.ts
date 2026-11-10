@@ -7,8 +7,9 @@
 // /api/datos/recetas (netlify/functions/api-datos.mts) se los repone desde lo guardado, que es la versión
 // de la que partió ese equipo:
 // - por id de receta: `dudas` y `dictado`, si faltan;
-// - por id de ingrediente: `comoLoDijo`, `estimado` y `nota`, si faltan y el equipo viejo no cambió el
-//   nombre, la cantidad ni la unidad (si corrigió la cantidad, el «≈» y «cómo lo dijo» ya no valen).
+// - por id de ingrediente: `nota`, si falta; `comoLoDijo` y `estimado`, si faltan y el equipo viejo no
+//   cambió el nombre, la cantidad ni la unidad (si corrigió la cantidad, el «≈» y «cómo lo dijo» ya no
+//   valen; la preparación o el envase de la nota, sí).
 // Un equipo viejo no puede poner estos campos, así que si vienen es porque ya estaban: no se tocan.
 // PUT /api/datos (reemplazar todo: respaldo o datos de ejemplo) no pasa por aquí, a propósito.
 // Quitar en enero de 2027, cuando todos los equipos hayan recargado (igual que conservarItemsPlan).
@@ -36,9 +37,15 @@ export function conservarCamposNuevos(previas: unknown, entrantes: unknown): unk
       out.ingredientes = r.ingredientes.map((i) => {
         if (!esObj(i)) return i;
         const q = ingPrevios.get(i.id);
-        if (!q || q.nombre !== i.nombre || q.cantidad !== i.cantidad || q.unidad !== i.unidad) return i;
+        // Sin nombre no es un ingrediente que haya editado un equipo viejo (su normalizar siempre lo pone).
+        if (!q || typeof i.nombre !== "string") return i;
         const o: Obj = { ...i };
-        for (const k of CAMPOS_INGREDIENTE_NUEVOS) if (!(k in o) && q[k] !== undefined) o[k] = q[k];
+        // La nota (preparación o envase: «picada en cubitos», «tarro de 397 g») sigue valiendo aunque
+        // corrija la cantidad, la unidad o el nombre: el editor viejo conserva el id de cada fila.
+        // El «≈» y «cómo lo dijo» no: describen la cantidad de antes.
+        const igual = q.nombre === i.nombre && q.cantidad === i.cantidad && q.unidad === i.unidad;
+        for (const k of CAMPOS_INGREDIENTE_NUEVOS)
+          if ((igual || k === "nota") && !(k in o) && q[k] !== undefined) o[k] = q[k];
         return o;
       });
     }

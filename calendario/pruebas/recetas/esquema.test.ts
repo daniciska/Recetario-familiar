@@ -96,7 +96,17 @@ seccion("Variante OpenAPI (responseSchema; no se usa, pero sigue la misma defini
 
 seccion("Instrucción de sistema");
 {
-  ok("VERSION_PROMPT = receta-audio/1 (2026-11-09)", VERSION_PROMPT === "receta-audio/1 (2026-11-09)", VERSION_PROMPT);
+  ok("VERSION_PROMPT = receta-audio/2 (2026-11-10)", VERSION_PROMPT === "receta-audio/2 (2026-11-10)", VERSION_PROMPT);
+  // En la app las porciones son personas (las compras se escalan por personas): nunca las unidades que salen.
+  ok(
+    "porciones = personas, nunca las unidades que salen (van en la nota, con una duda)",
+    /porciones: número entero de PERSONAS/.test(INSTRUCCION_SISTEMA) &&
+      /Nunca pongas aquí las unidades que salen/.test(INSTRUCCION_SISTEMA) &&
+      /"Salen como 40\." en "nota"/.test(INSTRUCCION_SISTEMA) &&
+      !/o de unidades si dice cuántas salen/.test(INSTRUCCION_SISTEMA),
+  );
+  const props = (ESQUEMA_JSON as O).properties;
+  ok("el esquema también: porciones son personas, las unidades que salen van en nota", /^Personas para las que alcanza, nunca unidades/.test(props.porciones.description) && /unidades salen/.test(props.nota.description), [props.porciones.description, props.nota.description]);
   for (const u of UNIDADES) ok(`menciona la unidad "${u}"`, INSTRUCCION_SISTEMA.includes(`"${u}"`));
   for (const c of CATEGORIAS) ok(`menciona la categoría "${c}"`, INSTRUCCION_SISTEMA.includes(`"${c}"`));
   const secciones = ["rol", "principios", "entrada", "transcripcion", "es_receta", "receta", "ingredientes", "cantidades", "pasos", "dudas", "glosario_chileno"];

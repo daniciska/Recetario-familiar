@@ -7,8 +7,13 @@ import type { Receta } from "../datos/tipos";
 
 /** Bytes por audio. Netlify acepta ≈ 4,5 MB binarios por pedido (6 MB en base64). */
 export const MAX_AUDIO = 4_000_000;
-/** 15 minutos. */
+/**
+ * 15 minutos. El servidor saca la duración de los bytes del audio cuando puede (servidor/gemini.ts,
+ * duracionAudio); si no, usa la que mandó el equipo (`?segundos=`); y si tampoco, aplica MAX_AUDIO_SIN_DURACION.
+ */
 export const MAX_SEGUNDOS = 900;
+/** Sin ninguna duración conocida: 15 minutos a 16 kbps (una nota de voz bien comprimida), ≈ 1,8 MB. */
+export const MAX_AUDIO_SIN_DURACION = MAX_SEGUNDOS * 2_000;
 /** Dictados sin guardar ni descartar por familia. */
 export const MAX_PENDIENTES = 20;
 /** Lo genera el equipo (subida idempotente): 24 caracteres del alfabeto de idAzar() de servidor/comun.ts. */
@@ -82,6 +87,15 @@ export interface DictadoPublico {
   emoji?: string;
   esReceta?: boolean; // false: "no parece receta"
   motivo?: string; // por qué no parece receta
+  /**
+   * true: el borrador es el del rescate (Gemini cortó la respuesta y sólo se salvó lo que se dijo: sin
+   * ingredientes ni pasos). La app ofrece «Pedir otra versión» (POST procesar {otraVez: true}).
+   */
+  rescate?: boolean;
+  /**
+   * En "listo": el último «Pedir otra versión» falló con este error y quedó el borrador anterior. En
+   * "error": por qué no hay borrador.
+   */
   error?: ErrorDictado;
   // Sólo en GET /api/dictados/:id:
   borrador?: Receta; // id "rec_<id>", con comoLoDijo/estimado/nota/dudas/dictado
@@ -99,6 +113,22 @@ export interface DictadoPublico {
  * "otro_audio" → ese id ya es de otro audio (no se reintenta).
  */
 export type MotivoRechazo = "ya_guardada" | "lleno" | "otro_audio";
+
+/**
+ * DELETE /api/dictados/:id[?borrador=1] → 200. Con ?borrador=1 (descartar un BORRADOR) no se borra nada si
+ * la receta ya se guardó (desde otro equipo): responde `guardada: true`. Sin el parámetro (quitar el audio
+ * de una receta guardada, o borrar la receta) borra el registro, el audio y lo que se dijo.
+ */
+export interface RespuestaDescartar {
+  ok: true;
+  guardada?: true;
+}
+
+/**
+ * POST /api/dictados/:id/guardado → 409 con este `codigo` si la colección «recetas» de la familia todavía
+ * no tiene la receta (el PUT de la colección no ha llegado): el equipo reintenta más tarde, sin mostrar error.
+ */
+export const RECETA_NO_GUARDADA = "RECETA_NO_GUARDADA";
 
 /** GET /api/dictados */
 export interface ListaDictados {

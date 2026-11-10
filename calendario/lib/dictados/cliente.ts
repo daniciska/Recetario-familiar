@@ -4,16 +4,25 @@
 // «No existe» es 410 (ver servidor/dictados.ts): aquí da null (o "borrado" en bajarAudio).
 //
 // La subida (subirPendiente) vive fuera de React: sigue aunque se cierre la ventana de dictar, y borra la
-// copia del equipo (pendientes.ts) apenas la nube confirma.
+// copia del equipo (pendientes.ts) apenas la nube confirma. alCambiarSubidas() avisa cuándo empieza y cómo
+// termina cada subida de esta pestaña (lo escucha lib/dictados/motor.ts, que reintenta las que no llegaron).
+//
+// Descartar tiene dos intenciones distintas (el servidor las distingue con ?borrador=1):
+// - descartarBorrador(id): el borrador de una receta dictada que todavía no se guarda. Si otro equipo ya la
+//   guardó, la nube no borra nada y responde «guardada».
+// - quitarAudio(id): el audio y lo que se dijo de una receta guardada (o al borrar la receta): sí borra.
 
 import { AccesoRevocado, SinConexion, api, leerSesion } from "../datos/nube";
 import * as pendientes from "./pendientes";
 import type { PendienteLocal } from "./pendientes";
 import {
   ALFABETO_ID,
+  MAX_SEGUNDOS,
+  RECETA_NO_GUARDADA,
   type DictadoPublico,
   type ListaDictados,
   type MotivoRechazo,
+  type RespuestaDescartar,
   type RespuestaProbar,
   type Salud,
   type TextoDictado,
@@ -81,7 +90,7 @@ export function nuevoPendiente(
   meta: { origen: "grabacion" | "archivo"; segundos?: number; archivo?: string; mime?: string },
   ahora = new Date(),
 ): PendienteLocal {
-  const segundos = meta.segundos && meta.segundos > 0 ? Math.round(meta.segundos) : undefined;
+  const segundos = meta.segundos && meta.segundos > 0 ? segundosParaSubir(meta.segundos, meta.origen) : undefined;
   const archivo = meta.archivo?.trim().slice(0, 120) || undefined;
   return {
     id: nuevoIdDictado(),
@@ -93,6 +102,14 @@ export function nuevoPendiente(
     creado: ahora.toISOString(),
   };
 }
+
+/**
+ * Los segundos que se mandan: redondeados y, en una grabación, nunca más que MAX_SEGUNDOS (un corte de las
+ * 15:00 que llegó medio segundo tarde daba 901 y el servidor lo rechazaba siempre con 413). Un archivo más
+ * largo no se acota: la pantalla ya lo rechazó antes (muyLargo).
+ */
+export const segundosParaSubir = (segundos: number, origen: "grabacion" | "archivo") =>
+  origen === "grabacion" ? Math.min(Math.round(segundos), MAX_SEGUNDOS) : Math.round(segundos);
 
 // ---------- Subida ----------
 
@@ -117,6 +134,27 @@ const subidas = new Map<string, Promise<ResultadoSubida>>();
 
 /** ¿Se está subiendo ahora este audio desde esta pestaña? */
 export const subiendo = (id: string) => subidas.has(id);
+/** Los audios que se están subiendo ahora desde esta pestaña. */
+export const subiendoAhora = () => [...subidas.keys()];
+
+/** "empieza", o "termina" con lo que pasó (null: lanzó, p. ej. AccesoRevocado). */
+export type EventoSubida = { id: string; fase: "empieza" } | { id: string; fase: "termina"; resultado: ResultadoSubida | null };
+const oyentesSubida = new Set<(e: EventoSubida) => void>();
+
+/** Avisa cuándo empieza y cómo termina cada subida de esta pestaña. Devuelve cómo dejar de escuchar. */
+export function alCambiarSubidas(fn: (e: EventoSubida) => void): () => void {
+  oyentesSubida.add(fn);
+  return () => void oyentesSubida.delete(fn);
+}
+function avisarSubida(e: EventoSubida) {
+  for (const f of [...oyentesSubida]) {
+    try {
+      f(e);
+    } catch {
+      /* un oyente que falla no impide avisar a los demás */
+    }
+  }
+}
 
 /**
  * Sube un audio con PUT /api/dictados/:id (idempotente: un reintento con el mismo id no duplica). Hasta 3
@@ -128,6 +166,12 @@ export function subirPendiente(p: PendienteLocal, op: { esperas?: number[] } = {
   if (ya) return ya;
   const s = subirUnaVez(p, op.esperas ?? [2000, 5000]).finally(() => subidas.delete(p.id));
   subidas.set(p.id, s);
+  avisarSubida({ id: p.id, fase: "empieza" });
+  // Después del finally: cuando avisa "termina", subiendo(id) ya es false.
+  s.then(
+    (resultado) => avisarSubida({ id: p.id, fase: "termina", resultado }),
+    () => avisarSubida({ id: p.id, fase: "termina", resultado: null }),
+  );
   return s;
 }
 
@@ -135,7 +179,7 @@ async function subirUnaVez(p: PendienteLocal, esperas: number[]): Promise<Result
   const sesion = leerSesion();
   if (!sesion) return { ok: false, motivo: "sin_conexion" };
   const q = new URLSearchParams();
-  if (p.segundos) q.set("segundos", String(Math.round(p.segundos)));
+  if (p.segundos) q.set("segundos", String(segundosParaSubir(p.segundos, p.origen))); // también las copias de antes con 901
   if (p.archivo) q.set("archivo", p.archivo);
   q.set("origen", p.origen);
   for (let intento = 0; ; intento++) {
@@ -197,23 +241,57 @@ export async function listarDictados(): Promise<ListaDictados> {
   return rechazo(status, datos);
 }
 
-/** La receta ya se guardó en Recetas: el dictado sale de la lista (el audio y lo que se dijo quedan). */
-export async function marcarGuardado(id: string, recetaId: string): Promise<void> {
-  const { status, datos } = await api<{ ok?: boolean; error?: string }>(`/api/dictados/${id}/guardado`, { metodo: "POST", cuerpo: { recetaId }, token: token() });
-  if (status !== 200) rechazo(status, datos);
+/**
+ * La receta ya se guardó en Recetas: el dictado sale de la lista (el audio y lo que se dijo quedan). true:
+ * listo. false: la nube todavía no tiene esa receta en Recetas (409 RECETA_NO_GUARDADA, p. ej. su guardado
+ * no llegó): no es un error para mostrar, se vuelve a intentar más tarde. Otro rechazo lanza RechazoDictado.
+ */
+export async function marcarGuardado(id: string, recetaId: string): Promise<boolean> {
+  const { status, datos } = await api<{ ok?: boolean; error?: string; codigo?: string }>(`/api/dictados/${id}/guardado`, {
+    metodo: "POST",
+    cuerpo: { recetaId },
+    token: token(),
+  });
+  if (status === 200) return true;
+  if (status === 409 && datos.codigo === RECETA_NO_GUARDADA) return false;
+  return rechazo(status, datos);
+}
+
+/** Lo que pasó al descartar un borrador: "guardada" = otro equipo ya guardó la receta y no se borró nada. */
+export type ResultadoDescarte = "descartado" | "guardada";
+
+/**
+ * Descartar el BORRADOR de una receta dictada (DELETE ?borrador=1): borra la copia de este equipo y, en la
+ * nube, el registro y el audio (idempotente). Si mientras tanto otro equipo guardó la receta, la nube no
+ * borra nada y da "guardada" (la pantalla puede decir «ya la guardaron en otro equipo»). Sin nube sólo
+ * borra la copia. Si la nube no responde lanza SinConexion (la copia ya se borró: si el audio nunca llegó a
+ * la nube, ya está descartado).
+ */
+export async function descartarBorrador(id: string): Promise<ResultadoDescarte> {
+  await pendientes.borrar(id);
+  if (!hayNube()) return "descartado";
+  const { status, datos } = await api<Partial<RespuestaDescartar> & { error?: string }>(`/api/dictados/${id}?borrador=1`, { metodo: "DELETE", token: token() });
+  if (status !== 200) return rechazo(status, datos);
+  return datos.guardada === true ? "guardada" : "descartado";
 }
 
 /**
- * Descartar: borra la copia de este equipo y, en la nube, el registro, el audio y lo que se dijo
- * (idempotente). Sin nube sólo borra la copia. Si la nube no responde lanza SinConexion (la copia ya se
- * borró: si el audio nunca llegó a la nube, ya está descartado).
+ * Quitar el audio (y lo que se dijo) de una receta YA GUARDADA, o al borrar esa receta: borra en la nube el
+ * audio, lo que se dijo y el registro si quedaba (idempotente), y la copia de este equipo. Sin nube sólo
+ * borra la copia. Si la nube no responde lanza SinConexion.
  */
-export async function descartarDictado(id: string): Promise<void> {
+export async function quitarAudio(id: string): Promise<void> {
   await pendientes.borrar(id);
   if (!hayNube()) return;
   const { status, datos } = await api<{ ok?: boolean; error?: string }>(`/api/dictados/${id}`, { metodo: "DELETE", token: token() });
   if (status !== 200) rechazo(status, datos);
 }
+
+/**
+ * @deprecated Usar descartarBorrador(id) para un borrador o quitarAudio(id) para una receta guardada. Queda
+ * igual que antes (borra siempre, como quitarAudio) mientras las pantallas se cambian.
+ */
+export const descartarDictado = quitarAudio;
 
 /** Lo que se dijo (transcripción). null: ya no está. */
 export async function leerTexto(id: string): Promise<TextoDictado | null> {

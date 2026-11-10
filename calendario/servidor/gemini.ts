@@ -127,6 +127,315 @@ export function detectarAudio(cabeza: Uint8Array): AudioDetectado {
   };
 }
 
+// ---------- Duración (por los bytes, sin decodificar) ----------
+
+/**
+ * Segundos de audio según lo que anota el contenedor, o undefined si no se puede saber. Así el tope de 15
+ * minutos no depende sólo de lo que dice el equipo (`?segundos=`). Ogg (Opus/Vorbis): la posición del
+ * último paquete; WebM: Duration de Info o, en lo que graba MediaRecorder (sin Duration), el último bloque;
+ * MP4/M4A: mvhd o, en MP4 fragmentado (Safari), el final del último fragmento; WAV y AIFF: datos / tasa;
+ * FLAC: STREAMINFO; MP3: Xing/Info/VBRI o el bitrate del primer cuadro; AAC: los cuadros ADTS.
+ * Un resultado que no calza con el tamaño (menos de 500 bit/s o más de 6 Mbit/s) es una cabecera rota: undefined.
+ */
+export function duracionAudio(b: Uint8Array): number | undefined {
+  let s: number | undefined;
+  try {
+    s = leerDuracion(b);
+  } catch {
+    s = undefined;
+  }
+  if (s == null || !Number.isFinite(s) || s <= 0) return undefined;
+  const bps = (b.byteLength * 8) / s;
+  return bps >= 500 && bps <= 6_000_000 ? s : undefined;
+}
+
+const textoEn = (b: Uint8Array, i: number, n: number) => (i >= 0 && i + n <= b.length ? String.fromCharCode(...b.subarray(i, i + n)) : "");
+
+function leerDuracion(b: Uint8Array): number | undefined {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (textoEn(b, 0, 4) === "OggS") return duracionOgg(b, v);
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return duracionWebm(b, v);
+  if (textoEn(b, 4, 4) === "ftyp") return duracionMp4(b, v);
+  if (textoEn(b, 0, 4) === "RIFF" && textoEn(b, 8, 4) === "WAVE") return duracionWav(b, v);
+  if (textoEn(b, 0, 4) === "fLaC") return duracionFlac(b, v);
+  if (textoEn(b, 0, 4) === "FORM" && /^AIF[FC]$/.test(textoEn(b, 8, 4))) return duracionAiff(b, v);
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return duracionAdts(b);
+  if (textoEn(b, 0, 3) === "ID3" || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return duracionMp3(b, v);
+  return undefined;
+}
+
+/** Ogg: granule position de la última página entera del mismo flujo (Opus siempre a 48 kHz, menos el pre-skip). */
+function duracionOgg(b: Uint8Array, v: DataView): number | undefined {
+  if (b.length < 27 || b[4] !== 0) return undefined;
+  const serie = v.getUint32(14, true);
+  const ini = 27 + b[26];
+  let tasa = 0;
+  let salto = 0;
+  if (textoEn(b, ini, 8) === "OpusHead" && ini + 12 <= b.length) {
+    tasa = 48_000;
+    salto = v.getUint16(ini + 10, true);
+  } else if (textoEn(b, ini, 7) === "\x01vorbis" && ini + 16 <= b.length) tasa = v.getUint32(ini + 12, true);
+  if (!tasa) return undefined;
+  for (let i = b.length - 27; i > 0; i--) {
+    if (b[i] !== 0x4f || b[i + 1] !== 0x67 || b[i + 2] !== 0x67 || b[i + 3] !== 0x53 || b[i + 4] !== 0) continue;
+    if (v.getUint32(i + 14, true) !== serie) continue;
+    const segs = b[i + 26];
+    if (i + 27 + segs > b.length) continue;
+    let largo = 27 + segs;
+    for (let k = 0; k < segs; k++) largo += b[i + 27 + k];
+    if (i + largo > b.length) continue; // página cortada: la anterior
+    const pos = v.getBigUint64(i + 6, true);
+    if (pos === 0xffffffffffffffffn) continue; // ningún paquete termina en esta página
+    return (Number(pos) - salto) / tasa;
+  }
+  return undefined;
+}
+
+/** Número de largo variable de EBML (Matroska/WebM). `id` deja el marcador; el tamaño lo quita. */
+function vintEbml(b: Uint8Array, i: number, id: boolean): { largo: number; valor: number; desconocido: boolean } | null {
+  const x = b[i];
+  if (!x) return null;
+  let largo = 1;
+  let marca = 0x80;
+  while (!(x & marca)) {
+    marca >>= 1;
+    largo++;
+  }
+  if (largo > (id ? 4 : 8) || i + largo > b.length) return null;
+  let valor = id ? x : x & (marca - 1);
+  let unos = !id && valor === marca - 1;
+  for (let k = 1; k < largo; k++) {
+    valor = valor * 256 + b[i + k];
+    if (b[i + k] !== 0xff) unos = false;
+  }
+  return { largo, valor, desconocido: unos };
+}
+
+function uintBE(b: Uint8Array, i: number, n: number): number {
+  let x = 0;
+  for (let k = 0; k < n && k < 8; k++) x = x * 256 + b[i + k];
+  return x;
+}
+
+/**
+ * WebM: recorre Segment, Info, Cluster y BlockGroup por dentro (también con tamaño desconocido, como los
+ * escribe MediaRecorder) y salta lo demás. Duration de Info si viene; si no, el último bloque (Timecode del
+ * Cluster + el relativo del bloque).
+ */
+function duracionWebm(b: Uint8Array, v: DataView): number | undefined {
+  const ADENTRO = new Set([0x18538067, 0x1549a966, 0x1f43b675, 0xa0]); // Segment, Info, Cluster, BlockGroup
+  let escala = 1_000_000; // TimecodeScale en ns
+  let duracion = 0;
+  let cluster = 0;
+  let ultimo = -1;
+  let i = 0;
+  for (let pasos = 0; i < b.length && pasos < 1_000_000; pasos++) {
+    const id = vintEbml(b, i, true);
+    const t = id && vintEbml(b, i + id.largo, false);
+    if (!id || !t) break;
+    const datos = i + id.largo + t.largo;
+    if (ADENTRO.has(id.valor)) {
+      i = datos;
+      continue;
+    }
+    if (t.desconocido || datos + t.valor > b.length) break;
+    if (id.valor === 0x2ad7b1) escala = uintBE(b, datos, t.valor) || escala;
+    else if (id.valor === 0x4489) duracion = t.valor === 4 ? v.getFloat32(datos) : t.valor === 8 ? v.getFloat64(datos) : 0;
+    else if (id.valor === 0xe7) cluster = uintBE(b, datos, t.valor);
+    else if (id.valor === 0xa3 || id.valor === 0xa1) {
+      const pista = vintEbml(b, datos, false);
+      if (pista && datos + pista.largo + 2 <= b.length) ultimo = Math.max(ultimo, cluster + v.getInt16(datos + pista.largo));
+    }
+    i = datos + t.valor;
+  }
+  const unidad = escala / 1e9;
+  if (duracion > 0) return duracion * unidad;
+  return ultimo > 0 ? ultimo * unidad : undefined;
+}
+
+/** Cajas de MP4 entre `desde` y `hasta`; la última se corta en `hasta` si dice ser más larga (archivo cortado). */
+function cajasMp4(b: Uint8Array, v: DataView, desde: number, hasta: number, fn: (tipo: string, datos: number, fin: number) => void) {
+  for (let i = desde, n = 0; i + 8 <= hasta && n < 100_000; n++) {
+    let tam = v.getUint32(i);
+    let cab = 8;
+    if (tam === 1) {
+      if (i + 16 > hasta) return;
+      tam = Number(v.getBigUint64(i + 8));
+      cab = 16;
+    } else if (tam === 0) tam = hasta - i;
+    if (tam < cab) return;
+    const fin = Math.min(i + tam, hasta);
+    fn(textoEn(b, i + 4, 4), i + cab, fin);
+    i += tam;
+  }
+}
+
+function duracionMp4(b: Uint8Array, v: DataView): number | undefined {
+  const u32 = (i: number) => (i + 4 <= b.length ? v.getUint32(i) : 0);
+  const u64 = (i: number) => (i + 8 <= b.length ? Number(v.getBigUint64(i)) : 0);
+  let pelicula = 0; // mvhd
+  let fragmentada = 0; // mehd
+  let escalaPelicula = 0;
+  const escalas = new Map<number, number>(); // track_ID → timescale (mdhd)
+  const porOmision = new Map<number, number>(); // track_ID → default_sample_duration (trex)
+  let finFragmentos = 0; // segundos: tfdt + duración de las muestras del fragmento más tardío
+  cajasMp4(b, v, 0, b.length, (tipo, d, f) => {
+    if (tipo === "moov")
+      cajasMp4(b, v, d, f, (t2, d2, f2) => {
+        if (t2 === "mvhd") {
+          const ver = b[d2];
+          escalaPelicula = ver === 1 ? u32(d2 + 20) : u32(d2 + 12);
+          const dur = ver === 1 ? u64(d2 + 24) : u32(d2 + 16);
+          if (escalaPelicula && dur && dur !== 0xffffffff) pelicula = dur / escalaPelicula;
+        } else if (t2 === "mvex")
+          cajasMp4(b, v, d2, f2, (t3, d3) => {
+            if (t3 === "mehd") fragmentada = b[d3] === 1 ? u64(d3 + 4) : u32(d3 + 4);
+            if (t3 === "trex") porOmision.set(u32(d3 + 4), u32(d3 + 12));
+          });
+        else if (t2 === "trak") {
+          let pista = 0;
+          let escala = 0;
+          cajasMp4(b, v, d2, f2, (t3, d3, f3) => {
+            if (t3 === "tkhd") pista = b[d3] === 1 ? u32(d3 + 20) : u32(d3 + 12);
+            if (t3 === "mdia")
+              cajasMp4(b, v, d3, f3, (t4, d4) => {
+                if (t4 === "mdhd") escala = b[d4] === 1 ? u32(d4 + 20) : u32(d4 + 12);
+              });
+          });
+          if (escala) escalas.set(pista, escala);
+        }
+      });
+    else if (tipo === "moof")
+      cajasMp4(b, v, d, f, (t2, d2, f2) => {
+        if (t2 !== "traf") return;
+        let pista = 0;
+        let durOmision = 0;
+        let base = -1;
+        let suma = 0;
+        cajasMp4(b, v, d2, f2, (t3, d3) => {
+          if (t3 === "tfhd") {
+            const flags = u32(d3) & 0xffffff;
+            pista = u32(d3 + 4);
+            const k = d3 + 8 + (flags & 0x01 ? 8 : 0) + (flags & 0x02 ? 4 : 0);
+            durOmision = flags & 0x08 ? u32(k) : (porOmision.get(pista) ?? 0);
+          } else if (t3 === "tfdt") base = b[d3] === 1 ? u64(d3 + 4) : u32(d3 + 4);
+          else if (t3 === "trun") {
+            const flags = u32(d3) & 0xffffff;
+            const muestras = u32(d3 + 4);
+            if (!(flags & 0x100)) suma += muestras * durOmision;
+            else {
+              const paso = 4 * [0x100, 0x200, 0x400, 0x800].filter((x) => flags & x).length;
+              let k = d3 + 8 + (flags & 0x01 ? 4 : 0) + (flags & 0x04 ? 4 : 0);
+              for (let m = 0; m < muestras && k + 4 <= b.length; m++, k += paso) suma += u32(k);
+            }
+          }
+        });
+        const escala = escalas.get(pista) ?? [...escalas.values()][0] ?? 0;
+        if (escala && base >= 0) finFragmentos = Math.max(finFragmentos, (base + suma) / escala);
+      });
+  });
+  if (pelicula > 0) return pelicula;
+  if (fragmentada > 0 && escalaPelicula) return fragmentada / escalaPelicula;
+  return finFragmentos > 0 ? finFragmentos : undefined;
+}
+
+function duracionWav(b: Uint8Array, v: DataView): number | undefined {
+  let porSegundo = 0;
+  for (let i = 12, n = 0; i + 8 <= b.length && n < 1000; n++) {
+    const id = textoEn(b, i, 4);
+    const tam = v.getUint32(i + 4, true);
+    const d = i + 8;
+    if (id === "fmt " && d + 12 <= b.length) porSegundo = v.getUint32(d + 8, true);
+    if (id === "data") {
+      const datos = tam === 0 || tam === 0xffffffff ? b.length - d : Math.min(tam, b.length - d); // streaming: hasta el final
+      return porSegundo ? datos / porSegundo : undefined;
+    }
+    i = d + tam + (tam & 1);
+  }
+  return undefined;
+}
+
+function duracionFlac(b: Uint8Array, v: DataView): number | undefined {
+  if (b.length < 26 || (b[4] & 0x7f) !== 0) return undefined; // el primer bloque es STREAMINFO
+  const tasa = (b[18] << 12) | (b[19] << 4) | (b[20] >> 4);
+  const muestras = (b[21] & 0x0f) * 2 ** 32 + v.getUint32(22);
+  return tasa && muestras ? muestras / tasa : undefined;
+}
+
+function duracionAiff(b: Uint8Array, v: DataView): number | undefined {
+  for (let i = 12, n = 0; i + 8 <= b.length && n < 1000; n++) {
+    const tam = v.getUint32(i + 4);
+    const d = i + 8;
+    if (textoEn(b, i, 4) === "COMM" && d + 18 <= b.length) {
+      const cuadros = v.getUint32(d + 2);
+      const exp = ((b[d + 8] & 0x7f) << 8) | b[d + 9]; // sampleRate: flotante extendido de 80 bits
+      const tasa = (v.getUint32(d + 10) * 2 ** 32 + v.getUint32(d + 14)) * 2 ** (exp - 16383 - 63);
+      return tasa > 0 ? cuadros / tasa : undefined;
+    }
+    i = d + tam + (tam & 1);
+  }
+  return undefined;
+}
+
+const KBPS_MP3: Record<string, number[]> = {
+  "1-1": [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+  "1-2": [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+  "1-3": [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+  "2-1": [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+  "2-2": [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160], // capas II y III
+};
+const TASAS_MP3: Record<number, number[]> = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+
+/** MP3: salta el ID3v2, busca un cuadro válido (con otro cuadro donde debe) y usa Xing/Info/VBRI o su bitrate. */
+function duracionMp3(b: Uint8Array, v: DataView): number | undefined {
+  let i = 0;
+  if (textoEn(b, 0, 3) === "ID3" && b.length >= 10) i = 10 + (((b[6] & 0x7f) << 21) | ((b[7] & 0x7f) << 14) | ((b[8] & 0x7f) << 7) | (b[9] & 0x7f)) + (b[5] & 0x10 ? 10 : 0);
+  const tope = Math.min(b.length - 4, i + 65_536);
+  for (; i < tope; i++) {
+    if (b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) continue;
+    const ver = (b[i + 1] >> 3) & 3;
+    const capa = 4 - ((b[i + 1] >> 1) & 3); // 1, 2 o 3
+    const ib = b[i + 2] >> 4;
+    const it = (b[i + 2] >> 2) & 3;
+    if (ver === 1 || capa === 4 || ib === 0 || ib === 15 || it === 3) continue;
+    const mpeg1 = ver === 3;
+    const kbps = KBPS_MP3[mpeg1 ? `1-${capa}` : capa === 1 ? "2-1" : "2-2"][ib];
+    const tasa = TASAS_MP3[ver][it];
+    const relleno = (b[i + 2] >> 1) & 1;
+    const muestras = capa === 1 ? 384 : capa === 2 || mpeg1 ? 1152 : 576;
+    const largo = capa === 1 ? (Math.floor((12 * kbps * 1000) / tasa) + relleno) * 4 : Math.floor(((muestras / 8) * kbps * 1000) / tasa) + relleno;
+    if (largo < 4) continue;
+    if (i + largo + 1 < b.length && (b[i + largo] !== 0xff || (b[i + largo + 1] & 0xe0) !== 0xe0)) continue;
+    const mono = b[i + 3] >> 6 === 3;
+    const x = i + 4 + (mpeg1 ? (mono ? 17 : 32) : mono ? 9 : 17);
+    const marca = textoEn(b, x, 4);
+    if ((marca === "Xing" || marca === "Info") && x + 12 <= b.length && v.getUint32(x + 4) & 1) return (v.getUint32(x + 8) * muestras) / tasa;
+    if (textoEn(b, i + 36, 4) === "VBRI" && i + 54 <= b.length) return (v.getUint32(i + 50) * muestras) / tasa;
+    const fin = b.length - (textoEn(b, b.length - 128, 3) === "TAG" ? 128 : 0);
+    return ((fin - i) * 8) / (kbps * 1000);
+  }
+  return undefined;
+}
+
+const TASAS_AAC = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+
+/** AAC en ADTS: suma los cuadros; si se cortan antes del final (basura), estima el resto por el tamaño. */
+function duracionAdts(b: Uint8Array): number | undefined {
+  let i = 0;
+  let muestras = 0;
+  let tasa = 0;
+  while (i + 7 <= b.length && b[i] === 0xff && (b[i + 1] & 0xf6) === 0xf0) {
+    const t = TASAS_AAC[(b[i + 2] >> 2) & 0xf];
+    const largo = ((b[i + 3] & 3) << 11) | (b[i + 4] << 3) | (b[i + 5] >> 5);
+    if (!t || largo < 7) break;
+    tasa = t;
+    muestras += 1024 * ((b[i + 6] & 3) + 1);
+    i += largo;
+  }
+  if (!tasa || !muestras) return undefined;
+  return (muestras / tasa) * Math.max(1, b.length / Math.min(i, b.length));
+}
+
 // ---------- Errores de Google ----------
 
 export type CodigoFallo =
@@ -364,7 +673,8 @@ const acotar = (x: number, min: number, max: number) => Math.min(max, Math.max(m
  *   hasta la medianoche del Pacífico.
  * - 404: el otro modelo. 400 por responseFormat: una vez con responseJsonSchema. Formato: una vez con el
  *   MIME alterno. Respuesta cortada: una vez con 32.768 tokens. JSON dañado: una vez más. Si no, se rescata
- *   la transcripción o queda "incompleta".
+ *   la transcripción o queda "incompleta". Si después de un corte la corrida termina por algo pasajero, no
+ *   se rescata: queda ocupado o cuota_dia (se reintenta solo).
  * - Clave, verificación, región, saldo, permiso y bloqueo: sin reintento (la familia tiene que hacer algo).
  */
 export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: OpcionesPedido): Promise<ResultadoPedido> {
@@ -477,7 +787,10 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
     log(`gemini ${detalle}`);
     return error("interno");
   }
-  if (rescate) return { tipo: "rescate", transcripcion: rescate.transcripcion, modelo: rescate.modelo, pedidos };
+  // El rescate (borrador sin ingredientes ni pasos) es sólo para cuando Gemini cortó o dañó la respuesta las
+  // veces que se le pidió. Si la corrida terminó por algo pasajero (ocupado, cuota, presupuesto), queda el
+  // error y la app reintenta sola: la próxima vez puede salir la receta entera.
+  if (rescate && incompleta) return { tipo: "rescate", transcripcion: rescate.transcripcion, modelo: rescate.modelo, pedidos };
   if (incompleta) return error("incompleta");
   if (dia && dia + sinModelo >= cfg.modelos.length) return error("cuota_dia", reinicioCuota(reloj.ahora()));
   if (pasajero || dia) return error("ocupado", reloj.ahora() + 10 * 60_000);
