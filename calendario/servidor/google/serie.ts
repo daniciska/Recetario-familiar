@@ -13,8 +13,9 @@
 // API:
 //   agrupar(items, calId, zonaCal): Map<href, Serie>
 //   esFantasma(x, p), esRezagada(x, p)            (una rezagada está en serie.fantasmas pero no es esFantasma)
-//   marcaFantasmas(antes, despues, fantasmas, ahora, vivas?)   la marca cfv para el PATCH del principal (MARCA_FANTASMAS)
+//   marcaFantasmas(antes, despues, fantasmas, ahora)   la marca cfv para el PATCH del principal (MARCA_FANTASMAS)
 //   excluirDeMarca(p, ids)                        la marca de p con esas rezagadas excluidas (Google no las acepta)
+//                                                 (null: no caben, se borra la marca)
 //   hrefSerie(calId, id): string                  el href de una serie (el mismo que arma agrupar)
 //   proyectar(serie): { ics, p2, porClave }        (con memo por serie; determinista)
 //   serieAIcs(serie): string                       = proyectar(serie).ics
@@ -343,20 +344,20 @@ export function esFantasma(x: EvG, p: EvG): boolean {
 // "rezagada": no se muestra (cuenta como fantasma) y el transporte la pone al día cuando puede. Si alguien
 // la cambió después (o el iPhone borró la marca), es un día cambiado como cualquier otro.
 //
-// Un cambio posterior de la serie vuelve a anotar las entradas que todavía explican una rezagada, con el
-// "hasta" del cambio nuevo: al aplicar ese PATCH Google puede tocarlas (pasarles el título) y su `updated`
-// quedaría después del hasta viejo. No se extiende si así pasaría a cubrir un día cambiado de verdad (con
-// ese valor y tocado después del hasta viejo, p. ej. alguien que volvió un día al lugar de antes).
+// Un cambio posterior de la serie vuelve a anotar las entradas que todavía explican una rezagada (con su
+// "hasta" de siempre) y, para esas rezagadas y sólo ellas, el hasta del cambio nuevo por su id
+// (i.<huella del id>.<hasta>): al aplicar ese PATCH Google puede tocarlas (pasarles el título) y su
+// `updated` quedaría después del hasta viejo. Por id y no por valor: otro día que alguien deje con el
+// valor de antes sigue siendo un día cambiado.
 // Una rezagada que Google no deja poner al día (400, evento no editable) se anota como excluida
 // (x.<huella del id>): no se reintenta ni se vuelve a avisar, y la pared la muestra como día cambiado,
-// igual que Google.
+// igual que Google. Las excluidas no se descartan nunca para hacer espacio: si no caben, la marca se
+// borra entera (todas las rezagadas de la serie pasan a verse como días cambiados, igual que en Google).
 
 /** Clave de la marca en extendedProperties.private del principal. */
 export const MARCA_FANTASMAS = "cfv";
-/** Cuántas entradas guarda la marca (las más recientes; Google acepta hasta 1024 caracteres por valor). */
-const MAX_MARCA = 24;
-/** Cuántas excepciones excluidas guarda la marca (dentro de MAX_MARCA). */
-const MAX_EXCLUIDAS = 8;
+/** Largo máximo de la marca (Google acepta hasta 1024 caracteres por valor). */
+const LARGO_MARCA = 1000;
 /**
  * Margen del "cuándo se cambió": al aplicar el cambio del principal, Google puede tocar las excepciones
  * (pasarles el título) y su `updated` queda un poco después de la hora de este servidor.
@@ -380,50 +381,65 @@ const huellaValor = (v: string) => sha256(v).toString("hex").slice(0, 12);
 
 interface Marca {
   entradas: Rezago[];
+  /** Huella (huellaValor) del id de una rezagada → hasta cuándo lo sigue siendo (un cambio posterior). */
+  porId: Map<string, number>;
   /** Huellas (huellaValor) de los id de las excepciones excluidas: nunca son rezagadas. */
   excluidas: string[];
 }
 
+const B36 = "([0-9a-z]{1,9})";
+const H12 = "([0-9a-f]{12})";
+const ENTRADA = new RegExp(`^([sdlh])\\.${H12}\\.${B36}$`);
+const POR_ID = new RegExp(`^i\\.${H12}\\.${B36}$`);
+const EXCLUIDA = new RegExp(`^x\\.${H12}$`);
+const enB36 = (ms: number) => (ms / 1000).toString(36);
+
 function leerMarca(p: EvG | undefined): Marca {
-  const r: Marca = { entradas: [], excluidas: [] };
+  const r: Marca = { entradas: [], porId: new Map(), excluidas: [] };
   const t = p?.extendedProperties?.private?.[MARCA_FANTASMAS];
   if (typeof t !== "string") return r;
-  for (const x of t.split(",")) {
-    const m = /^([sdlh])\.([0-9a-f]{12})\.([0-9a-z]{1,9})$/.exec(x.trim());
+  for (const x of t.split(",").map((s) => s.trim())) {
+    let m = ENTRADA.exec(x);
     if (m) r.entradas.push({ campo: m[1], huella: m[2], hasta: parseInt(m[3], 36) * 1000 });
-    const e = /^x\.([0-9a-f]{12})$/.exec(x.trim());
-    if (e && !r.excluidas.includes(e[1])) r.excluidas.push(e[1]);
+    else if ((m = POR_ID.exec(x))) r.porId.set(m[1], Math.max(r.porId.get(m[1]) ?? 0, parseInt(m[2], 36) * 1000));
+    else if ((m = EXCLUIDA.exec(x)) && !r.excluidas.includes(m[1])) r.excluidas.push(m[1]);
   }
   return r;
 }
 
-/** La marca como texto: las entradas más recientes primero y al final las excluidas (las últimas anotadas). */
-function escribirMarca(entradas: readonly Rezago[], excluidas: readonly string[]): string {
-  const x = excluidas.slice(-MAX_EXCLUIDAS);
-  return [
-    ...[...entradas]
-      .sort((a, b) => b.hasta - a.hasta)
-      .slice(0, MAX_MARCA - x.length)
-      .map((e) => `${e.campo}.${e.huella}.${(e.hasta / 1000).toString(36)}`),
-    ...x.map((h) => `x.${h}`),
-  ].join(",");
+/**
+ * La marca como texto, dentro de LARGO_MARCA: todas las excluidas, las entradas (las más recientes primero)
+ * y las extensiones por id que quepan. null si no cabe ninguna entrada después de las excluidas: entonces
+ * no queda marca (nunca se deja fuera una excluida: volvería a intentarse y a avisar).
+ */
+function escribirMarca(entradas: readonly Rezago[], porId: ReadonlyMap<string, number>, excluidas: readonly string[]): string | null {
+  let largo = -1;
+  const cabe = (s: string) => largo + 1 + s.length <= LARGO_MARCA && ((largo += 1 + s.length), true);
+  const x = excluidas.map((h) => `x.${h}`);
+  if (!x.every(cabe)) return null;
+  const e = [...entradas].sort((a, b) => b.hasta - a.hasta).map((y) => `${y.campo}.${y.huella}.${enB36(y.hasta)}`).filter(cabe);
+  if (!e.length) return null;
+  const i = [...porId].sort((a, b) => b[1] - a[1]).map(([h, hasta]) => `i.${h}.${enB36(hasta)}`).filter(cabe);
+  return [...e, ...i, ...x].join(",");
 }
 
 /** Las entradas de la marca que explican a `x` como rezagada de `p`, o null si no lo es (ver arriba). */
 function rezagadaCon(x: EvG, p: EvG, marca: Marca): Rezago[] | null {
   if (!marca.entradas.length || !p.start || !x.start || !x.originalStartTime) return null;
-  if (marca.excluidas.includes(huellaValor(x.id))) return null;
+  const hx = huellaValor(x.id);
+  if (marca.excluidas.includes(hx)) return null;
   if ((x.status ?? "confirmed") !== (p.status ?? "confirmed")) return null;
   if (instanteDeHora(x.start) !== instanteDeHora(x.originalStartTime)) return null;
   if (tipoHora(x.start) !== tipoHora(p.start) || tipoHora(x.start) !== tipoHora(x.originalStartTime)) return null;
   const t = Date.parse(x.updated ?? "");
   if (!Number.isFinite(t)) return null;
+  const suyo = marca.porId.get(hx) ?? 0;
   const usa: Rezago[] = [];
   for (const [campo, valor] of CAMPOS_FANTASMA) {
     const v = valor(x);
     if (v === valor(p)) continue;
     const h = huellaValor(v);
-    const e = marca.entradas.find((y) => y.campo === campo && y.huella === h && t <= y.hasta);
+    const e = marca.entradas.find((y) => y.campo === campo && y.huella === h && t <= Math.max(y.hasta, suyo));
     if (!e) return null;
     usa.push(e);
   }
@@ -439,13 +455,13 @@ export function esRezagada(x: EvG, p: EvG): boolean {
  * La marca cfv que tiene que llevar el PATCH del principal que pasa de `antes` a `despues`. `fantasmas`
  * son las de la serie que siguen ahí después del cambio (normales y rezagadas, sin las que se cancelan):
  * sin ninguna, no hace falta. Por cada campo que cambia, la huella del valor de `antes` (hasta `ahora` más
- * MARGEN_MARCA), y las entradas de la marca de antes que todavía explican alguna rezagada, con ese mismo
- * hasta salvo que así cubrirían a una de `vivas` (los días cambiados de la serie; ver arriba). Las
- * excluidas siguen mientras la marca tenga entradas. undefined: no hay que mandar nada (queda la que
- * está); null: hay que borrarla.
+ * MARGEN_MARCA); las entradas de la marca de antes que todavía explican alguna rezagada, con su hasta, y
+ * esas rezagadas por id con el hasta nuevo (ver arriba). Las excluidas siguen mientras la marca tenga
+ * entradas. undefined: no hay que mandar nada (queda la que está); null: hay que borrarla.
  */
-export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG[], ahora: number, vivas: readonly EvG[] = []): string | null | undefined {
+export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG[], ahora: number): string | null | undefined {
   const r: Rezago[] = [];
+  const porId = new Map<string, number>();
   const poner = (e: Rezago) => {
     const y = r.find((z) => z.campo === e.campo && z.huella === e.huella);
     if (!y) r.push({ ...e });
@@ -455,31 +471,30 @@ export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG
   if (fantasmas.length) {
     const hasta = Math.ceil((ahora + MARGEN_MARCA) / 1000) * 1000;
     for (const [campo, valor] of CAMPOS_FANTASMA) if (valor(antes) !== valor(despues)) poner({ campo, huella: huellaValor(valor(antes)), hasta });
-    const valorDe = new Map(CAMPOS_FANTASMA);
     for (const x of fantasmas) {
-      for (const e of rezagadaCon(x, antes, vieja) ?? []) {
-        const valor = valorDe.get(e.campo)!;
-        const cubriria = vivas.some((v) => huellaValor(valor(v)) === e.huella && Date.parse(v.updated ?? "") > e.hasta);
-        poner(cubriria ? e : { ...e, hasta: Math.max(e.hasta, hasta) });
-      }
+      const usa = rezagadaCon(x, antes, vieja);
+      if (!usa) continue;
+      for (const e of usa) poner(e);
+      porId.set(huellaValor(x.id), hasta);
     }
   }
   const previa = antes.extendedProperties?.private?.[MARCA_FANTASMAS];
-  if (!r.length) return previa === undefined ? undefined : null;
-  const texto = escribirMarca(r, vieja.excluidas);
+  const texto = r.length ? escribirMarca(r, porId, vieja.excluidas) : null;
+  if (texto === null) return previa === undefined ? undefined : null;
   return texto === previa ? undefined : texto;
 }
 
 /**
  * La marca de `p` con esas excepciones (id) excluidas: Google no las deja poner al día, así que dejan de
  * ser rezagadas (no se reintentan y la pared las muestra como días cambiados). undefined si no cambia
- * nada (ya estaban, o la marca no tiene entradas: entonces no hay rezagadas).
+ * nada (ya estaban, o la marca no tiene entradas: entonces no hay rezagadas); null si no caben: se borra
+ * la marca (todas las rezagadas de la serie pasan a días cambiados, igual que en Google).
  */
-export function excluirDeMarca(p: EvG, ids: readonly string[]): string | undefined {
+export function excluirDeMarca(p: EvG, ids: readonly string[]): string | null | undefined {
   const m = leerMarca(p);
   const nuevas = [...new Set(ids.map(huellaValor))].filter((h) => !m.excluidas.includes(h));
   if (!nuevas.length || !m.entradas.length) return undefined;
-  return escribirMarca(m.entradas, [...m.excluidas, ...nuevas]);
+  return escribirMarca(m.entradas, m.porId, [...m.excluidas, ...nuevas]);
 }
 
 const NOMBRES_REC = new Set(["rrule", "exrule", "rdate", "exdate"]);
@@ -603,11 +618,15 @@ export function agrupar(items: readonly EvG[], calId: string, zonaCal: string | 
 }
 
 /**
- * Etag de la serie: cambia si cambia cualquier pieza (también una cancelada o una fantasma), si pasa
- * a ser de sólo lectura, si cambia su zona o su UID, o si cambia la forma de proyectar.
+ * Etag de la serie: cambia si cambia el principal, un día cambiado o una cancelada, si una excepción pasa
+ * de fantasma a día cambiado (o al revés), si pasa a ser de sólo lectura, si cambia su zona o su UID, o
+ * si cambia la forma de proyectar. Las fantasmas (y las rezagadas) no cuentan: la pared no las ve (armar
+ * no las usa). Así el transporte prevé el etag después de escribir el principal aunque sus fantasmas se
+ * pongan al día más tarde (si no, un borrado en la pared justo después se tomaba como "cambió en los dos
+ * lados" y el evento volvía). Los cambios de las fantasmas sí cambian el ctag del calendario (transporte).
  */
 export function etagSerie(s: Serie): string {
-  const piezas = [...s.vivas, ...s.fantasmas, ...s.canceladas].map((x) => `${x.id}:${x.etag ?? ""}:${x.status ?? ""}`).sort();
+  const piezas = [...s.vivas, ...s.canceladas].map((x) => `${x.id}:${x.etag ?? ""}:${x.status ?? ""}`).sort();
   const datos = [VERSION_PROYECCION, s.soloLectura ? "ro" : "rw", s.zona, s.uid, s.principal?.etag ?? "-", ...piezas].join("|");
   return "g1" + sha256(datos).toString("base64url").slice(0, 26);
 }

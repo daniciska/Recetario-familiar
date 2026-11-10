@@ -305,7 +305,10 @@ caso("etag de la serie", () => {
   ok("cambia si cambia el principal", cambiar(0, { etag: '"10"' }) !== a);
   ok("cambia si cambia un día cambiado", cambiar(1, { etag: '"20"' }) !== a);
   ok("cambia si cambia la cancelada (etag o estado)", cambiar(2, { etag: '"x"' }) !== a);
-  ok("cambia si cambia la fantasma", cambiar(3, { etag: '"30"' }) !== a);
+  // Las fantasmas no cuentan (la pared no las ve): así el etag se prevé después de escribir el principal
+  // aunque sus fantasmas se pongan al día más tarde. Si una pasa a día cambiado, sí cambia.
+  ok("no cambia si sólo cambia la fantasma (sigue siendo fantasma)", cambiar(3, { etag: '"30"' }) === a);
+  ok("cambia si la fantasma pasa a día cambiado", cambiar(3, { etag: '"30"', summary: "🦄 Natación con aletas" }) !== a);
   ok("cambia si pasa a sólo lectura", cambiar(0, { locked: true }) !== a);
   const s = unaSerie(natacion());
   ok("etagSerie(serie) = serie.etag", etagSerie(s) === s.etag);
@@ -518,9 +521,13 @@ caso("fantasmas rezagadas (marca cfv del principal)", () => {
   const otro = { ...pM, end: h("2026-11-04T10:30:00-03:00") };
   const marca2 = marcaFantasmas(pM, otro, [f0], ahora + 60_000);
   const pM2 = conMarca(otro, marca2 as string);
-  ok("un segundo cambio conserva lo que explica a la rezagada y agrega la duración", typeof marca2 === "string" && marca2.split(",").length === 3 && marca2.includes("h.") && esRezagada(f0, pM2), marca2);
+  ok(
+    "un segundo cambio conserva lo que explica a la rezagada (con su hasta), agrega la duración y extiende esa rezagada por su id",
+    typeof marca2 === "string" && marca2.split(",").length === 4 && marca2.includes("h.") && /(^|,)i\.[0-9a-f]{12}\.[0-9a-z]+($|,)/.test(marca2) && marca2.split(",").filter((x) => /^[sl]\./.test(x)).every((x) => (marca as string).includes(x)) && esRezagada(f0, pM2),
+    marca2,
+  );
   ok("…y una fantasma normal del segundo cambio (título y lugar nuevos, duración vieja) también es rezagada", esRezagada({ ...f0, summary: nuevo.summary, location: "Piscina 2" }, pM2));
-  ok("la marca nunca pasa de 24 entradas", (() => {
+  ok("la marca nunca pasa de 1.000 caracteres (Google acepta 1.024)", (() => {
     let p = p0;
     for (let i = 0; i < 40; i++) {
       const q = { ...p, summary: `T${i}` };
@@ -528,7 +535,7 @@ caso("fantasmas rezagadas (marca cfv del principal)", () => {
       p = conMarca(q, typeof m === "string" ? m : (p.extendedProperties?.private?.[MARCA_FANTASMAS] ?? null));
     }
     const m = p.extendedProperties?.private?.[MARCA_FANTASMAS] ?? "";
-    return m.split(",").length <= 24 && m.length < 1024;
+    return m.length > 0 && m.length <= 1000;
   })());
 });
 
@@ -538,6 +545,14 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
   const ahora = Date.parse("2026-11-08T12:00:00.000Z");
   const conMarca = (p: EvG, m: string | null | undefined) => ({ ...p, extendedProperties: { private: { cfh: "x", ...(m ? { [MARCA_FANTASMAS]: m } : {}) } } });
   const iso = (ms: number) => new Date(ms).toISOString();
+  const dia = (d: string, extra: Partial<EvG> = {}): EvG => ({
+    ...f0,
+    id: `${idNat}_202612${d}T120000Z`,
+    originalStartTime: h(`2026-12-${d}T09:00:00-03:00`),
+    start: h(`2026-12-${d}T09:00:00-03:00`),
+    end: h(`2026-12-${d}T10:00:00-03:00`),
+    ...extra,
+  });
   // Primer cambio: el lugar. f0 (fantasma) queda rezagada con el lugar de antes (ninguno).
   const nuevo = { ...p0, location: "Piscina 2" };
   const pM = conMarca(nuevo, marcaFantasmas(p0, nuevo, [f0], ahora) as string);
@@ -547,25 +562,27 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
   const despues = ahora + 600_000;
   const otro = { ...pM, summary: "🦄 Natación libre" };
   const tocada = { ...f0, summary: otro.summary, updated: iso(despues + 5000) };
-  const pM2 = conMarca(otro, marcaFantasmas(pM, otro, [f0], despues) as string);
-  ok("segundo cambio: la entrada que explica a la rezagada se vuelve a anotar con el hasta nuevo (la que Google tocó sigue siendo rezagada)", esRezagada(tocada, pM2) && esRezagada(f0, pM2), pM2.extendedProperties.private.cfv);
-  // …salvo que así cubriera un día cambiado de verdad: alguien volvió un día al lugar de antes después
-  // del primer cambio (sin lugar, como f0). Ese día no se pisa; la rezagada que Google toque queda como
-  // día cambiado (como antes de extender), que es lo seguro.
-  const vuelta: EvG = {
-    ...f0,
-    id: `${idNat}_20261209T120000Z`,
-    originalStartTime: h("2026-12-09T09:00:00-03:00"),
-    start: h("2026-12-09T09:00:00-03:00"),
-    end: h("2026-12-09T10:00:00-03:00"),
-    summary: p0.summary,
-    updated: iso(ahora + 300_000),
-  };
-  ok("ese día es un día cambiado (tocado después del hasta del primer cambio)", !esRezagada(vuelta, pM) && unaSerie([pM, vuelta]).vivas.length === 1);
-  const pM3 = conMarca(otro, marcaFantasmas(pM, otro, [f0], despues, [vuelta]) as string);
-  ok("con ese día entre las vivas no se extiende: sigue siendo día cambiado después del segundo cambio", !esRezagada(vuelta, pM3) && esRezagada(f0, pM3) && !esRezagada(tocada, pM3), pM3.extendedProperties.private.cfv);
+  const m2 = marcaFantasmas(pM, otro, [f0], despues) as string;
+  const pM2 = conMarca(otro, m2);
+  ok("segundo cambio: la rezagada se extiende por su id (la que Google tocó sigue siendo rezagada)", esRezagada(tocada, pM2) && esRezagada(f0, pM2) && /(^|,)i\./.test(m2), m2);
+  // Por id y no por valor: un día que alguien volvió al lugar de antes (sin lugar) sigue siendo día
+  // cambiado, lo haya tocado antes o justo después del segundo cambio (dentro del hasta nuevo).
+  const vuelta = dia("09", { summary: p0.summary, updated: iso(ahora + 300_000) });
+  const recien = dia("23", { summary: otro.summary, updated: iso(despues + 5000) });
+  ok("un día vuelto al valor de antes después del primer cambio es día cambiado", !esRezagada(vuelta, pM) && unaSerie([pM, vuelta]).vivas.length === 1);
+  ok(
+    "…y sigue siéndolo después del segundo (antes o justo después de él): no se pisa",
+    !esRezagada(vuelta, pM2) && !esRezagada({ ...vuelta, summary: otro.summary }, pM2) && !esRezagada(recien, pM2) && unaSerie([pM2, vuelta, recien, tocada]).vivas.length === 2,
+    m2,
+  );
+  ok("un día movido de hora (nunca rezagada) no impide extender a las rezagadas", esRezagada(tocada, conMarca(otro, marcaFantasmas(pM, otro, [f0, dia("16", { start: h("2026-12-16T15:00:00-03:00"), end: h("2026-12-16T16:00:00-03:00"), updated: iso(ahora + 300_000) })], despues) as string)));
+  ok("la extensión por id también sigue a un tercer cambio", (() => {
+    const tercero = { ...pM2, description: "Llevar gorro" };
+    const pM3 = conMarca(tercero, marcaFantasmas(pM2, tercero, [tocada], despues + 600_000) as string);
+    return esRezagada({ ...tocada, updated: iso(despues + 605_000) }, pM3);
+  })());
   // Excluir: una rezagada que Google no deja poner al día.
-  const otra = { ...f0, id: `${idNat}_20261216T120000Z`, originalStartTime: h("2026-12-16T09:00:00-03:00"), start: h("2026-12-16T09:00:00-03:00"), end: h("2026-12-16T10:00:00-03:00") };
+  const otra = dia("16");
   const ex = excluirDeMarca(pM, [f0.id]);
   const pX = conMarca(nuevo, ex);
   ok(
@@ -577,15 +594,18 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
   const m4 = marcaFantasmas(pX, { ...pX, summary: "Otra" }, [f0, otra], ahora + 1000);
   ok("un cambio posterior conserva la exclusión", typeof m4 === "string" && m4.includes(",x.") && !esRezagada(f0, conMarca({ ...pX, summary: "Otra" }, m4)), m4);
   ok("…y cuando la marca ya no explica a nadie se borra entera", marcaFantasmas(pX, { ...pX, summary: "Otra" }, [], ahora) === null);
-  ok(
-    "con muchas excluidas la marca no pasa de 24 entradas ni de 1024 caracteres",
-    (() => {
-      let p = pX;
-      for (let i = 0; i < 30; i++) p = conMarca(p, excluirDeMarca(p, [`${idNat}_x${i}`]) ?? p.extendedProperties.private.cfv);
-      const m = p.extendedProperties.private.cfv ?? "";
-      return m.split(",").length <= 24 && m.length < 1024 && m.split(",").filter((x) => x.startsWith("x.")).length === 8 && /^l\./.test(m);
-    })(),
-  );
+  // Muchas excluidas: nunca se descarta una para hacer espacio (volvería a intentarse y a avisar en cada
+  // sincronización); si no caben, se borra la marca entera (todas pasan a días cambiados, como en Google).
+  let p = pX;
+  for (let i = 0; i < 40; i++) p = conMarca(p, excluirDeMarca(p, [`${idNat}_x${i}`]) as string);
+  const m40 = p.extendedProperties.private.cfv ?? "";
+  ok("40 excluidas: están todas, con la entrada que explica a las demás, en menos de 1.000 caracteres", m40.split(",").filter((x) => x.startsWith("x.")).length === 41 && /^l\./.test(m40) && m40.length <= 1000 && esRezagada(otra, p) && !esRezagada(f0, p), m40.length);
+  let sinLugar: string | null | undefined = m40;
+  for (let i = 40; i < 100 && typeof sinLugar === "string"; i++) {
+    sinLugar = excluirDeMarca(p, [`${idNat}_x${i}`]);
+    if (typeof sinLugar === "string") p = conMarca(p, sinLugar);
+  }
+  ok("…y cuando ya no caben, null: la marca se borra (otra deja de ser rezagada)", sinLugar === null && !esRezagada(otra, conMarca(nuevo, null)));
 });
 
 for (const r of resultados) console.log(r);

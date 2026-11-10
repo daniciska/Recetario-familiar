@@ -1,12 +1,18 @@
 // Fantasmas rezagadas (marca cfv del principal) y el plazo de una vuelta: los 5 detalles de la revisión
-// de 5734981, de punta a punta (motor real + transporte real + simulador + Blobs en memoria, ver h.ts).
+// de 5734981 y lo que encontraron los verificadores de su primer arreglo, de punta a punta (motor real +
+// transporte real + simulador + Blobs en memoria, ver h.ts).
 //   1. Si Google rechaza el principal de una serie, la segunda vuelta de la misma sincronización la relee
 //      aunque haya rezagadas de otra serie o eventos nuevos que suban (reserva RESERVA_RELEER).
 //   2. Un cambio posterior de la serie no deja a las rezagadas como días cambiados cuando Google les pasa
-//      el título (y les sube `updated`); sin pisar un día que alguien cambió de verdad.
-//   3. Las fantasmas en línea no se comen el plazo de lo demás de la vuelta (MARGEN_EN_LINEA).
-//   4. Una rezagada que falla siempre (500) no bloquea a las demás ni deja la sincronización pendiente.
-//   5. Una rezagada que Google rechaza (400) se avisa una vez, no se reintenta y queda como día cambiado.
+//      el título (y les sube `updated`): se extienden por id, sin pisar un día que alguien cambió de verdad
+//      (ni uno que la web deja con el valor de antes justo después: (d)).
+//   3. Las fantasmas en línea, como en 5734981 (si caben). El etag de la serie no cuenta las fantasmas, así
+//      que se prevé aunque se pongan al día más tarde: borrar en la pared justo después de un cambio no
+//      hace volver el evento, con 1 a 4 fantasmas y latencia de hasta 900 ms (a).
+//   4. Una rezagada que falla siempre (500) no bloquea a las demás ni deja la sincronización pendiente, y
+//      un error pasajero no las deja olvidadas: la sincronización siguiente no toma el atajo (c).
+//   5. Una rezagada que Google rechaza (400) se avisa una vez, no se reintenta y queda como día cambiado,
+//      también con más de 8 en una serie (b) y con el plazo justo (e).
 //
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/rezagadas.test.ts
 import * as h from "../h.ts";
@@ -19,6 +25,7 @@ type Con = ReturnType<typeof h.conexionGoogle>;
 const avisosDe = async (fam: string, con: Con) => (await h.estado(fam, con))?.avisos ?? [];
 const invalido = () => respuestas.status(400, { error: { code: 400, message: "Invalid value", errors: [{ reason: "invalid", message: "Invalid value" }] } });
 const caido = () => respuestas.status(500, { error: { code: 500, message: "Backend Error", errors: [{ reason: "backendError", message: "Backend Error" }] } });
+const limite = () => respuestas.status(429, { error: { code: 429, message: "Rate Limit Exceeded", errors: [{ reason: "rateLimitExceeded", message: "Rate Limit Exceeded" }] } });
 /** Jueves desde el 19-nov-2026 (días de la serie «Teatro»). */
 const jueves = (i: number) => new Date(Date.parse("2026-11-19T12:00:00Z") + i * 7 * 86_400_000).toISOString().slice(0, 10);
 const excepciones = (cal: string, id: string) => h.vivos(cal).filter((e) => e.recurringEventId === gid(id));
@@ -79,7 +86,7 @@ function envejecer(cal: string, id: string, ms: number) {
       cfv
         .split(",")
         .map((x) => {
-          const m = /^([sdlh]\.[0-9a-f]{12}\.)([0-9a-z]+)$/.exec(x);
+          const m = /^([sdlhi]\.[0-9a-f]{12}\.)([0-9a-z]+)$/.exec(x);
           return m ? m[1] + (parseInt(m[2], 36) - Math.round(ms / 1000)).toString(36) : x;
         })
         .join(",");
@@ -184,8 +191,8 @@ await caso("las rezagadas que Google toca al aplicar el segundo cambio siguen si
 
 await caso("…sin pisar un día que alguien volvió al valor de antes", async () => {
   // Igual, pero en el iPhone alguien deja un día (ya al día, «Sala v1») de nuevo en «Sala 1»: es un día
-  // cambiado de verdad. El segundo cambio vuelve a anotar la entrada de «Sala 1» de la marca; si la
-  // extendiera, ese día pasaría a parecer rezagada y se pisaría. No se extiende.
+  // cambiado de verdad. El segundo cambio vuelve a anotar la entrada de «Sala 1» de la marca con su hasta
+  // de antes y extiende sólo a las 3 rezagadas, por su id: ese día no pasa a parecer rezagada.
   const { cal, con, fam } = await teatro("t3", 4);
   const primero = excepciones(cal, "t3").sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
   await dejarRezagadas(cal, con, fam, "t3", { lugar: "Sala v1" }, [primero.id]);
@@ -208,12 +215,103 @@ await caso("…sin pisar un día que alguien volvió al valor de antes", async (
   );
 });
 
+await caso("(d) un día que la web deja con el valor de antes justo después del segundo cambio no se pisa", async () => {
+  // El primer arreglo extendía por valor la entrada «Sala 1» de la marca al segundo cambio: un jueves que
+  // alguien dejaba a propósito en «Sala 1» en Google web dentro de esos 2 min pasaba por rezagada, la pared
+  // no lo mostraba y la programada lo «ponía al día» a «Sala v1» (se perdía el cambio de la web).
+  const { cal, con, fam } = await teatro("t7", 3);
+  await dejarRezagadas(cal, con, fam, "t7", { lugar: "Sala v1" });
+  envejecer(cal, "t7", 300_000);
+  await dejarRezagadas(cal, con, fam, "t7", { titulo: "Teatro musical" });
+  const dia = jueves(6);
+  sim.actor("web", cal).editarDia(gid("t7"), dia, { location: "Sala 1" });
+  const suyo = () => excepciones(cal, "t7").find((e) => String(e.originalStartTime?.dateTime ?? "").startsWith(dia));
+  ok("hay 3 rezagadas y el día de la web", excepciones(cal, "t7").filter((e) => e.location === "Sala 1").length === 4 && !!suyo());
+  await h.sync(fam, con, 24_000);
+  await h.sync(fam, con, 24_000);
+  const dias = await diasEnPared(fam);
+  ok(
+    "el día de la web sigue en «Sala 1» (Google y pared, como día cambiado); las 3 rezagadas al día; todo calza",
+    suyo()?.location === "Sala 1" &&
+      dias.length === 1 &&
+      dias[0].lugar === "Sala 1" &&
+      excepciones(cal, "t7").filter((e) => e.id !== suyo()?.id).every((e) => e.location === "Sala v1" && e.summary === "🦄 Teatro musical") &&
+      !(await h.comparar(fam, con)).length,
+    { suyo: suyo()?.location, dias: dias.map(h.resumen), exc: excepciones(cal, "t7").map((e) => [e.summary, e.location]) },
+  );
+});
+
+await caso("(d) un día movido de hora que la web toca no impide que las rezagadas sigan siéndolo", async () => {
+  // El primer arreglo no extendía la marca si algún día cambiado tenía el valor de antes y se había tocado
+  // después del hasta viejo, aunque ese día (movido de hora) nunca pudiera ser rezagada: las 4 quedaban
+  // como días cambiados «Teatro v2 · Sala 1» para siempre. Con la extensión por id no importa.
+  sim.interruptores.propagarTituloAExcepciones = true;
+  try {
+    const { cal, con, fam } = await teatro("t8", 4);
+    const web = sim.actor("web", cal);
+    const d6 = jueves(6);
+    web.moverDia(gid("t8"), d6, { dateTime: `${d6}T15:00:00-03:00`, timeZone: "America/Santiago" }, { dateTime: `${d6}T16:00:00-03:00`, timeZone: "America/Santiago" });
+    await h.sync(fam, con, 24_000);
+    const movido = () => excepciones(cal, "t8").find((e) => e.start?.dateTime?.includes("T15:00"));
+    const enSala1 = () => excepciones(cal, "t8").filter((e) => e.location === "Sala 1" && e.id !== movido()?.id).length;
+    const fantasmas = new Set(excepciones(cal, "t8").filter((e) => e.id !== movido()?.id).map((e) => e.id));
+    await h.cambiarEvento(fam, "t8", { lugar: "Sala v1" });
+    await sinFantasmas(fam, con, "t8", [movido()!.id]);
+    ok("4 rezagadas con «Sala 1» y el día movido como día cambiado", enSala1() === 4 && fantasmas.size === 4 && (await diasEnPared(fam)).length === 1, (await diasEnPared(fam)).map(h.resumen));
+    envejecer(cal, "t8", 300_000);
+    web.editar(movido()!.id, { description: "Traer entrada" });
+    await sinFantasmas(fam, con, "t8", [movido()!.id]);
+    await h.cambiarEvento(fam, "t8", { titulo: "Teatro v2" });
+    await sinFantasmas(fam, con, "t8", [movido()!.id]);
+    ok("después del segundo cambio la pared sólo muestra el día movido (las 4 siguen rezagadas)", (await diasEnPared(fam)).length === 1 && enSala1() === 4, (await diasEnPared(fam)).map(h.resumen));
+    await h.sync(fam, con, 24_000);
+    ok("…y la programada las pone al día (Sala v1); el día movido conserva su nota; todo calza", enSala1() === 0 && (await diasEnPared(fam)).length === 1 && sim.evento(cal, movido()!.id).description === "Traer entrada" && !(await h.comparar(fam, con)).length, {
+      n: enSala1(),
+      dias: (await diasEnPared(fam)).map(h.resumen),
+      dif: await h.comparar(fam, con),
+    });
+  } finally {
+    sim.interruptores.propagarTituloAExcepciones = false;
+  }
+});
+
 // =====================================================================================
-seccion("3. Las fantasmas en línea no se comen el plazo de lo demás");
+seccion("3. Fantasmas en línea como en 5734981, y el etag previsto aunque no quepan");
+
+await caso("(a) cambiar la serie y borrarla enseguida en la pared, con 1 a 4 fantasmas: se borra (no vuelve)", async () => {
+  // El primer arreglo exigía 2,5 s de margen para mandar las fantasmas en línea, lo que casi nunca cabía en
+  // la sincronización normal: la serie quedaba con etag null y, si la familia la borraba antes de que otra
+  // sincronización la releyera, el motor lo veía como «cambió en los dos lados», ganaba Google y el evento
+  // volvía. Con 4 fantasmas (nunca en línea) pasaba también en 5734981. Ahora el etag no cuenta las
+  // fantasmas: se prevé apenas se escribe el principal.
+  for (const [k, lat] of [
+    [1, 900],
+    [3, 400],
+    [4, 0],
+    [4, 900],
+  ] as const) {
+    const id = `b${k}x${lat}`;
+    const { cal, con, fam } = await teatro(id, k);
+    await h.cambiarEvento(fam, id, { titulo: "Teatro musical" });
+    const r1 = await conLatencia(lat, () => h.sync(fam, con, 6500));
+    const rec = Object.entries((await h.estado(fam, con))?.recursos ?? {}).find(([u]) => u.startsWith(id))?.[1];
+    const enPared = async () => (await h.leerEventos(fam)).filter((e) => e.id === id || (e.externo?.uid ?? "").startsWith(id));
+    await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== id && !(e.externo?.uid ?? "").startsWith(id)));
+    const r2 = await conLatencia(lat, () => h.sync(fam, con, 6500));
+    ok(
+      `${k} fantasma(s), latencia ${lat} ms: el etag quedó previsto y el borrado llega a Google en la sincronización siguiente`,
+      r1.ok && !!rec?.etag && r2.ok && !(await enPared()).length && sim.evento(cal, gid(id))?.status === "cancelled",
+      { r1, etag: rec?.etag ?? null, r2, pared: (await enPared()).map(h.resumen), google: sim.evento(cal, gid(id))?.status },
+    );
+    await h.sync(fam, con, 24_000);
+    ok(`${k} fantasma(s), latencia ${lat} ms: …y sigue así tras la programada`, !(await enPared()).length);
+  }
+});
 
 await caso("3 series con 2 fantasmas cada una, un evento borrado, otro editado y 2 nuevos, latencia 400 ms", async () => {
-  // Antes, con ≤3 fantasmas por serie se ponían al día en la misma pasada que el principal si alcanzaban
-  // justo, y «Dentista» y «Pediatra» (nuevos) quedaban para la sincronización siguiente.
+  // Las fantasmas en línea gastan plazo y lo nuevo de la vuelta («Dentista», «Pediatra») puede quedar para
+  // la sincronización siguiente, como en 5734981 (el margen que se probó para evitarlo traía (a)). Nada se
+  // pierde ni se ve distinto: la pared sin días cambiados y, a más tardar en la siguiente, todo en Google.
   const cal = h.nuevoCalendario();
   const con = h.conexionGoogle(cal);
   const series = ["s1", "s2", "s3"];
@@ -231,20 +329,23 @@ await caso("3 series con 2 fantasmas cada una, un evento borrado, otro editado y
   await h.cambiarEvento(fam, "e1", { titulo: "Editado" });
   const r = await conLatencia(400, () => h.sync(fam, con, 6500));
   const sube = (t: string) => h.vivos(cal).some((e) => (e.summary ?? "").endsWith(t));
+  const est = await h.estado(fam, con);
   ok(
-    "en la sincronización normal suben los 3 títulos, el borrado, el editado, «Dentista» y «Pediatra»; la pared sin días cambiados y como Google",
+    "en la sincronización normal suben los 3 títulos, el borrado y el editado; las 3 series con etag previsto; la pared sin días cambiados",
     r.ok &&
       series.every((id, k) => sim.evento(cal, gid(id))?.summary === `🦄 Serie ${k + 1} musical`) &&
       !sube("Borrar") &&
       sube("Editado") &&
-      sube("Dentista") &&
-      sube("Pediatra") &&
-      !(await diasEnPared(fam)).length &&
-      !(await h.comparar(fam, con)).length,
-    { r, porTipo: sim.contadores.porTipo, dif: await h.comparar(fam, con) },
+      series.every((id) => !!Object.entries(est?.recursos ?? {}).find(([u]) => u.startsWith(id))?.[1]?.etag) &&
+      !(await diasEnPared(fam)).length,
+    { r, porTipo: sim.contadores.porTipo, dias: (await diasEnPared(fam)).map(h.resumen) },
   );
-  await h.sync(fam, con, 24_000);
-  ok("…y la programada pone al día las 6 fantasmas", series.every((id, k) => excepciones(cal, id).every((e) => e.summary === `🦄 Serie ${k + 1} musical`)) && !(await h.comparar(fam, con)).length);
+  await h.sync(fam, con, 6500);
+  ok(
+    "…y a más tardar la siguiente sube «Dentista» y «Pediatra» y pone al día las 6 fantasmas; todo calza",
+    sube("Dentista") && sube("Pediatra") && series.every((id, k) => excepciones(cal, id).every((e) => e.summary === `🦄 Serie ${k + 1} musical`)) && !(await h.comparar(fam, con)).length,
+    await h.comparar(fam, con),
+  );
 });
 
 // =====================================================================================
@@ -287,6 +388,38 @@ await caso("4. Google responde 500 siempre al PATCH de una rezagada", async () =
   ok("mientras tanto la pared no la muestra como día cambiado", !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length);
   await otraNormal(fam, con, 3);
   ok("sin la falla, la próxima que lista el calendario la termina", viejas().length === 0 && !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length, viejas().length);
+});
+
+await caso("(c) un error pasajero en una vuelta que no escribe nada más no deja las rezagadas olvidadas", async () => {
+  // La web cambia otro evento (así la normal lista) y Google responde 429 una vez, o 500 a las 3 rezagadas.
+  // Antes nada más se escribía, el ctag del listado calzaba y las sincronizaciones siguientes tomaban el
+  // atajo: las rezagadas seguían con el título viejo (en Google y en los iPhone) hasta que cambiara otra cosa.
+  // Ahora listar deja el ctag sin calzar mientras queden rezagadas; un límite de uso deja la vuelta pendiente.
+  for (const [modo, veces] of [
+    ["429", 1],
+    ["500", 3],
+  ] as const) {
+    const id = `c${modo}`;
+    const otro = `o${modo}`;
+    const x = await teatro(id, 3, [ev(otro, { titulo: "Otro", fecha: "2026-11-25" })]);
+    await dejarRezagadas(x.cal, x.con, x.fam, id, { titulo: "Teatro de títeres" });
+    const viejas = () => excepciones(x.cal, id).filter((e) => e.summary === "🦄 Teatro").length;
+    ok(`${modo}: 3 rezagadas`, viejas() === 3, viejas());
+    sim.actor("web", x.cal).editar(gid(otro), { location: "Casa" });
+    const inj = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId !== gid(id), modo === "429" ? limite() : caido(), veces);
+    await h.sync(x.fam, x.con, 6500).finally(() => inj.quitar());
+    const hist = [];
+    for (let i = 0; i < 2; i++) {
+      sim.reiniciarContadores();
+      const r = await h.sync(x.fam, x.con, 6500);
+      hist.push({ ok: r.ok, pendiente: (await h.estado(x.fam, x.con))?.pendiente, listados: sim.contadores.porTipo["events.list"] ?? 0, viejas: viejas() });
+    }
+    ok(
+      `${modo} ×${veces}: sin otro cambio, a más tardar la sincronización siguiente las pone al día; sin quedar pendiente ni dar más vueltas; todo calza`,
+      inj.disparos === veces && hist[0].viejas === 0 && hist.every((y) => y.ok && y.pendiente === false && y.listados === 1) && !(await h.comparar(x.fam, x.con)).length,
+      { disparos: inj.disparos, hist, dif: await h.comparar(x.fam, x.con) },
+    );
+  }
 });
 
 await caso("5. Google rechaza (400) el PATCH de una rezagada", async () => {
@@ -335,6 +468,66 @@ await caso("5b. Google rechaza (400) a una fantasma en línea", async () => {
     h1,
     dias: (await diasEnPared(fam)).map(h.resumen),
   });
+});
+
+await caso("(b) 10 rezagadas rechazadas en una serie: un aviso, sin reintentos ni bucle", async () => {
+  // El primer arreglo guardaba a lo más 8 excluidas: las que sobraban volvían a intentarse, el PATCH de
+  // exclusión sacaba a otras y así en cada sincronización (pendiente para siempre, 3 listados, avisos de
+  // nuevo y la pared distinta de Google). Ahora las excluidas no se descartan nunca.
+  const { cal, con, fam } = await teatro("t9", 10);
+  await dejarRezagadas(cal, con, fam, "t9", { titulo: "Teatro de títeres" });
+  const viejas = () => excepciones(cal, "t9").filter((e) => e.summary === "🦄 Teatro").length;
+  ok("10 rezagadas", viejas() === 10, viejas());
+  const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId !== gid("t9"), invalido(), 9999);
+  const h1 = [];
+  try {
+    for (let i = 0; i < 4; i++) h1.push({ ...(await otraNormal(fam, con, i)), rechazados: rechazo.disparos });
+  } finally {
+    rechazo.quitar();
+  }
+  const conAviso = h1.filter((x) => x.avisos.some((a) => /no aceptó el cambio del día/.test(a))).length;
+  const cfv = sim.evento(cal, gid("t9"))?.extendedProperties?.private?.cfv ?? "";
+  ok("cada PATCH rechazado una sola vez y el aviso en una sola sincronización", rechazo.disparos === 10 && h1[0].rechazados === 10 && conAviso === 1, { disparos: rechazo.disparos, conAviso, h1 });
+  ok(
+    "las 10 excluidas en la marca; los 10 días se ven como cambiados (como en Google); nada pendiente y 1 listado por sincronización después de la primera",
+    cfv.split(",").filter((x) => x.startsWith("x.")).length === 10 && (await diasEnPared(fam)).length === 10 && !(await h.comparar(fam, con)).length && h1.every((x) => x.ok && x.pendiente === false) && h1.slice(1).every((x) => x.listados === 1),
+    { cfv, dias: (await diasEnPared(fam)).length, h1 },
+  );
+});
+
+await caso("(e) con el plazo justo (2 series con 6 fantasmas, latencia 400 ms) el aviso sale una vez", async () => {
+  // La exclusión iba al final de pendientes() y con el plazo justo no alcanzaba: el aviso y el PATCH
+  // rechazado se repetían 2 o 3 sincronizaciones. Ahora se reserva su plazo antes de intentar cada rezagada.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const ids = ["e6a", "e6b"];
+  const fam = await h.familia(ids.map((id, k) => ev(id, { titulo: `Serie ${k}`, repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-06-28", lugar: "Sala", horaInicio: `1${k}:00`, horaFin: `1${k}:30` })));
+  await h.sync(fam, con, 24_000);
+  const web = sim.actor("web", cal);
+  for (const id of ids) for (let i = 0; i < 6; i++) web.editarDia(gid(id), jueves(i), {});
+  await h.sync(fam, con, 24_000);
+  const exc = (id: string) => excepciones(cal, id).sort((a, b) => String(a.originalStartTime?.dateTime).localeCompare(String(b.originalStartTime?.dateTime)));
+  const malas = new Set(ids.map((id) => exc(id)[0].id));
+  const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && malas.has(String(p.eventoId)), invalido(), 9999);
+  for (const [k, id] of ids.entries()) await h.cambiarEvento(fam, id, { titulo: `Serie ${k} nueva` });
+  const hist = [];
+  try {
+    for (let i = 0; i < 5; i++) {
+      if (i) await h.guardarEventos(fam, (l) => [...l, ev(`e6s${i}`, { titulo: `Suelto ${i}`, fecha: `2026-12-0${i + 1}` })]);
+      const antes = rechazo.disparos;
+      const r = await conLatencia(400, () => h.sync(fam, con, i === 4 ? 24_000 : 6500));
+      const est = await h.estado(fam, con);
+      hist.push({ ok: r.ok, pendiente: est?.pendiente, rechazados: rechazo.disparos - antes, avisos: (est?.avisos ?? []).filter((a) => /Invalid value/.test(a)).length });
+    }
+  } finally {
+    rechazo.quitar();
+  }
+  ok("los 2 días rechazados: cada uno se intenta una vez y el aviso sale en una sola sincronización", rechazo.disparos === 2 && hist.filter((x) => x.avisos).length === 1, hist);
+  ok(
+    "al final, una rezagada vieja por serie (la rechazada) como día cambiado; nada pendiente; todo calza",
+    ids.every((id, k) => exc(id).filter((e) => e.summary === `🦄 Serie ${k}`).length === 1) && (await diasEnPared(fam)).length === 2 && hist.slice(-2).every((x) => x.ok && x.pendiente === false) && !(await h.comparar(fam, con)).length,
+    { hist, dif: await h.comparar(fam, con) },
+  );
 });
 
 seccion("Al final");
