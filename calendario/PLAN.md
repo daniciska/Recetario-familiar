@@ -3,6 +3,8 @@
 Estado al 3 de noviembre de 2026. Hecho y publicado: calendario, menú con colación, recetas, lista de compras
 inteligente, quehaceres con estrellas y premios, cuentas regresivas (y repetición anual), PIN para la pared, datos
 compartidos entre equipos y calendario de iCloud en ambos sentidos.
+Hecho en código el 10 de noviembre (falta publicar y que la familia lo pruebe): menú por ítems y recetas dictadas con
+Gemini (Fase 4).
 Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `calendario-familiar-pared`).
 
 ## Decisiones de la familia
@@ -15,8 +17,8 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 | Base de datos compartida | **No Supabase** (la familia lo descartó). Se eligió Netlify Database, pero Netlify falló al crearla (error interno 500, dos veces) y la familia eligió **Netlify Blobs** (Functions + Blobs, en el mismo Netlify). Las fases de abajo dicen "Supabase" en algunos nombres: se traducen a Netlify (funciones programadas cada 5 min, Blobs para fotos y audios, variables de entorno secretas). |
 | Diseño | Pastel, parecido a Skylight (hecho): fondo claro lavanda, tarjetas blancas, eventos con relleno pastel del color de cada persona, letra redondeada (Fredoka) en títulos y reloj. |
 | Recetas | **Separadas** del "Recetario familiar" de la mamá (`/recetas`). El calendario tiene su propio recetario. |
-| Menú por ítems (10 nov 2026) | «En colación siempre ponemos 3 items, por ej 2 frutas y 1 carbo… En almuerzo, 1 proteína, 1 carbo, verduras, y postre. En cena, 1 proteína, carbo, verduras. En desayuno … unos 4 items.» Hecho (`ESPACIOS_COMIDA` en `lib/comidas.ts`). **Once**: no dijeron nada, quedó con 1 espacio libre como antes (preguntar). Porciones por comida, no por ítem. Los equipos con la versión anterior ven sólo el primer espacio; para que no borren los demás al guardar, el servidor tiene que reponerlos (`conservarItemsPlan`; **falta conectarlo** en `api-datos.mts` junto con `esquema: 2` en `repositorioNube.ts`, y no publicar el menú por ítems sin eso; se quita en enero de 2027). |
-| IA | **Gemini, plan gratis** (Google AI Studio). Ojo: en el plan gratis Google puede usar lo que se le manda para mejorar sus productos; si después se quiere más privacidad, se cambia a pago por uso sin tocar el código. |
+| Menú (10 nov 2026) | **Cada comida por ítems**: desayuno 4 espacios libres, colación 3 (p. ej. 2 frutas y 1 carbohidrato), almuerzo proteína / carbohidrato / verduras / postre, cena proteína / carbohidrato / verduras, once 1. («En colación siempre ponemos 3 items, por ej 2 frutas y 1 carbo… En almuerzo, 1 proteína, 1 carbo, verduras, y postre. En cena, 1 proteína, carbo, verduras. En desayuno … unos 4 items.») Hecho en código (`ESPACIOS_COMIDA` en `lib/comidas.ts`). **Once**: no dijeron nada, quedó con 1 espacio libre como antes (preguntar). Porciones por comida, no por ítem. Los equipos con la versión anterior ven sólo el primer espacio; para que no borren los demás al guardar, el servidor los repone (`conservarItemsPlan` en `api-datos.mts`, con `esquema: 2` en `repositorioNube.ts`): se publica junto con el menú por ítems, nunca después, y se quita en enero de 2027. |
+| IA | **Gemini, plan gratis** (Google AI Studio). Ojo: en el plan gratis Google puede usar lo que se le manda para mejorar sus productos y revisores humanos pueden leerlo; si después se quiere más privacidad, se cambia a pago por uso sin tocar el código (README → Dictar receta (Gemini) → Privacidad). |
 
 ## Lo que tiene que preparar la familia (sin pegar contraseñas en el chat)
 
@@ -30,7 +32,9 @@ Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `c
 3. **Dónde van las claves**: siempre en los secretos del proveedor (en Netlify: Project configuration → Environment
    variables, marcadas como secretas), nunca en el repositorio ni en el chat. Después de cambiarlas hay que volver a
    publicar para que las funciones las tomen.
-4. **Clave de Gemini**: en https://aistudio.google.com → Get API key. Se guarda igual, como `GEMINI_API_KEY`.
+4. **Clave de Gemini** (hecho: la familia ya la puso): en https://aistudio.google.com → Get API key. Se guarda igual, como
+   `GEMINI_API_KEY`. Después de publicar, comprobar que `/api/salud` diga `"gemini":"ok"` y *Familia → 🎙️ Recetas por
+   audio (Gemini) → Probar conexión*. Ver README → Dictar receta (Gemini).
 
 ### Pasos para Google Calendar
 
@@ -173,20 +177,55 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
 - Cada correo nuevo (texto, PDF, fotos) va a Gemini con un esquema JSON: ¿eventos? ¿receta? ¿ítems de compras?
   Crea lo que corresponda, marca el correo como leído y responde con un resumen ("Agregué 3 eventos…") con opción de
   deshacer desde la app. Los nombres de los integrantes en el asunto asignan las personas.
+- Una nota de voz reenviada al correo (una receta dictada) pasa por lo mismo que «🎙️ Dictar receta» (Fase 4,
+  `servidor/dictados.ts`): queda en Recetas → 🎙️ Dictadas para revisar.
 
-### Fase 4 · Recetas por audio con Gemini
-- En Recetas → "🎙️ Dictar receta": se graba en el iPhone/iPad (MediaRecorder, m4a/webm) o se reenvía una nota de voz
-  al correo del panel.
-- Edge Function `receta-audio`: sube el audio a Storage y lo manda a Gemini (entiende audio directo) con un esquema
-  JSON: nombre, porciones, tiempo, ingredientes `{cantidad, unidad, ingrediente, categoría, como_lo_dijo,
-  estimado: bool}`, pasos, dudas. Las cantidades vagas ("un puñado", "lo que pida") se convierten en cantidades
-  medibles marcadas como **estimadas** (se ven con "≈" y se pueden corregir). El escalado por porciones lo sigue
-  haciendo la app (exacto, sin IA).
-- Queda como borrador para revisar antes de guardarla.
+### Fase 4 · Recetas por audio con Gemini — HECHA en código; falta que la familia la pruebe (ver README → Dictar receta (Gemini))
+- En Recetas → «🎙️ Dictar receta»: se graba en el panel (MediaRecorder: WebM/Opus o MP4/AAC según el equipo, hasta
+  15 min) o se sube un audio (nota de voz de WhatsApp, Notas de Voz, m4a, mp3…). El audio se guarda primero en el
+  equipo (IndexedDB) y después en Netlify Blobs (≤ 4 MB, hasta 20 sin revisar por familia), con una subida
+  idempotente que no duplica.
+- En vez de la Edge Function `receta-audio` del plan original: una **Background Function** de Netlify
+  (`dictados-proceso-background.mts`, hasta 15 min) le manda el audio a Gemini por REST con el esquema JSON (nombre,
+  porciones, tiempo, ingredientes con `comoLoDijo`, `estimado` y nota, pasos, dudas). Modelos en `GEMINI_MODELOS`
+  (por omisión `gemini-3.8-flash` y `gemini-3.5-flash-lite`), con reintentos ante 429/5xx, cambio de modelo si se
+  acaba la cuota del día y espera hasta la medianoche del Pacífico si se acaban todos. Un error de Gemini no borra el
+  audio: espera en la nube y la app lo vuelve a pedir sola cuando corresponde.
+- Las cantidades vagas se convierten en cantidades medibles marcadas como **estimadas** («≈» en la receta y en la vista
+  previa de la lista de compras; se corrigen con un toque). El escalado por porciones lo sigue haciendo la app
+  (exacto, sin IA). Queda como borrador para revisar (en cualquier equipo de la familia) antes de guardarla; la
+  transcripción y el audio quedan en Blobs para escucharlos y leerlos después (no van en el respaldo).
+- Protección de los equipos con la versión anterior (`esquema: 2`, `servidor/conservar.ts`): se publica junto con el
+  botón o antes, nunca después.
+- Probado con un simulador de la API de Gemini (`pruebas/recetas/mock-gemini.mts`), pruebas del servidor, la corrida y
+  el cliente (`bash pruebas/correr.sh recetas`), y de punta a punta en Chrome con `netlify dev` (tablet, iPhone y un
+  equipo sin nube; `pruebas/recetas/navegador.e2e.mjs`). Nunca con la API real.
+- **Falta:**
+  1. Publicar (con el permiso de la familia) y que **la familia lo pruebe** en sus iPhone/iPad y en la pared con PIN:
+     permiso del micrófono (en la app de la pantalla de inicio lo pide cada vez), el selector de archivos, escuchar
+     audios Ogg/WebM en iOS, que el nivel y el aviso de silencio respondan con una voz real, y la grabación de 13–15
+     minutos (aviso «quedan 2 minutos» y corte solo).
+  2. Medir con la clave real (unos 3 a 6 dictados): que Gemini acepte tal cual `audio/m4a` (Safari), `audio/ogg`
+     (WhatsApp) y `audio/webm` (hay respaldo con el tipo alterno), qué forma de salida estructurada prefiere (hay
+     respaldo), la latencia, la calidad de las cantidades «≈» en español de Chile y que la función en segundo plano
+     se dispare en producción (en `netlify dev` funciona; si el disparo falla, la app lo vuelve a pedir a los 30 s).
+  3. **Reenviar una nota de voz al correo del panel** depende de la **Fase 3** (correo dedicado): la nota adjunta
+     pasaría por lo mismo que «Dictar receta» (`servidor/dictados.ts`).
+  4. Quitar en enero de 2027 la protección de los equipos viejos (`conservarCamposNuevos` y `conservarItemsPlan` en
+     `api-datos.mts`).
+- **Pendientes técnicos** (no bloquean):
+  - Los cupos del plan gratis no son públicos (≈ 20 pedidos al día con 3.8 Flash, según terceros): un día con muchos
+    reintentos los agota y se sigue al otro día.
+  - Los modelos de Gemini cambian rápido: revisar `GEMINI_MODELOS` cada pocos meses (si todos dan 404, el dictado queda
+    con error «interno»).
+  - Los audios se acumulan en Blobs (≈ 0,25–0,5 MB por minuto) sin limpieza automática; un equipo viejo que borra una
+    receta dictada deja su audio huérfano.
+  - Si iOS cierra la app a mitad de una grabación, lo grabado se pierde (lo ya terminado queda en IndexedDB).
 
 ### Formato de las recetas y cómo compartirlas
 - Se guardan estructuradas (como hoy en `Receta`), más: audio original, transcripción, `como_lo_dijo` por ingrediente
-  y marca de estimado.
+  y marca de estimado. (Hecho con la Fase 4: `comoLoDijo`, `estimado`, `nota`, `dudas` y `dictado` en la receta; el
+  audio y la transcripción en Blobs.)
 - **Compartir**: enlace público de solo lectura por receta (página con JSON-LD **schema.org/Recipe**, así apps de
   Apple como Mela, Paprika o Crouton la importan desde el enlace), archivo `.json` (schema.org/Recipe), PDF/imprimir,
   e importar con un toque si otra familia usa la app.

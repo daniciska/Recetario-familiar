@@ -8,12 +8,12 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 
 | Pestaña | Qué hace |
 |---|---|
-| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos de uno o **varios días** (vacaciones, viajes), con lugar, repetición diaria / semanal / mensual / anual (cumpleaños) **cada N** (p. ej. “cada 2 semanas”) y, en la semanal, **varios días** (lu y mi), fecha de término opcional, y borrar “sólo este día”. **Conectado al Calendario de los iPhone** (Google Calendar en ambos sentidos; también sirve iCloud: ver más abajo). **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y la comida al pie de cada columna. |
-| 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena. **Cada comida tiene espacios** (como los pidió la familia): desayuno 4 libres, colación 3 libres (p. ej. 2 frutas y 1 carbohidrato), almuerzo *proteína, carbohidrato, verduras y postre*, cena *proteína, carbohidrato y verduras*, once 1 (se cambian en `ESPACIOS_COMIDA`, `lib/comidas.ts`). Cada espacio lleva una receta o un texto libre, con atajos (arroz, ensalada, fruta…); las porciones son por comida. Un plato que lo trae todo (“Cazuela”) va en el primero y los demás pueden quedar vacíos; “Comemos fuera” o “Sin colación” son para la comida entera. “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de las recetas de todos los espacios de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
-| 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. |
+| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos de uno o **varios días** (vacaciones, viajes), con lugar, repetición diaria / semanal / mensual / anual (cumpleaños) **cada N** (p. ej. “cada 2 semanas”) y, en la semanal, **varios días** (lu y mi), fecha de término opcional, y borrar “sólo este día”. **Conectado al Calendario de los iPhone** (Google Calendar en ambos sentidos; también sirve iCloud: ver más abajo). **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y, al pie de cada columna, el almuerzo y la cena con todos sus ítems. |
+| 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena. **Cada comida tiene espacios** (como los pidió la familia): desayuno 4 libres, colación 3 libres (p. ej. 2 frutas y 1 carbohidrato), almuerzo *proteína, carbohidrato, verduras y postre*, cena *proteína, carbohidrato y verduras*, once 1 (se cambian en `ESPACIOS_COMIDA`, `lib/comidas.ts`). Cada espacio lleva una receta o un texto libre, con atajos (arroz, ensalada, fruta…); las porciones son por comida. Un plato que lo trae todo (“Cazuela”) va en el primero y los demás pueden quedar vacíos; “Comemos fuera” o “Sin colación” son para la comida entera. “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de las recetas de todos los espacios de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría (la vista previa marca con «≈» lo que suma cantidades estimadas de recetas dictadas). |
+| 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. **🎙️ Dictar receta**: se cuenta la receta en voz alta (o se sube una nota de voz de WhatsApp) y Gemini la deja como borrador para revisar, con las cantidades «al ojo» marcadas ≈ y sus dudas (ver *Dictar receta (Gemini)*). |
 | 🛒 Compras | Agrupada por categoría (Verduras y frutas, Carnes y pescados, Lácteos y huevos…). Agregar a mano (“2 kg papas” entiende la cantidad). Marcar comprado, sacar comprados. Regenerar la lista de la semana reemplaza sólo lo que vino del menú y aún no se compra. |
 | ✅ Tareas | Quehaceres de hoy: en el tablet, una columna por persona. Pueden ser de una vez, de todos los días o de algunos días, con momento (mañana / tarde / noche). Cada uno puede dar **estrellas** ⭐ a quien lo hace (si es “Quien pueda”, se elige quién lo hizo); con las estrellas se **canjean premios** (🏆 Premios). |
-| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, **PIN para hacer cambios**, respaldo (descargar / cargar), volver a los datos de ejemplo y **📅 Calendario del iPhone** (conectar Google Calendar o iCloud; con Google, quién es el dueño del calendario y a quién se invita). |
+| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, **PIN para hacer cambios**, respaldo (descargar / cargar), volver a los datos de ejemplo, **🎙️ Recetas por audio (Gemini)** (*Probar conexión*) y **📅 Calendario del iPhone** (conectar Google Calendar o iCloud; con Google, quién es el dueño del calendario y a quién se invita). |
 
 Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al día y la semana nuevos), modo noche automático (por defecto 20:30–07:00, sin destello al recargar de noche), la pantalla se mantiene encendida (Wake Lock) y se recarga sola cada madrugada a las 03:30 para tomar versiones nuevas. La recarga sólo ocurre si hay internet, nadie tocó la pantalla en los últimos 2 minutos y no hay ninguna ventana abierta (una receta mientras se cocina, un formulario); si no, lo reintenta cada 5 minutos. La única excepción: una ventana que quedó abierta de madrugada sin que nadie la toque en una hora se da por olvidada y se cierra con la recarga.
 
@@ -21,7 +21,7 @@ Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al d
 
 **PIN:** con un PIN definido (Familia → PIN), la pantalla de la pared lo pide para crear o cambiar eventos, el menú y las recetas, administrar quehaceres y premios (también *Limpiar hechas*), canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo piden. Queda abierto 5 minutos; quitarlo o dejar de pedirlo exige ponerlo otra vez. El teléfono no lo pide (se puede cambiar por equipo). Con la familia en la nube el PIN es el mismo en todos los equipos. Si se olvida: en el teclado, *¿Olvidaste el PIN?* muestra un número; en otro equipo, *Familia → PIN → Destrabar otro equipo* con ese número da un código que lo quita. Un respaldo cargado no cambia el PIN. Es un candado para la casa, no seguridad.
 
-Lo que falta (correo dedicado, recetas por audio con Gemini, fotos en la pared) está en [`PLAN.md`](PLAN.md), junto con los pasos que tiene que hacer la familia para configurar Google Calendar.
+Lo que falta (correo dedicado, fotos en la pared) está en [`PLAN.md`](PLAN.md), junto con los pasos que tiene que hacer la familia para configurar Google Calendar.
 
 ## Correrlo
 
@@ -36,7 +36,7 @@ npm run build      # versión de producción en out/ (archivos estáticos)
 
 **Publicado en Netlify:** https://calendario-familiar-pared.netlify.app (proyecto `calendario-familiar-pared`, sitio aparte del recetario, oculto para buscadores).
 
-La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`); lo compartido entre equipos y el calendario conectado (Google o iCloud) usan Netlify Functions y Netlify Blobs (ver *Datos*, *Calendario de Google* y *Calendario de iCloud*).
+La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`); lo compartido entre equipos, el calendario conectado (Google o iCloud) y las recetas dictadas usan Netlify Functions y Netlify Blobs (ver *Datos*, *Calendario de Google*, *Calendario de iCloud* y *Dictar receta (Gemini)*).
 
 Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, rama `claude/recetario-familiar`, **Base directory** = `calendario` (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Desde ahí, cada push que toque `calendario/` se publica solo; los cambios del recetario no lo gatillan.
 
@@ -49,8 +49,9 @@ Para que cada cambio se publique solo: en Netlify, *Project configuration → Bu
 Cómo funciona:
 - **Netlify Blobs** guarda todo: cada colección (eventos, recetas, menú…) como un documento con número de versión, los equipos con acceso (sólo la huella de su clave), las invitaciones, las versiones (los equipos preguntan cada 20 s si hubo cambios) y las fotos de las recetas. Un cambio sólo se acepta si parte de la última versión (escritura condicional con ETag); si otro equipo guardó antes, la app vuelve a aplicar su cambio sobre lo más nuevo, así dos equipos que cambian a la vez no se pisan.
 - Se intentó con Netlify Database (Postgres), pero al publicar Netlify devolvió un error interno 500 al crear la base (dos veces, sin incidentes en su página de estado); la familia eligió seguir con Blobs. Pasar a Netlify Database más adelante sólo cambia `servidor/comun.ts` y `api-datos.mts`.
-- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/calendario`, `/api/salud`.
+- **Netlify Functions** (`netlify/functions/api-*.mts`, código común en `servidor/comun.ts`) son la API: `/api/familia`, `/api/invitar`, `/api/unirse`, `/api/cambios`, `/api/datos`, `/api/equipos`, `/api/fotos`, `/api/calendario`, `/api/dictados` (y `/api/dictados-proceso`, en segundo plano), `/api/salud` (si Blobs responde y si hay clave de Gemini, nunca su valor).
 - Sólo se puede crear la primera familia del sitio; para crear otra hay que definir la variable `CLAVE_CREACION` en Netlify y mandarla en la cabecera `x-clave-creacion`.
+- **Equipos con la versión anterior** (p. ej. un iPhone con la app abierta desde antes de publicar): su copia no conoce los campos nuevos de las recetas dictadas (dudas, enlace al audio, «≈», «Dijo», nota) ni los espacios 2.º en adelante de cada comida del menú, y al guardar los borraría. Los equipos al día mandan `esquema: 2` (`repositorioNube.ts`); a los que no lo mandan, `api-datos.mts` les repone lo que no ven (`servidor/conservar.ts` y `conservarItemsPlan` en `lib/comidas.ts`). Por eso esa protección se publica junto con el botón *Dictar* y el menú por ítems, nunca después; se quita en enero de 2027, cuando todos hayan recargado. *Cargar respaldo* (reemplazar todo) no pasa por ella, a propósito.
 
 Sin conectar a la nube, los datos viven en el `localStorage` del equipo y se mueven con *Descargar respaldo / Cargar respaldo*. Un respaldo dañado o incompleto se revisa antes de cargarlo y nunca deja la app caída. La app sólo habla con la interfaz `Repositorio` (`lib/datos/repositorio.ts`): `RepositorioLocal` o `RepositorioNube`, elegido en `lib/datos/index.ts`.
 
@@ -66,7 +67,7 @@ components/Nube.tsx           crear familia, invitar (QR), unirse, equipos
 components/CalendarioComun.tsx   lo común a los dos calendarios: estado, avisos, sincronizar, desconectar
 components/CalendarioGoogle.tsx  conectar Google Calendar: dueño, Probar, «Quiénes lo ven» e invitaciones
 components/CalendarioICloud.tsx  conectar el calendario de iCloud y ver cómo va
-netlify/functions/            API (Netlify Functions) y calendario-programado (cada 5 min)
+netlify/functions/            API (Netlify Functions), calendario-programado (cada 5 min) y dictados-proceso-background (Gemini, hasta 15 min)
 servidor/comun.ts             Blobs: colecciones con versión, acceso por equipo, invitaciones
 servidor/caldav.ts            cliente CalDAV (iCloud)
 servidor/ics.ts               .ics del iPhone ↔ eventos del panel
@@ -79,7 +80,16 @@ servidor/google/escritura.ts  .ics del motor → pedidos a la API (y lo que Goog
 servidor/google/transporte.ts Calendar API v3 con el mismo contrato que CalDAV
 servidor/google/compartir.ts  con quién se comparte «Familia» (ACL): invitar, permiso, quitar
 servidor/google/prueba.ts     autoprueba «Probar»
-pruebas/                      pruebas del servidor y simulador de Google (ver pruebas/README.md)
+servidor/dictados.ts          «Dictar receta»: API de los dictados y la corrida en segundo plano (Blobs: registro, audio, texto)
+servidor/gemini.ts            Gemini por REST: clave, modelos, tipo de audio, errores y reintentos
+servidor/receta-ia/           instrucción y esquema JSON para Gemini; normalizar-receta.ts pasa su respuesta a una Receta
+servidor/conservar.ts         repone lo que borraría un equipo con la versión anterior (se quita en enero de 2027)
+lib/dictados/                 lado de la app: grabadora, copia en IndexedDB, subida, reglas, textos y useDictados
+components/DictarReceta.tsx   grabar o subir un audio y seguir el avance hasta «✅ ¡Lista!»
+components/Dictados.tsx       aviso en Recetas y la lista «🎙️ Dictadas»
+components/Escuchar.tsx       escuchar el audio y «Ver lo que se dijo»
+components/GeminiAjustes.tsx  Familia → 🎙️ Recetas por audio (Gemini): «Probar conexión»
+pruebas/                      pruebas del servidor y simuladores de Google y de Gemini (ver pruebas/README.md)
 lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
 lib/comidas.ts                espacios de cada comida (ESPACIOS_COMIDA) y sus ítems
 lib/compras.ts                categorías, unidades, suma de ingredientes
@@ -171,6 +181,53 @@ En el panel, el ID es `c_familia@group.calendar.google.com`. `SIM_ROL=writer` lo
 **Cómo funciona:** CalDAV contra `caldav.icloud.com` con el Apple ID y la contraseña de app (`servidor/caldav.ts`). Para cada evento (serie) se guarda en Blobs su ETag y una huella de cómo quedó la última vez que los dos lados coincidieron; así se sabe qué lado cambió. Se escribe siempre con `If-Match` / `If-None-Match` (nunca se pisa un cambio a ciegas) y los eventos nuevos usan UID `<id>@calendario-familiar`, así un reintento no duplica. Una sola sincronización a la vez por familia.
 
 **Probar en local** sin tocar iCloud: un servidor CalDAV de prueba (p. ej. [Radicale](https://radicale.org)) y `ICLOUD_CALDAV_URL=http://127.0.0.1:5232/ ICLOUD_USUARIO=… ICLOUD_CLAVE_APP=… NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions`. `ICLOUD_CALDAV_URL` es sólo para pruebas.
+
+## Dictar receta (Gemini)
+
+**Qué hace:** en *📖 Recetas → 🎙️ Dictar receta* se cuenta una receta en voz alta, como se le explicaría a alguien en la cocina (cómo se llama, para cuántos alcanza, los ingredientes con sus cantidades aunque sean «al ojo», y los pasos), o se sube un audio que ya existe (nota de voz de WhatsApp, Notas de Voz, m4a, mp3…). Gemini (Google) la escucha y la deja como **borrador**, que alguien de la familia revisa antes de guardarla:
+- las cantidades vagas («un puñado», «lo que pida») pasan a cantidades medibles marcadas **≈ estimada**, que se corrigen con un toque (y se ven con «≈» en la receta y en la vista previa de la lista de compras);
+- cada ingrediente guarda cómo se dijo («Dijo: «un chorrito»»), y lo que Gemini no entendió queda en **❓ Dudas de Gemini**;
+- el escalado por porciones lo sigue haciendo la app (exacto, sin IA);
+- una receta dictada se puede volver a escuchar (▶️) y leer (*📝 Ver lo que se dijo*).
+
+**Cómo se usa:**
+1. El equipo tiene que estar en la nube (*Familia → ☁️ Compartir entre equipos*). En la pared con PIN, *Dictar* pide el PIN.
+2. **⏺ Empezar a grabar** (el iPhone pide permiso para el micrófono; en la app de la pantalla de inicio lo pide cada vez que se abre) → *⏸ Pausa / ▶️ Seguir* → **⏹ Terminar**. Máximo 15 minutos: avisa cuando quedan 2 y si no se escucha nada; si entra una llamada o se sale de la app, se pausa y lo grabado queda a salvo. O **📎 Subir un audio**: en WhatsApp, mantener apretada la nota → *Reenviar* → *Compartir (↑)* → *Guardar en Archivos*, y elegirla desde Archivos.
+3. Se ve el avance: *Guardado en este equipo → Guardado en la nube → Gemini está escribiendo… → ✅ ¡Lista!* (suele tardar menos de un minuto). Se puede cerrar la ventana: sigue sola, y el aviso de Recetas («🎙️ 1 lista para revisar →») abre la lista **🎙️ Dictadas**, en cualquier equipo de la familia.
+4. **Revisar receta**: corregir lo marcado con ≈, responder las dudas (*✓ Resuelta*; las que queden se guardan con la receta) → **Guardar receta**. *Después* deja la revisión a medias en ese equipo y la retoma donde quedó. Si Gemini dice que no parece una receta: *Revisar igual* o *Pedir otra versión*. *🗑 Descartar* borra el audio y lo que escribió Gemini.
+
+**Reglas:**
+- Hasta 15 minutos y 4 MB por audio, y hasta 20 recetas dictadas sin revisar por familia.
+- Sin internet, el audio queda guardado en el equipo (IndexedDB) y se sube solo cuando vuelve.
+- Si falta la clave, Google está ocupado o se acabó la cuota del día, el audio espera en la nube y se pasa a receta solo después (la lista dice *⏳ Se reintenta sola* o *⏳ Esperando a Gemini*). Lo que necesita a alguien (*⚠️ Necesita ayuda*: clave inválida, verificar la cuenta de Google, un formato que Gemini no lee…) dice qué hacer y trae *Intentar de nuevo*; mientras tanto el audio sigue guardado.
+- Los audios y lo que se dijo quedan en la nube y **no van en el respaldo**. Al guardar la receta se conservan para escucharlos; al editarla, *🗑 Borrar el audio (la receta queda)*, y al borrar la receta se ofrece borrar también el audio.
+- Los cupos del plan gratis no son públicos (unos 20 pedidos al día con 3.8 Flash, según terceros): cuando se acaban se usa el modelo siguiente y, si se acaban todos, se sigue al otro día.
+
+**Privacidad (plan gratis de Gemini):** con el plan gratis, **Google puede usar lo que se le manda (los audios y lo que se dijo) para mejorar sus productos, y revisores humanos pueden leerlo y escucharlo**. La app lo avisa al dictar y en *Familia*. Mejor no decir datos personales (RUT, dirección, teléfonos). **Para pasarse al plan pagado** (Google no usa lo que se le manda): en aistudio.google.com → *API keys*, en el proyecto de la clave → *Set up billing* / *Upgrade* (con tarjeta, prepago). La misma clave pasa al plan pagado: no se cambia nada en el panel ni en Netlify. Cuesta unos centavos de dólar por receta (3.8 Flash: USD 0,75 por millón de tokens de entrada y 3,75 de salida hasta el 31 de diciembre de 2026, y el doble desde el 1 de enero de 2027; un minuto de audio son ≈ 1.900 tokens).
+
+**Prepararlo (una vez; la familia ya lo hizo):**
+1. En aistudio.google.com, con la cuenta de Google de un adulto: *Get API key → Create API key*.
+2. En Netlify (proyecto `calendario-familiar-pared`) → *Project configuration → Environment variables*: **`GEMINI_API_KEY`**, marcada como secreta (*Contains secret values*), y volver a publicar. Nunca en el repositorio ni en el chat.
+3. Comprobar: `/api/salud` dice `"gemini":"ok"` (nunca muestra la clave) y *Familia → 🎙️ Recetas por audio (Gemini) → Probar conexión* dice «✅ Conectado» (no gasta cuota).
+
+Si la clave se filtra: borrarla en AI Studio, crear otra, reemplazar el valor en Netlify y volver a publicar; los audios que esperaban se pasan a receta solos. Variables opcionales: `GEMINI_MODELOS` (modelos en orden de preferencia, separados por coma, hasta 4; por omisión `gemini-3.8-flash,gemini-3.5-flash-lite`: los modelos cambian seguido y, si Google retira uno, se cambia aquí sin tocar el código) y `GEMINI_USAR_AI_GATEWAY=1` (sin `GEMINI_API_KEY` propia, Netlify AI Gateway pone su clave y cobra créditos de Netlify sin tope; el panel la detecta y no la usa salvo con esta variable).
+
+**Cómo funciona** (`servidor/dictados.ts`, `servidor/gemini.ts`, `lib/dictados/`):
+- **Subida:** la app inventa el id del dictado y guarda el audio en IndexedDB **antes** de subirlo. `PUT /api/dictados/:id` (un solo pedido, ≤ 4 MB: Netlify acepta ≈ 4,5 MB) es idempotente, así un reintento no duplica, y la copia del equipo se borra recién cuando la nube confirma. En la nube, el audio va al almacén `audios` de Blobs y el registro del dictado al de siempre. El tipo se reconoce por los bytes (WebM de Chrome, MP4/AAC de Safari como `audio/m4a`, Ogg de WhatsApp…), con un tipo alterno por si Gemini rechaza el primero.
+- **Función en segundo plano:** Gemini no corre en la función que recibe el audio (tiene 60 s), sino en una *Background Function* (`dictados-proceso-background.mts`, hasta 15 min), que se dispara con `POST /api/dictados-proceso` y el mismo token del equipo. La corrida toma el dictado con ETag, un turno y un plazo de 14 minutos: dos disparos a la vez hacen un solo pedido, y un dictado descartado mientras Gemini escucha no revive. Si el disparo no llega, la app lo vuelve a pedir a los 30 s.
+- **Gemini:** el audio va en línea por REST (`generateContent`, cabecera `x-goog-api-key`, nunca `?key=`) con la instrucción y el esquema JSON de `servidor/receta-ia/`; `normalizar-receta.ts` revisa todo lo que vuelve, y la receta queda con id `rec_<id del dictado>`. Los modelos son los de `GEMINI_MODELOS`, en orden.
+- **Reintentos** dentro de una corrida (hasta 8 pedidos y 12 minutos): un 429 por minuto espera lo que dice Google (2–60 s) y repite; un 5xx, la red o una demora esperan ≈ 10 s y ≈ 30 s; a la 3.ª vez, o si se acabó la cuota del día de ese modelo o no existe (404), pasa al siguiente. Si todos se quedaron sin cuota, el dictado espera hasta la medianoche del Pacífico (entre las 03:00 y las 05:00 de Chile, según la época). Una respuesta cortada que trae la transcripción se rescata como borrador, con aviso. Lo que no se pudo queda en el dictado como error con su motivo; la app lo vuelve a pedir sola cuando corresponde (con un tope de intentos, para no gastar la cuota en un audio que falla siempre) y la familia ve el resto en la lista.
+- **Dónde queda cada cosa:** la transcripción va en Blobs (`audios`, `<familia>/<id>.texto`) y no dentro de la receta, para que la colección `recetas`, que todos los equipos bajan entera, no crezca. El dictado existe hasta que se guarda o se descarta. La clave vive sólo en la variable de Netlify: nunca en Blobs, registros ni respuestas (`sanear()` la quita de todo lo que viene de Google). Los equipos con la versión anterior: ver *Datos*.
+
+**Probar en local** sin clave real ni red: el simulador de Gemini (`pruebas/recetas/mock-gemini.mts`, el mismo de las pruebas) en 127.0.0.1, con una clave de prueba:
+
+```bash
+npm run build
+node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/mock-gemini.mts --puerto 8787 --clave clave-de-prueba &
+GEMINI_API_KEY=clave-de-prueba GEMINI_API_URL=http://127.0.0.1:8787 NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions
+```
+
+`GEMINI_API_URL` es sólo para pruebas: el código la ignora si no es `http://127.0.0.1` o `http://localhost` (una variable mal puesta no puede mandar la clave a otro sitio), y sólo entonces vale `GEMINI_TIMEOUT_MS`. Al simulador se le piden errores con `POST /__guion` (p. ej. `[{"modelo":"*","accion":"429dia"}]`; las acciones están al comienzo del archivo); `--mimes-extra audio/mp4` y `--sin-response-format` imitan otras respuestas de Google. Las pruebas automáticas (formatos de audio, Gemini con el simulador, la API y la corrida con un reloj falso, datos con equipos viejos y nuevos, cliente) se corren con `bash pruebas/correr.sh recetas`. La prueba en el navegador es manual: `npm run build && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/navegador.e2e.mjs --puerto 8900` (Chrome con micrófono falso, un tablet y un iPhone de la misma familia, `netlify dev` con las funciones reales; necesita Chrome, Playwright, ffmpeg y netlify-cli; usa los puertos N y N+1).
 
 ## Modo kiosko en el tablet
 
