@@ -695,14 +695,17 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     alGuardar?.();
     const { correo, permiso } = r.datos.persona;
     const lista = await cargar();
-    const ya = lista?.personas.find((x) => x.correo === correo)?.estado === "ok";
+    // Lo que dice su fila después de recargar (en modo manual puede que ya tuviera ese permiso en Google).
+    const fila = lista?.personas.find((x) => x.correo === correo)?.estado;
     setMsg(
       // Los pasos para hacerlo a mano quedan en la fila de esa persona (aquí arriba): no se repiten.
-      r.datos.modo === "manual" && !ya
-        ? `El panel no tiene permiso para compartir: ${correo} quedó en la lista, pero falta compartirlo a mano (los pasos están en su fila, aquí arriba).`
-        : r.datos.igual || r.datos.modo === "manual"
-          ? `${correo} ya tenía ese permiso en Google Calendar.`
-          : textoListo(correo, permiso),
+      r.datos.modo === "manual" && fila === "sinInvitar"
+        ? `${correo} quedó en la lista, pero el panel no alcanzó a compartirlo: toca «Invitar ahora» en su fila.`
+        : r.datos.modo === "manual" && fila !== "ok"
+          ? `El panel no tiene permiso para compartir: ${correo} quedó en la lista, pero falta compartirlo a mano (los pasos están en su fila, aquí arriba).`
+          : r.datos.igual || r.datos.modo === "manual"
+            ? `${correo} ya tenía ese permiso en Google Calendar.`
+            : textoListo(correo, permiso),
     );
   };
 
@@ -825,6 +828,12 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
         <Boton variante="primario" disabled={ocupado} onClick={abrirInvitar}>
           ✉️ Invitar a otro adulto
         </Boton>
+        {/* Si la lista no se pudo ver (sin wifi, Google lento), sin esto no habría cómo volver a pedirla. */}
+        {!datos && !cargando && (
+          <Boton disabled={ocupado} onClick={() => void cargar()}>
+            🔄 Reintentar
+          </Boton>
+        )}
       </div>
       {msg && !enVentana && (
         <p className="mt-3 text-lg font-bold" role="status">

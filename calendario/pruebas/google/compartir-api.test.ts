@@ -251,6 +251,11 @@ await caso("invitaciones simultáneas cerca del máximo", async () => {
   ok("un /permiso después tampoco recorta la lista", r.status === 200 && g.length === total, [r.status, g.length]);
   r = await pedir(fam, "POST", "invitar", { nombre: "Otra", correo: "otra@gmail.com", rol: "adulto", permiso: "lectura" });
   ok("pasado el máximo, la siguiente → 400 MAXIMO sin escribir en Google", r.status === 400 && r.datos.codigo === "MAXIMO" && rolEn(cal, "otra@gmail.com") === "none", r);
+  // Con la lista sobre el máximo, volver a invitar a alguien ya guardado («Invitar ahora», otro permiso)
+  // no agrega a nadie: no choca con el máximo.
+  r = await pedir(fam, "POST", "invitar", { nombre: "Q0", correo: "q0@gmail.com", rol: "adulto", permiso: "lectura" });
+  g = await guardadas(fam);
+  ok("…pero volver a invitar a una ya guardada sí se puede (sin agregar a nadie)", r.status === 200 && r.datos.modo === "panel" && rolEn(cal, "q0@gmail.com") === "reader" && g.length === total && g.find((p) => p.correo === "q0@gmail.com")?.permiso === "lectura", [r, g.length]);
   await liberar(fam);
 });
 

@@ -490,7 +490,10 @@ export default async (req: Request, context: Context) => {
     if (!nombre) return error("Falta el nombre de la persona.", 400);
     if (!ROLES.includes(body.rol as RolAdulto)) return error("Elige si es Madre, Padre u Otro adulto.", 400);
     const correo = normalizarCorreo(body.correo);
-    const ctx = { dueno: c.dueno?.correo, personas: (c.personas ?? []).filter((p) => p.correo !== correo).length };
+    // El máximo es para agregar personas: volver a invitar a una ya guardada («Invitar ahora», otro permiso)
+    // no agrega a nadie, aunque invitaciones simultáneas hayan dejado la lista sobre el máximo (TOPE_GUARDADAS).
+    const ya = (c.personas ?? []).some((p) => p.correo === correo);
+    const ctx = { dueno: c.dueno?.correo, personas: ya ? 0 : (c.personas ?? []).length };
     let r;
     try {
       r = await invitar(google(), c.url, body.correo, body.permiso, ctx);

@@ -29,7 +29,7 @@
 //   `ctx` = {dueno?: correo del dueño, personas?: cuántas OTRAS personas hay guardadas (para el máximo)}
 
 import { ErrorCalDAV } from "../caldav";
-import { errorTiempo, rutaCalendario, type GoogleCalendar, type RespuestaGoogle } from "./transporte";
+import { LimiteDeUso, errorTiempo, rutaCalendario, type GoogleCalendar, type RespuestaGoogle } from "./transporte";
 
 export type PermisoCalendario = "editor" | "lectura";
 export const ROL_DE_PERMISO = { editor: "writer", lectura: "reader" } as const;
@@ -79,7 +79,7 @@ export interface ReglaPersona {
 export interface ContextoCompartir {
   /** Correo del dueño del calendario (su regla nunca se toca). */
   dueno?: string | null;
-  /** Cuántas OTRAS personas hay guardadas (sin contar a esta), para el máximo al invitar. */
+  /** Cuántas OTRAS personas hay guardadas (sin contar a esta), para el máximo al invitar (0 si ya está guardada: no agrega a nadie). */
   personas?: number;
 }
 
@@ -109,9 +109,10 @@ function rolPedido(permiso: unknown): RolEscrito {
   return ROL_DE_PERMISO[permiso];
 }
 
-/** ¿Google pidió esperar (429, o 403 de límite de uso)? */
+/** ¿Google pidió esperar (LimiteDeUso del transporte; o un SERVIDOR 429, o 403 de límite de uso)? */
 export const esLimiteDeUso = (e: unknown): e is ErrorCalDAV =>
-  e instanceof ErrorCalDAV && e.codigo === "SERVIDOR" && (e.status === 429 || (e.status === 403 && /l[ií]mite de uso/i.test(e.message)));
+  e instanceof LimiteDeUso ||
+  (e instanceof ErrorCalDAV && e.codigo === "SERVIDOR" && (e.status === 429 || (e.status === 403 && /l[ií]mite de uso/i.test(e.message))));
 
 /**
  * El texto de un error para un pedido que nada reintenta solo (invitar, permiso, quitar, conectar,

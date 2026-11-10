@@ -779,6 +779,71 @@ await caso("varias piezas: el principal y un día cambiado", async () => {
   ok("mover la hora de una serie con días cambiados → NoSePuedeEscribir, sin pedidos", codigo(r7) === "NoSePuedeEscribir" && sim.contadores.api === 0, [codigo(r7), mensaje(r7)]);
 });
 
+await caso("fantasmas: después del principal, dentro del plazo, y un 412 se relee", async () => {
+  // Una serie con un día con color (Google lo guarda como excepción idéntica a la serie: una «fantasma»;
+  // la pared no la ve). Cambiar el lugar de la serie es el PATCH del principal y después el de la fantasma.
+  const cal = nuevoCal();
+  const web = sim.actor("web", cal);
+  const s = web.crear(semanal());
+  const f = web.editarDia(s.id, "2026-11-18", { colorId: "5" });
+  const uid = `${s.id}@google.com`;
+  const lugar = (x: string) => enPrincipal((e) => ({ ...e, lugar: x }));
+  const patches = () => sim.registro.filter((x) => x.tipo === "events.patch").map((x) => decodeURIComponent(x.ruta.split("/").pop() ?? ""));
+  ok("la fantasma no se ve en la pared", (await leer(gc(), cal)).find((x) => x.g?.uid === uid)?.g?.eventos.length === 1);
+  // 1. Plazo para un PATCH pero no para dos (400 + 700·2 ms): no se empieza (TIEMPO, sin escribir nada).
+  const t0 = gc({ hasta: Date.now() + 1700 });
+  sim.reiniciarContadores();
+  const { r: r0 } = await cambiarEnPanel(t0, cal, uid, lugar("Piscina 1"));
+  ok("sin plazo para el principal y la fantasma → TIEMPO antes de escribir", codigo(r0) === "TIEMPO" && escrituras() === 0 && !patches().length, [codigo(r0), patches()]);
+  // 2. Con plazo: el principal y después la fantasma; el etag previsto es el del listado siguiente.
+  const t1 = gc();
+  sim.reiniciarContadores();
+  const { r: r1, s: s1 } = await cambiarEnPanel(t1, cal, uid, lugar("Piscina 2"));
+  const etag1 = (await gc().listar(cal)).recursos.get(s1.href);
+  ok(
+    "lugar de la serie → PATCH del principal y después de la fantasma; etag previsto = el del listado",
+    !r1.error && JSON.stringify(patches()) === JSON.stringify([s.id, f.id]) && sim.evento(cal, f.id).location === "Piscina 2" && !!r1.valor && r1.valor.etag === etag1,
+    [codigo(r1), mensaje(r1), patches(), r1.valor, etag1],
+  );
+  // 3. Google pasa el título a la fantasma (412 en su PATCH): se relee y se le manda lo que falta (el lugar).
+  sim.interruptores.propagarTituloAExcepciones = true;
+  try {
+    const t2 = gc();
+    sim.reiniciarContadores();
+    const { r: r2, s: s2 } = await cambiarEnPanel(t2, cal, uid, (l) => l.map((e) => ({ ...e, titulo: "Natación libre", lugar: "Piscina 3" })));
+    const etag2 = (await gc().listar(cal)).recursos.get(s2.href);
+    const fx = sim.evento(cal, f.id);
+    ok(
+      "título y lugar, con Google que pasa el título: 412 en la fantasma → se relee (1 GET) y se le manda el lugar; etag previsto",
+      !r2.error && sim.contadores.status?.["412"] === 1 && contar("events.get") === 1 && fx.summary === "🦄 Natación libre" && fx.location === "Piscina 3" && fx.colorId === "5" && !!r2.valor && r2.valor.etag === etag2 && !t2.avisos().length,
+      [codigo(r2), mensaje(r2), sim.contadores.status, sim.contadores.porTipo, [fx.summary, fx.location], r2.valor, etag2],
+    );
+    // …y si sólo cambia el título, Google ya se lo pasó: se relee y no se manda nada más.
+    const t3 = gc();
+    sim.reiniciarContadores();
+    const { r: r3 } = await cambiarEnPanel(t3, cal, uid, (l) => l.map((e) => ({ ...e, titulo: "Natación de verano" })));
+    ok(
+      "sólo el título, con Google que se lo pasa: 412 → se relee y no hay un tercer PATCH",
+      !r3.error && contar("events.patch") === 2 && contar("events.get") === 1 && sim.evento(cal, f.id).summary === "🦄 Natación de verano" && !t3.avisos().length,
+      [codigo(r3), sim.contadores.porTipo],
+    );
+  } finally {
+    sim.interruptores.propagarTituloAExcepciones = false;
+  }
+  // 4. Se acaba el plazo en el PATCH de la fantasma: el principal ya está escrito, así que no se lanza; queda
+  //    un aviso y {etag: null} (el motor relee).
+  const t4 = gc({ hasta: Date.now() + 2600 });
+  const freno = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === f.id, respuestas.demora(5000));
+  const { r: r4 } = await cambiarEnPanel(t4, cal, uid, lugar("Piscina 4"));
+  freno.quitar();
+  const av4 = t4.avisos();
+  ok(
+    "TIEMPO en la fantasma → sin error, {etag: null} y el aviso «…no se alcanzó a pasar a todos sus días…»",
+    !r4.error && JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && sim.evento(cal, s.id).location === "Piscina 4" && av4.some((a) => /no se alcanzó a pasar a todos sus días/.test(a)),
+    [codigo(r4), mensaje(r4), r4.valor, av4],
+  );
+});
+
 await caso("repetición que Google no aceptó (serie dividida)", async () => {
   const cal = nuevoCal();
   const web = sim.actor("web", cal);

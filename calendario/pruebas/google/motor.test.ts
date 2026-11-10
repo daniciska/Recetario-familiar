@@ -353,6 +353,50 @@ await caso("título de la serie y lugar de un día cambiado en la misma tanda (G
   }
 });
 
+await caso("título de la serie y borrar un día cambiado en la misma tanda (Google pasa o no el título a las excepciones)", async () => {
+  // La cancelación del día cambiado va antes que el PATCH del principal: si Google pasa el título nuevo a las
+  // excepciones, el If-Match del día ya se usó. Antes el principal iba primero, la cancelación daba 412 y la
+  // vuelta siguiente hacía reaparecer el día borrado (lo de Google era más reciente).
+  for (const propagar of [false, true]) {
+    sim.interruptores.propagarTituloAExcepciones = propagar;
+    try {
+      const cal = h.nuevoCalendario();
+      const con = h.conexionGoogle(cal);
+      const fam = await h.familia([ev("p2", { titulo: "Guitarra", repeticion: "semanal", fecha: "2026-11-16", horaInicio: "17:00", horaFin: "18:00" })]);
+      await h.sync(fam, con);
+      sim
+        .actor("web", cal)
+        .moverDia(gid("p2"), "2026-11-23", { dateTime: "2026-11-23T19:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-23T20:00:00-03:00", timeZone: "America/Santiago" });
+      await h.sync(fam, con);
+      const dia = (await h.leerEventos(fam)).find((e) => e.externo?.recurrencia);
+      if (!dia) throw new Error("no llegó el día cambiado");
+      await h.dormir(1100); // (`updated` va en segundos: que la pared sea claramente posterior)
+      await h.guardarEventos(fam, (x) =>
+        x.filter((e) => e.id !== dia.id).map((e) => (e.id === "p2" ? { ...e, titulo: "Guitarra eléctrica", excepciones: [...(e.excepciones ?? []), "2026-11-23"], actualizado: ahoraIso() } : e)),
+      );
+      sim.reiniciarContadores();
+      const r = await h.sync(fam, con);
+      await h.sync(fam, con);
+      const l = await h.leerEventos(fam);
+      const vivosDia = h.vivos(cal).filter((e) => e.recurringEventId && e.status !== "cancelled");
+      ok(
+        `${propagar ? "Google pasa" : "Google no pasa"} el título: el día borrado no reaparece (ni en la pared ni en Google) y la serie queda con su título nuevo`,
+        r.ok &&
+          l.length === 1 &&
+          l[0].titulo === "Guitarra eléctrica" &&
+          (l[0].excepciones ?? []).includes("2026-11-23") &&
+          !vivosDia.length &&
+          sim.evento(cal, gid("p2"))?.summary === "🦄 Guitarra eléctrica" &&
+          !sim.contadores.status?.["412"],
+        { r, l: l.map(h.resumen), vivosDia: vivosDia.map((e) => [e.id, e.summary, e.status]), status: sim.contadores.status },
+      );
+      await quieto(`título y día cambiado borrado (${propagar ? "con" : "sin"} propagación)`, fam, con);
+    } finally {
+      sim.interruptores.propagarTituloAExcepciones = false;
+    }
+  }
+});
+
 await caso("escritura a medias (TIEMPO entre un día cambiado y el principal)", async () => {
   // Una serie con un día cambiado hecho en la web; en la pared se cambian la serie y ese día a la vez:
   // son 2 PATCH, primero el del día y después el del principal. El segundo no alcanza (TIEMPO). La marca
@@ -818,36 +862,33 @@ await caso("invitaciones, cumpleaños y rechazos de Google", async () => {
     { r, avisos, l: l2.filter((e) => /Reunión/.test(e.titulo)).map(h.resumen) },
   );
   await quieto("invitación editada", fam1, con1);
-  // Borrarla en la pared: no se puede borrar allá → vuelve (sin escribir en Google). El aviso «…solo se
-  // puede borrar en Google Calendar» se anota en la primera vuelta y la segunda vuelta del mismo pedido (la
-  // que la trae de vuelta) lo conserva: la familia ve por qué volvió.
-  await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
-  sim.reiniciarContadores();
-  const r2 = await h.sync(fam1, con1);
-  const avisosR2 = await avisosDe(fam1, con1);
-  ok(
-    "invitación borrada en la pared → vuelve, sin escribir en Google",
-    r2.ok && (await h.leerEventos(fam1)).some((e) => e.titulo === "Reunión de trabajo") && sim.evento(cal1, inv.id)?.status === "confirmed" && !sim.contadores.porTipo["events.delete"],
-    { r2, porTipo: sim.contadores.porTipo },
-  );
-  ok(
-    "…y con el plazo normal (dos vueltas: la segunda la trae de vuelta) el aviso «…solo se puede borrar en Google Calendar» sigue a la vista",
-    sim.contadores.porTipo["events.list"] === 2 && avisosR2.filter((a) => /"Reunión de trabajo" solo se puede borrar en Google Calendar/.test(a)).length === 1,
-    { porTipo: sim.contadores.porTipo, avisosR2 },
-  );
-  // Los avisos son de la última sincronización que revisó algo: no se juntan de una llamada a otra.
-  await h.guardarEventos(fam1, (x) => x);
-  await h.sync(fam1, con1);
-  ok("…y en la sincronización siguiente que revisa (sin nada que avisar) ya no está", !(await avisosDe(fam1, con1)).some((a) => /solo se puede borrar/.test(a)), await avisosDe(fam1, con1));
-  // Con una sola vuelta (sin tiempo para la segunda) el aviso sí queda a la vista.
-  await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
-  const r2b = await h.sync(fam1, con1, 3900);
-  const avisos2 = await avisosDe(fam1, con1);
-  ok(
-    "…y en esa vuelta queda el aviso «…solo se puede borrar en Google Calendar»",
-    r2b.ok && r2b.pendiente === true && avisos2.some((a) => /"Reunión de trabajo" solo se puede borrar en Google Calendar/.test(a)),
-    { r2b, avisos2 },
-  );
+  // Borrarla en la pared: no se puede borrar allá → vuelve a la pared en esa misma vuelta (sin escribir en
+  // Google), junto con el aviso «…solo se puede borrar en Google Calendar»: la familia ve por qué volvió,
+  // también si la función no alcanza a dar otra vuelta. (Antes volvía en la vuelta siguiente, que borraba el
+  // aviso; y con una sola vuelta, en la sincronización siguiente, que también lo borraba.)
+  for (const ms of [6500, 3900]) {
+    await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
+    sim.reiniciarContadores();
+    const r2 = await h.sync(fam1, con1, ms);
+    const avisosR2 = await avisosDe(fam1, con1);
+    ok(
+      `plazo ${ms} ms: invitación borrada en la pared → vuelve en la misma vuelta (1 listado, nada pendiente), sin escribir en Google, con el aviso «…solo se puede borrar en Google Calendar»`,
+      r2.ok &&
+        !r2.pendiente &&
+        sim.contadores.porTipo["events.list"] === 1 &&
+        (await h.leerEventos(fam1)).some((e) => e.titulo === "Reunión de trabajo") &&
+        sim.evento(cal1, inv.id)?.status === "confirmed" &&
+        sim.contadores.escrituras === 0 &&
+        avisosR2.filter((a) => /"Reunión de trabajo" solo se puede borrar en Google Calendar/.test(a)).length === 1,
+      { r2, porTipo: sim.contadores.porTipo, avisosR2 },
+    );
+    await h.sync(fam1, con1);
+    ok(`plazo ${ms} ms: …la sincronización siguiente (sin nada que hacer) deja el aviso a la vista`, (await avisosDe(fam1, con1)).some((a) => /solo se puede borrar/.test(a)), await avisosDe(fam1, con1));
+    // Los avisos son de la última sincronización que revisó algo: no se juntan de una llamada a otra.
+    await h.guardarEventos(fam1, (x) => x);
+    await h.sync(fam1, con1);
+    ok(`plazo ${ms} ms: …y la siguiente que revisa algo (sin nada que avisar) ya no lo muestra`, !(await avisosDe(fam1, con1)).some((a) => /solo se puede borrar/.test(a)), await avisosDe(fam1, con1));
+  }
   await quieto("invitación borrada", fam1, con1);
   // Google rechaza la repetición de un evento nuevo (400): queda sólo en la pared, con aviso.
   sim.interruptores.reglasRechazadas = [/INTERVAL=7/];
@@ -1040,6 +1081,67 @@ await caso("lo que quedó en Google se ve distinto de lo que se mandó", async (
     sim.interruptores.propagarTituloAExcepciones = false;
   }
 
+  // a4) Google pasa sólo el título a la fantasma y la pared cambió el título y el lugar: el PATCH de la
+  //     fantasma da 412; se relee y se le manda lo que le falta (el lugar), con su etag nuevo. Antes el lugar
+  //     no llegaba a ese día: quedaba como un día cambiado con el lugar viejo, en la pared y en los iPhone.
+  sim.interruptores.propagarTituloAExcepciones = true;
+  try {
+    await h.cambiarEvento(fam, "f1", { titulo: "Teatro de títeres", lugar: "Sala 3" });
+    sim.reiniciarContadores();
+    const ra4 = await h.sync(fam, con);
+    const avisos4 = await avisosDe(fam, con);
+    const la4 = await h.leerEventos(fam);
+    const f4 = sim.evento(cal, fid);
+    ok(
+      "título y lugar con Google que sólo pasa el título: la fantasma queda con los dos (412, se relee y se le manda el lugar); la pared no muestra un día cambiado",
+      ra4.ok &&
+        !ra4.error &&
+        sim.contadores.status?.["412"] === 1 &&
+        sim.contadores.porTipo["events.get"] === 1 &&
+        f4?.summary === "🦄 Teatro de títeres" &&
+        f4?.location === "Sala 3" &&
+        la4.length === 1 &&
+        la4[0].lugar === "Sala 3" &&
+        !avisos4.length,
+      { ra4, status: sim.contadores.status, porTipo: sim.contadores.porTipo, fantasma: f4 && [f4.summary, f4.location], avisos4, l: la4.map(h.resumen) },
+    );
+    await quieto("fantasma con el título pasado por Google y el lugar desde la pared", fam, con);
+  } finally {
+    sim.interruptores.propagarTituloAExcepciones = false;
+  }
+  // a5) Lo mismo, pero alguien cambió el lugar de ese día en la web entre medio (después de que Google le
+  //     pasara el título): no se pisa. La pared muestra ese día cambiado, como Google.
+  sim.interruptores.propagarTituloAExcepciones = true;
+  try {
+    await h.cambiarEvento(fam, "f1", { titulo: "Teatro de sombras", lugar: "Sala 4" });
+    // (Justo cuando llega el PATCH de la fantasma, la web le cambia el lugar.)
+    let editado = false;
+    const freno = sim.inyectar(
+      (p) => {
+        if (editado || p.tipo !== "events.patch" || p.eventoId !== fid) return false;
+        editado = true;
+        sim.actor("web", cal).editar(fid, { location: "Patio" });
+        return true;
+      },
+      respuestas.demora(1),
+      1,
+    );
+    sim.reiniciarContadores();
+    const ra5 = await h.sync(fam, con);
+    freno.quitar();
+    await h.sync(fam, con);
+    const la5 = await h.leerEventos(fam);
+    const dia5 = la5.find((e) => e.externo?.recurrencia);
+    ok(
+      "un cambio ajeno en la fantasma no se pisa: queda «Patio» en Google y la pared muestra ese día cambiado",
+      ra5.ok && sim.evento(cal, fid)?.location === "Patio" && dia5?.lugar === "Patio" && la5.find((e) => e.id === "f1")?.lugar === "Sala 4",
+      { ra5, fantasma: sim.evento(cal, fid), l: la5.map(h.resumen) },
+    );
+    await quieto("fantasma cambiada por otro entre medio", fam, con);
+  } finally {
+    sim.interruptores.propagarTituloAExcepciones = false;
+  }
+
   // b) Un día borrado en la web (excepción cancelada) y después la pared cambia la hora de la serie: la
   //    cancelada queda «huérfana» (a la hora vieja) y planear borra ese día con un EXDATE a la hora nueva.
   //    Al releer (aquí, porque la web cambia el título) la serie sigue siendo semanal con ese día borrado,
@@ -1127,13 +1229,42 @@ await caso("lápida restaurada", async () => {
 
 // =====================================================================================
 seccion("12. Avisos de varias vueltas de una misma sincronización");
-ok(
-  "juntarAvisos: primero los de las vueltas anteriores, sin repetir y hasta 5; sin avisos → undefined",
-  JSON.stringify(h.S.juntarAvisos(["a", "b"], ["b", "c", "a", "d", "e", "f"])) === '["a","b","c","d","e"]' &&
-    JSON.stringify(h.S.juntarAvisos([], ["x", "x"])) === '["x"]' &&
-    h.S.juntarAvisos([], []) === undefined &&
-    h.S.MAX_AVISOS === 5,
-);
+await caso("juntarAvisos", async () => {
+  const S = h.S as unknown as { juntarAvisos?: (a: string[], b: string[]) => string[] | undefined; MAX_AVISOS?: number };
+  const j = (a: string[], b: string[]) => JSON.stringify(S.juntarAvisos?.(a, b) ?? null);
+  ok(
+    "juntarAvisos: primero los de las vueltas anteriores y después los nuevos que no estaban, hasta 5; con una sola vuelta, igual que siempre (los primeros 5, tal cual); sin avisos → undefined",
+    typeof S.juntarAvisos === "function" &&
+      j(["a", "b"], ["b", "c", "a", "d", "e", "f"]) === '["a","b","c","d","e"]' &&
+      j([], ["x", "x", "y"]) === '["x","x","y"]' &&
+      j([], ["1", "2", "3", "4", "5", "6"]) === '["1","2","3","4","5"]' &&
+      j(["a"], []) === '["a"]' &&
+      j([], []) === "null" &&
+      S.MAX_AVISOS === 5,
+  );
+});
+
+await caso("el aviso de una vuelta sigue a la vista después de la vuelta que resuelve lo avisado", async () => {
+  // Google no deja borrar (403 requiredAccessLevel en events.delete, como un calendario de sólo lectura en
+  // iCloud): la primera vuelta avisa y deja la serie para releer; la segunda del mismo pedido la trae de
+  // vuelta sin nada que avisar. Antes esa segunda vuelta borraba el aviso y el evento volvía sin explicación.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("v1", { titulo: "Vacuna" }), ev("v2", { titulo: "Control", fecha: "2026-12-02" })]);
+  await h.sync(fam, con);
+  await h.guardarEventos(fam, (x) => x.filter((e) => e.id !== "v1"));
+  const inj = sim.inyectar(es.tipo("events.delete"), respuestas.error("requiredAccessLevel"));
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  inj.quitar();
+  const avisos = await avisosDe(fam, con);
+  ok(
+    "dos vueltas: la segunda trae de vuelta «Vacuna» y el aviso de la primera sigue a la vista (una vez)",
+    r.ok && inj.disparos === 1 && sim.contadores.porTipo["events.list"] === 2 && (await porId(fam, "v1"))?.titulo === "Vacuna" && avisos.filter((a) => /no deja borrar eventos desde el panel/.test(a)).length === 1,
+    { r, disparos: inj.disparos, porTipo: sim.contadores.porTipo, avisos },
+  );
+  await quieto("aviso de la primera vuelta", fam, con);
+});
 
 seccion("Al final");
 ok("ningún pedido salió de esta máquina", h.urlsVistas.length > 0 && h.urlsVistas.every((u) => u.startsWith("http://127.0.0.1:")), h.urlsVistas.filter((u) => !u.startsWith("http://127.0.0.1:")).slice(0, 5));

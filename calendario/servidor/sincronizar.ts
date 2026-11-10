@@ -261,12 +261,13 @@ export const MAX_AVISOS = 5;
 
 /**
  * Los avisos que quedan a la vista: los de las vueltas anteriores de la misma llamada y después los de
- * ésta, sin repetir y hasta MAX_AVISOS (undefined si no hay). Así no se pierde el aviso de una vuelta
- * cuando la siguiente resuelve lo que avisó (p. ej. un evento que no se pudo borrar allá y que la vuelta
- * siguiente trae de vuelta a la pared).
+ * ésta que no estaban ya, hasta MAX_AVISOS (undefined si no hay). Así no se pierde el aviso de una vuelta
+ * cuando la siguiente resuelve lo que avisó (p. ej. un evento que iCloud no deja borrar y que la vuelta
+ * siguiente trae de vuelta a la pared), y otra vuelta que avisa lo mismo no lo repite. Con una sola vuelta
+ * (`antes` vacío) queda igual que siempre: los primeros MAX_AVISOS de esa vuelta.
  */
 export function juntarAvisos(antes: readonly string[], nuevos: readonly string[]): string[] | undefined {
-  const todos = [...new Set([...antes, ...nuevos])].slice(0, MAX_AVISOS);
+  const todos = [...antes, ...nuevos.filter((a) => !antes.includes(a))].slice(0, MAX_AVISOS);
   return todos.length ? todos : undefined;
 }
 
@@ -716,6 +717,27 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: OpcionesVuel
       return false;
     };
 
+    /**
+     * Lee una serie conocida y la procesa como en el paso 1 (con su etag en null, lo de allá vuelve a la
+     * pared). false si no se alcanzó o no se pudo leer: entonces la trae la vuelta siguiente.
+     */
+    const traerDeVuelta = async (uid: string, href: string): Promise<boolean> => {
+      if (queda() < 1200) return false;
+      let t: Awaited<ReturnType<Transporte["traer"]>>;
+      try {
+        t = await cal.traer(conexion.url, [href]);
+      } catch (e) {
+        if (e instanceof ErrorCalDAV) return false;
+        throw e;
+      }
+      const x = t.leidos.find((l) => l.href === href);
+      if (!x) return false;
+      porLeer.set(href, uid);
+      await procesar(x.href, x.etag, x.ics);
+      procesados.add(href);
+      return true;
+    };
+
     // 2. Borrar en el calendario lo que se borró aquí (o se dejó "sólo en el panel").
     for (const uid of borrarAlla) {
       if (!puedeEscribir()) break;
@@ -731,11 +753,12 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: OpcionesVuel
         resumen.borradosAlla++;
       } catch (e) {
         if (e instanceof NoSePuedeEscribir) {
-          // Ese evento no se puede borrar desde el panel (p. ej. una invitación de Google): se vuelve a
-          // traer, con aviso. (CalDAV nunca lo lanza.)
+          // Ese evento no se puede borrar desde el panel (p. ej. una invitación de Google): vuelve a la
+          // pared en esta misma vuelta, junto con el aviso (así se ve por qué volvió, aunque no alcance otra
+          // vuelta). Si no se puede leer ahora, la vuelta siguiente lo trae. (CalDAV nunca lo lanza.)
           rec.etag = null;
-          pendiente = true;
           avisos.push(e.message);
+          if (!(await traerDeVuelta(uid, rec.href))) pendiente = true;
         } else if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
           // Calendario de sólo lectura: no se puede borrar allá, así que se vuelve a traer desde iCloud.
           rec.etag = null;
