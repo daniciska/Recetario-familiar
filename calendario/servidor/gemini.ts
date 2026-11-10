@@ -545,6 +545,7 @@ function sumaCuadrosMp3(b: Uint8Array, desde: number, primero: CuadroMp3): numbe
   const igual = (c: CuadroMp3 | null): c is CuadroMp3 => !!c && c.clase === primero.clase;
   let muestras = 0;
   let enCuadros = 0;
+  let ultimo = desde; // fin del último cuadro contado
   let enSincronia = true; // después de un cuadro entero, el siguiente va pegado
   for (let i = desde; i + 4 <= fin; ) {
     const c = cuadroMp3(b, i);
@@ -553,13 +554,17 @@ function sumaCuadrosMp3(b: Uint8Array, desde: number, primero: CuadroMp3): numbe
       muestras += c.muestras;
       enCuadros += c.largo;
       i += c.largo;
+      ultimo = i;
       enSincronia = true;
     } else {
       i++;
       enSincronia = false;
     }
   }
-  return muestras && enCuadros >= 0.9 * (fin - desde) ? muestras / primero.tasa : undefined;
+  // La cobertura se mide hasta el último cuadro, no hasta el final del archivo: así una etiqueta grande al
+  // final (APEv2, ID3v2 con pie, Lyrics3, una carátula) no deja el audio sin duración. La basura con sólo un
+  // par de cuadros válidos da una duración mínima, y la regla de los 6 Mbit/s de duracionAudio la descarta.
+  return muestras && enCuadros >= 0.9 * (ultimo - desde) ? muestras / primero.tasa : undefined;
 }
 
 const TASAS_AAC = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];

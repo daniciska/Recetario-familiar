@@ -154,4 +154,27 @@ for (const f of ["ogg", "webm", "mp4"] as const) {
   }
 }
 
+{
+  // MP3 sin Xing con una etiqueta grande al final (APEv2 o ID3v2 con pie, p. ej. una carátula): la etiqueta no
+  // tiene cuadros, y antes dejaba la cobertura bajo el 90 % → sin duración → 413 si el equipo no mandaba ?segundos=.
+  const cbr = conFfmpegSinDuracion(20)?.find((a) => a.nombre === "cbr.mp3");
+  if (!cbr) info("omitido (sin ffmpeg o sin libmp3lame)");
+  else {
+    const relleno = new Uint8Array(Math.round(cbr.bytes.length * 0.4)).fill(0x41);
+    const ape = (() => {
+      const pie = new Uint8Array(32);
+      pie.set(new TextEncoder().encode("APETAGEX"));
+      return new Uint8Array([...new TextEncoder().encode("APETAGEX"), ...new Uint8Array(24), ...relleno, ...pie]);
+    })();
+    const id3pie = new Uint8Array([...new TextEncoder().encode("ID3"), 4, 0, 0x10, 0, 0, 0, 0, ...relleno, ...new TextEncoder().encode("3DI"), 4, 0, 0x10, 0, 0, 0, 0]);
+    for (const [nombre, cola] of [["APEv2", ape], ["ID3v2 con pie", id3pie]] as const) {
+      const d = duracionAudio(new Uint8Array([...cbr.bytes, ...cola]));
+      ok(`mp3 CBR sin Xing de 20 s con una etiqueta ${nombre} del 40 % al final → ≈ 20 s`, cerca(d, 20, 0.5), d);
+    }
+    const basura = new Uint8Array(4_000_000).fill(0x55);
+    const dosCuadros = new Uint8Array([...cbr.bytes.slice(0, 2000), ...basura]);
+    ok("mp3: 2 KB de cuadros y 4 MB de basura → sin duración (la regla de los 6 Mbit/s)", duracionAudio(dosCuadros) === undefined, duracionAudio(dosCuadros));
+  }
+}
+
 await terminar();
