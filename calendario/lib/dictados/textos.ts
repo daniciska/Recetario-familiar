@@ -2,6 +2,7 @@
 // lista, el aviso de Recetas, los mensajes de cada error y los textos de las pantallas. Todo puro (sin
 // React ni red): lo prueba pruebas/recetas/textos.test.ts.
 
+import { SinConexion } from "../datos/nube";
 import { ahoraEnSantiago, diaSemana, DIAS_CORTOS, MESES, partes } from "../fechas";
 import { MAX_INTENTOS_SOLOS } from "./reglas";
 import type { CodigoError, DictadoPublico, RespuestaProbar } from "./tipos";
@@ -79,6 +80,46 @@ export const MENSAJES: Record<CodigoError, (proximo?: number) => string> = {
 
 /** El mensaje del error de un dictado (o "" si no tiene). */
 export const mensajeError = (d: Pick<DictadoPublico, "error">) => (d.error ? MENSAJES[d.error.codigo](d.error.proximo) : "");
+
+// ---------- «Pedir otra versión» que falló ----------
+
+/**
+ * Errores que vienen del audio mismo: otra versión da lo mismo (y cada corrida gasta hasta 8 pedidos a
+ * Gemini). Antes de pedirla de nuevo se advierte (TEXTOS.confirmarOtraIgual).
+ */
+export const DA_LO_MISMO: readonly CodigoError[] = ["formato", "bloqueado", "audio_perdido"];
+
+/**
+ * El último «Pedir otra versión» falló: el servidor dejó el borrador de antes (estado «listo») y el error
+ * como aviso (servidor/dictados.ts, conError). La app no la vuelve a pedir sola (reglas.ts, debeReintentar).
+ */
+export const otraVersionFallo = (d: Pick<DictadoPublico, "estado" | "error"> | null | undefined): boolean => d?.estado === "listo" && !!d.error;
+
+/** Pedir otra versión de nuevo va a dar lo mismo: se pregunta antes. */
+export const otraVersionDaLoMismo = (d: Pick<DictadoPublico, "estado" | "error"> | null | undefined): boolean =>
+  otraVersionFallo(d) && DA_LO_MISMO.includes(d!.error!.codigo);
+
+/**
+ * Lo que MENSAJES dice pensando en un dictado sin borrador («se procesa solo», «toca «Intentar de nuevo»») no
+ * vale con un borrador listo: la app no pide otra versión sola y el botón es «Pedir otra versión».
+ */
+const OTRA_VERSION: Partial<Record<CodigoError, (proximo?: number) => string>> = {
+  sin_clave: () => "Falta conectar Gemini (la clave GEMINI_API_KEY en Netlify).",
+  cuota_dia: (p) => `Se usó la cuota gratis de Gemini de hoy. Puedes pedirla de nuevo ${despuesDe(p)}.`,
+  ocupado: (p) => `Gemini está ocupado. Puedes pedirla de nuevo ${cercaDe(p)}.`,
+  se_corto: () => "Se cortó mientras Gemini escuchaba. Puedes pedirla de nuevo.",
+  incompleta: () => "La respuesta de Gemini llegó incompleta. Puedes pedirla de nuevo; si vuelve a pasar, dicta la receta en dos audios más cortos.",
+  interno: () => "Algo falló en el panel al pedir la receta. Puedes pedirla de nuevo.",
+  formato: () => "Gemini no pudo leer este audio: si la pides de nuevo, va a pasar lo mismo.",
+  bloqueado: () => "Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo.",
+};
+
+/** «No se pudo hacer otra versión: …» para la ventana de dictar, la fila de 🎙️ Dictadas y la revisión (null: no falló). */
+export function textoOtraVersionFallo(d: Pick<DictadoPublico, "estado" | "error"> | null | undefined): string | null {
+  if (!d?.error || !otraVersionFallo(d)) return null;
+  const { codigo, proximo } = d.error;
+  return `No se pudo hacer otra versión: ${(OTRA_VERSION[codigo] ?? MENSAJES[codigo])(proximo)} Quedó la versión de antes.`;
+}
 
 // ---------- Situación de cada dictado (chip, aviso y botones) ----------
 
@@ -233,6 +274,14 @@ export function vistaAvance(x: {
 /** Se puede abrir la revisión sólo con un dictado «listo» que trae su borrador (nunca un borrador vacío). */
 export const sePuedeRevisar = (d: Pick<DictadoPublico, "estado" | "borrador"> | null | undefined): boolean => d?.estado === "listo" && !!d.borrador;
 
+/**
+ * «Revisar receta» en la ventana de dictar no pudo pedir el dictado fresco (`e`). Sin red, y sólo sin red (si
+ * la nube respondió otra cosa, no), se abre igual el que ya está en la ventana si trae su borrador: la revisión
+ * se corrige sin red y queda en este equipo (revision.ts) hasta que se pueda guardar.
+ */
+export const revisarSinRed = (e: unknown, enVentana: Pick<DictadoPublico, "estado" | "borrador"> | null | undefined): boolean =>
+  e instanceof SinConexion && sePuedeRevisar(enVentana);
+
 // ---------- Ajustes: «Probar conexión» ----------
 
 export const TEXTOS_GEMINI = {
@@ -351,6 +400,11 @@ export const TEXTOS = {
   yaCambio: "Esta receta dictada cambió en otro equipo (por ejemplo, pidieron otra versión). Aquí se ve cómo va ahora.",
   confirmarOtraVersion: "¿Pedir otra versión? Gemini vuelve a escuchar el audio; lo que corregiste aquí se reemplaza por la versión nueva.",
   siOtraVersion: "Sí, pedir otra versión",
+  // La otra versión falló por el audio mismo (DA_LO_MISMO): pedirla de nuevo da lo mismo.
+  confirmarOtraIgual: "Lo más seguro es que vuelva a pasar lo mismo, y se gasta la cuota gratis de Gemini. ¿Pedir otra versión igual?",
+  confirmarOtraIgualCorregida:
+    "Lo más seguro es que vuelva a pasar lo mismo, se gasta la cuota gratis de Gemini y lo que corregiste aquí se pierde. ¿Pedir otra versión igual?",
+  siOtraIgual: "Sí, pedirla igual",
   siDescartar: "Sí, descartar",
   no: "No",
   // Revisar el borrador

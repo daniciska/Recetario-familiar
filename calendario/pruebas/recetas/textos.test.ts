@@ -3,6 +3,7 @@
 //   node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/textos.test.ts
 import {
   CHIPS,
+  DA_LO_MISMO,
   MENSAJES,
   TEXTOS,
   TEXTOS_GEMINI,
@@ -17,17 +18,23 @@ import {
   mensajeProbar,
   mmss,
   momentoCorto,
+  otraVersionDaLoMismo,
+  otraVersionFallo,
   resumir,
+  revisarSinRed,
   sePuedeRevisar,
   situacion,
   textoAviso,
   textoMicrofono,
+  textoOtraVersionFallo,
   tituloDictado,
   vistaAvance,
   type Situacion,
   type SubidaVista,
 } from "../../lib/dictados/textos.ts";
-import { MAX_INTENTOS_SOLOS } from "../../lib/dictados/reglas.ts";
+import { MAX_INTENTOS_SOLOS, debeReintentar } from "../../lib/dictados/reglas.ts";
+import { AccesoRevocado, SinConexion } from "../../lib/datos/nube.ts";
+import { RechazoDictado, SinNube } from "../../lib/dictados/cliente.ts";
 import { ERRORES_REINTENTABLES, esReintentable, type CodigoError, type DictadoPublico, type EstadoDictado } from "../../lib/dictados/tipos.ts";
 import { reinicioCuota } from "../../servidor/gemini.ts";
 import { caso, ok, seccion, terminar } from "./arnes.ts";
@@ -265,6 +272,65 @@ await caso("revisar", () => {
   ok("en cola o con Gemini (otra versión pedida en otro equipo) → no", !sePuedeRevisar(d("subido")) && !sePuedeRevisar(d("procesando")));
   ok("listo sin borrador (la lista no lo trae) → no", !sePuedeRevisar(d("listo")));
   ok("con error o sin dictado → no", !sePuedeRevisar(conError("formato")) && !sePuedeRevisar(null));
+});
+
+seccion("Revisar sin red el borrador que ya está en la ventana (revisión 3, pendiente 3)");
+await caso("revisar sin red", () => {
+  // Antes «Revisar receta» siempre pedía el dictado fresco y, sin red, sólo decía «No hay conexión con la nube».
+  const borrador = { id: "rec_x", nombre: "Pebre", emoji: "🌶️", porciones: 4, ingredientes: [], pasos: [] };
+  const listo = d("listo", { borrador });
+  ok("sin red y el borrador en la ventana → se abre igual", revisarSinRed(new SinConexion(), listo));
+  ok("…también si no hay sesión en este equipo (SinNube es un SinConexion)", revisarSinRed(new SinNube(), listo));
+  ok("sin red pero la ventana no tiene borrador (llegó de la subida, sin borrador) → no", !revisarSinRed(new SinConexion(), d("listo")));
+  ok("sin red y todavía en cola o con error → no", !revisarSinRed(new SinConexion(), d("subido")) && !revisarSinRed(new SinConexion(), conError("ocupado", { borrador })));
+  ok("sin red y sin dictado → no", !revisarSinRed(new SinConexion(), null) && !revisarSinRed(new SinConexion(), undefined));
+  ok("la nube respondió que no (RechazoDictado), revocó el equipo u otro error → no se abre", [new RechazoDictado("No", 400), new AccesoRevocado(), new Error("x"), "texto", null].every((e) => !revisarSinRed(e, listo)));
+});
+
+seccion("«Pedir otra versión» que falló (revisión 3, pendiente 2)");
+await caso("otra versión fallida", () => {
+  // servidor/dictados.ts (conError): si «Pedir otra versión» falla, vuelve el borrador de antes (estado «listo») con el error.
+  const borrador = { id: "rec_x", nombre: "Pebre", emoji: "🌶️", porciones: 4, ingredientes: [], pasos: [] };
+  const fallida = (codigo: CodigoError, extra: Partial<DictadoPublico> = {}, proximo?: number) =>
+    d("listo", { esReceta: true, rescate: true, borrador, error: { codigo, reintentable: esReintentable(codigo), ...(proximo ? { proximo } : {}) }, ...extra });
+  ok("listo con error → falló la otra versión", otraVersionFallo(fallida("bloqueado")));
+  ok("listo sin error, con error (sin borrador) o sin dictado → no", !otraVersionFallo(d("listo")) && !otraVersionFallo(conError("bloqueado")) && !otraVersionFallo(null));
+  igual("sin fallo → sin aviso", [textoOtraVersionFallo(d("listo", { rescate: true })), textoOtraVersionFallo(conError("ocupado")), textoOtraVersionFallo(null)], [null, null, null]);
+  const p = Date.parse("2026-11-09T17:15:00Z");
+  for (const c of CODIGOS) {
+    const t = textoOtraVersionFallo(fallida(c, {}, p)) ?? "";
+    const sinHora = textoOtraVersionFallo(fallida(c)) ?? "";
+    ok(`${c}: «No se pudo hacer otra versión: …» y que quedó la de antes`, t.startsWith("No se pudo hacer otra versión: ") && t.endsWith("Quedó la versión de antes.") && textoBueno(t) && textoBueno(sinHora), t);
+    // Un «listo» no se vuelve a pedir solo: el aviso no puede prometerlo, ni nombrar un botón que no está.
+    ok(`${c}: no dice que se reintenta sola ni nombra «Intentar de nuevo»`, ![t, sinHora].some((x) => /solo|sola|Intentar de nuevo/.test(x)), t);
+    ok(`${c}: y de verdad la app no la pide sola`, !debeReintentar(fallida(c, {}, p - 1), p + 3600_000, "ok"));
+  }
+  igual(
+    "bloqueado: dice que va a pasar lo mismo",
+    textoOtraVersionFallo(fallida("bloqueado")),
+    "No se pudo hacer otra versión: Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo. Quedó la versión de antes.",
+  );
+  igual(
+    "cuota del día: cuándo se puede pedir de nuevo, en hora de Chile",
+    textoOtraVersionFallo(fallida("cuota_dia", {}, reinicioCuota(Date.parse("2026-11-09T20:00:00Z")))),
+    "No se pudo hacer otra versión: Se usó la cuota gratis de Gemini de hoy. Puedes pedirla de nuevo después de las 05:05. Quedó la versión de antes.",
+  );
+  igual("ocupado con hora", textoOtraVersionFallo(fallida("ocupado", {}, p)), "No se pudo hacer otra versión: Gemini está ocupado. Puedes pedirla de nuevo cerca de las 14:15. Quedó la versión de antes.");
+  igual("sin la clave (la nube lo responde al tiro)", textoOtraVersionFallo(fallida("sin_clave")), "No se pudo hacer otra versión: Falta conectar Gemini (la clave GEMINI_API_KEY en Netlify). Quedó la versión de antes.");
+  ok("la clave inválida usa el mensaje de siempre (dice qué hacer)", textoOtraVersionFallo(fallida("clave_invalida")) === `No se pudo hacer otra versión: ${MENSAJES.clave_invalida()} Quedó la versión de antes.`);
+  ok("en un «no parece receta» también", textoOtraVersionFallo(fallida("ocupado", { esReceta: false, rescate: undefined }))?.startsWith("No se pudo hacer otra versión: "));
+  // Con un error del audio mismo, otra versión da lo mismo: se advierte antes de pedirla (gasta hasta 8 pedidos a Gemini).
+  igual("los que dan lo mismo: formato, bloqueado y audio perdido", [...DA_LO_MISMO].sort(), ["audio_perdido", "bloqueado", "formato"]);
+  ok("…ninguno es reintentable", DA_LO_MISMO.every((c) => !esReintentable(c)));
+  for (const c of CODIGOS) ok(`${c}: ${DA_LO_MISMO.includes(c) ? "se advierte" : "no se advierte"} antes de pedirla de nuevo`, otraVersionDaLoMismo(fallida(c)) === DA_LO_MISMO.includes(c));
+  ok("bloqueado o formato con estado «error» (sin borrador) no es una otra versión fallida", !otraVersionDaLoMismo(conError("bloqueado")) && !otraVersionDaLoMismo(conError("formato")) && !otraVersionDaLoMismo(null));
+  ok("formato y bloqueado: el aviso ya dice que va a pasar lo mismo", ["formato", "bloqueado"].every((c) => /va a pasar lo mismo/.test(textoOtraVersionFallo(fallida(c as CodigoError)) ?? "")));
+  ok("la pregunta antes de pedirla igual", /vuelva a pasar lo mismo/.test(TEXTOS.confirmarOtraIgual) && /¿Pedir otra versión igual\?$/.test(TEXTOS.confirmarOtraIgual) && TEXTOS.siOtraIgual === "Sí, pedirla igual");
+  ok("…y si se corrigió algo en la revisión, también dice que se pierde", /vuelva a pasar lo mismo/.test(TEXTOS.confirmarOtraIgualCorregida) && /lo que corregiste aquí se pierde/.test(TEXTOS.confirmarOtraIgualCorregida));
+  // Los botones siguen: con la pregunta antes (y el texto del rescate nombra el botón que aparece).
+  igual("rescate con la otra versión bloqueada: Revisar y Pedir otra versión", botonesDictado(fallida("bloqueado")), ["revisar", "otra_version"]);
+  igual("no parece receta con la otra versión fallida: Revisar igual y Pedir otra versión", botonesDictado(fallida("formato", { esReceta: false })), ["revisar_igual", "otra_version"]);
+  igual("sigue «Lista para revisar» (el borrador de antes está)", [situacion(fallida("bloqueado")), resumir([fallida("bloqueado")]).listas], ["lista", 1]);
 });
 
 await terminar();

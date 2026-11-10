@@ -4,7 +4,7 @@
 //   node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/formatos.test.ts
 import { detectarAudio, duracionAudio, type AudioDetectado } from "../../servidor/gemini.ts";
 import { MIMES_DOCUMENTADOS } from "./mock-gemini.mts";
-import { cabecera, conDuracion, conFfmpeg, conFfmpegSinDuracion, grabadoChrome, type Formato } from "./audios.ts";
+import { cabecera, conDuracion, conFfmpeg, conFfmpegDesplazados, conFfmpegSinDuracion, grabadoChrome, type Formato } from "./audios.ts";
 import { info, ok, seccion, terminar } from "./arnes.ts";
 
 const ver = (d: AudioDetectado) => (d.ok ? `${d.mime}|${d.alterno ?? ""}|${d.reproducir}` : `✗ ${d.mensaje}`);
@@ -129,6 +129,29 @@ seccion("Duración: grabaciones reales");
   const vivos = conFfmpegSinDuracion(20);
   if (!vivos) info("omitido (sin ffmpeg)");
   else for (const a of vivos) ok(`${a.nombre} (20 s, sin la duración en la cabecera) → ≈ 20 s`, cerca(duracionAudio(a.bytes), 20, 0.3), duracionAudio(a.bytes));
+}
+
+// Lo que DURA, no dónde termina: si el audio no parte en 0, antes se tomaba el final (1260 s para 60 s que
+// parten en 1200 s) y un audio corto salía con 413 «dura más de 15 minutos», sin reintento.
+seccion("Duración: audios que no parten en 0");
+for (const f of ["ogg", "webm", "mp4"] as const) {
+  for (const inicio of [0, 1200]) {
+    const d = duracionAudio(conDuracion(f, 60, 400_000, { inicio }));
+    ok(`${f} de 60 s que parte en ${inicio} s → 60 s`, cerca(d, 60, 0.5), d);
+  }
+}
+{
+  const d = duracionAudio(conDuracion("ogg", 600, 400_000, { inicio: 30 }));
+  ok("ogg de 10 min que parte en 30 s → 600 s (el comienzo sale del TOC de los paquetes)", cerca(d, 600, 0.01), d);
+  const reales = conFfmpegDesplazados(60, 1200);
+  if (!reales) info("omitido (sin ffmpeg)");
+  else {
+    for (const a of reales) {
+      const x = duracionAudio(a.bytes);
+      ok(`${a.nombre} (60 s${a.nombre.startsWith("vbr") ? "" : " desde 1200 s"}) → ≈ 60 s`, cerca(x, 60, 0.5), x);
+    }
+    info(`ffmpeg generó ${reales.length}: ${reales.map((a) => a.nombre).join(", ")}`);
+  }
 }
 
 await terminar();

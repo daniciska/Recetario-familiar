@@ -8,7 +8,21 @@ import { useState } from "react";
 import { useCandado } from "@/lib/candado";
 import * as cliente from "@/lib/dictados/cliente";
 import type { EstadoDictados, LocalVista } from "@/lib/dictados/useDictados";
-import { TEXTOS, botonesDictado, chip, chipLocal, mensajeError, resumir, sePuedeRevisar, situacion, textoAviso, tituloDictado } from "@/lib/dictados/textos";
+import {
+  TEXTOS,
+  botonesDictado,
+  chip,
+  chipLocal,
+  mensajeError,
+  otraVersionDaLoMismo,
+  otraVersionFallo,
+  resumir,
+  sePuedeRevisar,
+  situacion,
+  textoAviso,
+  textoOtraVersionFallo,
+  tituloDictado,
+} from "@/lib/dictados/textos";
 import type { DictadoPublico } from "@/lib/dictados/tipos";
 import { BotonEscuchar, mensajeNube } from "./Escuchar";
 import { Boton, Modal, Vacio, cx } from "./ui";
@@ -71,13 +85,33 @@ function ConfirmarDescartar({ alSi, alNo, ocupado }: { alSi: () => void; alNo: (
   );
 }
 
+/** «Pedir otra versión» después de una que falló por el audio mismo: va a dar lo mismo. */
+function ConfirmarOtraIgual({ alSi, alNo, ocupado }: { alSi: () => void; alNo: () => void; ocupado: boolean }) {
+  return (
+    <div className="w-full rounded-2xl bg-acento-suave p-3">
+      <p className="mb-2 text-lg font-bold">{TEXTOS.confirmarOtraIgual}</p>
+      <div className="flex flex-wrap gap-2">
+        <Boton disabled={ocupado} onClick={alSi}>
+          {TEXTOS.siOtraIgual}
+        </Boton>
+        <Boton variante="primario" onClick={alNo}>
+          {TEXTOS.no}
+        </Boton>
+      </div>
+    </div>
+  );
+}
+
 function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados; alRevisar: (x: DictadoPublico) => void }) {
   const { proteger } = useCandado();
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmar, setConfirmar] = useState(false);
+  const [confirmarOtra, setConfirmarOtra] = useState(false);
   const s = situacion(x);
   const botones = botonesDictado(x);
+  // La pregunta de «va a dar lo mismo» corre mientras la última otra versión siga fallida por el audio.
+  const pidiendoIgual = confirmarOtra && otraVersionDaLoMismo(x);
 
   const hacer = (accion: () => Promise<void>) =>
     proteger(() => {
@@ -107,11 +141,18 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
     });
   const procesar = (otraVez: boolean) =>
     hacer(async () => {
+      setConfirmarOtra(false);
       const r = await d.procesar(x.id, otraVez);
       if (!r) setMsg(TEXTOS.yaNoExiste);
+      // Falló al tiro (p. ej. sin la clave de Gemini): la nube no lo anota, así que el aviso queda en la fila.
+      else if (otraVez && otraVersionFallo(r)) setMsg(textoOtraVersionFallo(r));
     });
+  /** «Pedir otra versión»: si la anterior falló por el audio mismo, primero se advierte que va a dar lo mismo. */
+  const pedirOtra = () => (otraVersionDaLoMismo(x) ? proteger(() => setConfirmarOtra(true)) : procesar(true));
 
   const detalle = x.estado === "error" ? mensajeError(x) : s === "no_receta" ? TEXTOS.noReceta(x.motivo) : s === "lista" && x.rescate ? TEXTOS.rescate : null;
+  // «Pedir otra versión» falló y quedó el borrador de antes: se dice por qué (sin repetirlo si ya está en `msg`).
+  const fallo = textoOtraVersionFallo(x);
   return (
     <li className="rounded-2xl bg-superficie-2 p-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -126,6 +167,7 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
         </div>
       </div>
       {detalle && <p className="mt-2 text-lg">{detalle}</p>}
+      {fallo && fallo !== msg && <p className="mt-2 rounded-2xl bg-acento-suave px-3 py-2 text-lg font-bold">{fallo}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {botones.includes("revisar") && (
           <Boton variante="primario" disabled={ocupado} onClick={revisar}>
@@ -137,8 +179,8 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
             {TEXTOS.revisarIgual}
           </Boton>
         )}
-        {botones.includes("otra_version") && (
-          <Boton disabled={ocupado} onClick={() => procesar(true)}>
+        {botones.includes("otra_version") && !pidiendoIgual && (
+          <Boton disabled={ocupado} onClick={pedirOtra}>
             {TEXTOS.otraVersion}
           </Boton>
         )}
@@ -147,7 +189,7 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
             {TEXTOS.intentar}
           </Boton>
         )}
-        {x.estado !== "error" || x.error?.codigo !== "audio_perdido" ? (
+        {x.error?.codigo !== "audio_perdido" ? (
           <BotonEscuchar dictadoId={x.id} etiqueta="▶️" titulo={TEXTOS.escucharAudio} claseBoton="bg-superficie" enLinea />
         ) : null}
         {!confirmar && (
@@ -156,6 +198,11 @@ function FilaDictado({ x, d, alRevisar }: { x: DictadoPublico; d: EstadoDictados
           </Boton>
         )}
       </div>
+      {pidiendoIgual && (
+        <div className="mt-3">
+          <ConfirmarOtraIgual ocupado={ocupado} alNo={() => setConfirmarOtra(false)} alSi={() => procesar(true)} />
+        </div>
+      )}
       {confirmar && (
         <div className="mt-3">
           <ConfirmarDescartar

@@ -9,7 +9,7 @@ import { quitarRecetaDelPlan } from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
 import { subirFoto } from "@/lib/datos/nube";
 import * as cliente from "@/lib/dictados/cliente";
-import { TEXTOS, conAprox, fechaDictado, sePuedeRevisar } from "@/lib/dictados/textos";
+import { TEXTOS, conAprox, fechaDictado, otraVersionDaLoMismo, otraVersionFallo, sePuedeRevisar, textoOtraVersionFallo } from "@/lib/dictados/textos";
 import type { DictadoPublico } from "@/lib/dictados/tipos";
 import { borradorVacio, borrarRevision, guardarRevision, leerRevision, limpiarReceta } from "@/lib/dictados/revision";
 import { useDictados } from "@/lib/dictados/useDictados";
@@ -55,9 +55,10 @@ export default function VistaRecetas() {
     setEditando({ revision: d });
   };
   // «Pedir otra versión» desde la revisión (borrador de rescate): se cierra y se ve cómo va en 🎙️ Dictadas.
+  // Si falló al tiro (p. ej. sin la clave de Gemini), la revisión sigue abierta y dice por qué.
   const otraVersion = async (id: string) => {
     const r = await dictados.procesar(id, true);
-    if (r) {
+    if (r && !otraVersionFallo(r)) {
       setEditando(null);
       setVerDictados(true);
     }
@@ -441,17 +442,24 @@ function EditorReceta({
     }
   };
 
-  /** Borrador de rescate: pedirle a Gemini otra versión (si se corrigió algo aquí, se pregunta antes). */
+  /**
+   * Borrador de rescate: pedirle a Gemini otra versión. Se pregunta antes si se corrigió algo aquí o si la
+   * anterior falló por el audio mismo (va a dar lo mismo).
+   */
+  const corregido = inicio.seguiste || JSON.stringify(r) !== JSON.stringify(inicio.r);
+  const daLoMismo = otraVersionDaLoMismo(dictado);
   const pedirOtraVersion = async (confirmado = false) => {
     if (!dictado || !alOtraVersion) return;
-    if (!confirmado && (inicio.seguiste || JSON.stringify(r) !== JSON.stringify(inicio.r))) return setConfirmarOtra(true);
+    if (!confirmado && (corregido || daLoMismo)) return setConfirmarOtra(true);
     setConfirmarOtra(false);
     setOcupado(true);
     setError(null);
     try {
       const d = await alOtraVersion(dictado.id);
-      if (d) borrarRevision(dictado.id);
-      else setError(TEXTOS.yaNoExiste);
+      if (!d) setError(TEXTOS.yaNoExiste);
+      // Falló al tiro: no se pidió nada y lo corregido aquí sigue.
+      else if (otraVersionFallo(d)) setError(textoOtraVersionFallo(d));
+      else borrarRevision(dictado.id);
     } catch (e) {
       setError(mensajeNube(e));
     } finally {
@@ -471,11 +479,14 @@ function EditorReceta({
       {avisoError}
       {confirmarOtra && (
         <div className="flex basis-full flex-wrap items-center gap-2 rounded-2xl bg-acento-suave p-3">
-          <span className="text-base font-bold">{TEXTOS.confirmarOtraVersion}</span>
-          <Boton variante="primario" disabled={ocupado} onClick={() => void pedirOtraVersion(true)}>
-            {TEXTOS.siOtraVersion}
+          <span className="text-base font-bold">
+            {daLoMismo ? (corregido ? TEXTOS.confirmarOtraIgualCorregida : TEXTOS.confirmarOtraIgual) : TEXTOS.confirmarOtraVersion}
+          </span>
+          {/* Si va a dar lo mismo, el botón destacado es «No». */}
+          <Boton variante={daLoMismo ? "suave" : "primario"} disabled={ocupado} onClick={() => void pedirOtraVersion(true)}>
+            {daLoMismo ? TEXTOS.siOtraIgual : TEXTOS.siOtraVersion}
           </Boton>
-          <Boton variante="fantasma" onClick={() => setConfirmarOtra(false)}>
+          <Boton variante={daLoMismo ? "primario" : "fantasma"} onClick={() => setConfirmarOtra(false)}>
             {TEXTOS.no}
           </Boton>
         </div>
@@ -553,6 +564,11 @@ function EditorReceta({
         {dictado && (
           <div className="space-y-3 rounded-2xl bg-acento-suave p-4 text-lg">
             {inicio.seguiste && <p className="font-bold">{TEXTOS.seguisteDondeQuedaste}</p>}
+            {otraVersionFallo(dictado) && (
+              <p role="alert" className="rounded-2xl bg-superficie px-3 py-2 font-bold">
+                {textoOtraVersionFallo(dictado)}
+              </p>
+            )}
             <p>{TEXTOS.recuadroRevisar}</p>
             {!!dictado.avisos?.length && (
               <ul className="list-disc space-y-1 pl-6">

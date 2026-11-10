@@ -22,7 +22,7 @@ import { reinicioCuota } from "../../servidor/gemini.ts";
 import { AVISO_RESCATE } from "../../servidor/receta-ia/normalizar-receta.ts";
 import { MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, RECETA_NO_GUARDADA } from "../../lib/dictados/tipos.ts";
 import { simuladorGemini, type Simulador } from "./mock-gemini.mts";
-import { cabecera, conDuracion, conFfmpeg, grabadoChrome } from "./audios.ts";
+import { cabecera, conDuracion, conFfmpeg, conFfmpegDesplazados, grabadoChrome } from "./audios.ts";
 import { CASOS } from "./casos.ts";
 import { caso, info, ok, seccion, terminar } from "./arnes.ts";
 
@@ -862,6 +862,86 @@ await caso("D42", async () => {
   r = await put(cabecera("ogg", MAX_AUDIO_SIN_DURACION, 23));
   ok("D42 sin duración y justo 1,8 MB → 201", r.status === 201, r.datos);
   ok("D42 nada llegó a Gemini", sim.generar().length === 0);
+  await limpiar(token);
+});
+
+seccion("D43 Lo que dura el audio, no dónde termina; con ?segundos los bytes son sólo un tope");
+await caso("D43", async () => {
+  antes();
+  dispararActivo = false;
+  const put = (bytes: Uint8Array, q = "") => pedir("PUT", `/api/dictados/${nuevoId()}${q ? `?${q}` : ""}`, { token, cuerpo: bytes });
+  const largo = (r: { status: number; datos: O }) => r.status === 413 && /más de 15 minutos/.test(r.datos.error);
+  // 60 s que parten en 1200 s (cortado de una transmisión, ffmpeg -output_ts_offset): antes daba 1260 s → 413.
+  let r = await put(conDuracion("webm", 60, 300_000, { inicio: 1200 }), "segundos=60&origen=grabacion");
+  ok("D43 WebM de 60 s que parte en 1200 s, con ?segundos=60 → 201 con 60 s", r.status === 201 && r.datos.dictado.segundos === 60, r.datos);
+  r = await put(conDuracion("ogg", 60, 300_000, { inicio: 1200 }), "origen=archivo&archivo=nota.opus");
+  ok("D43 .opus de 60 s que parte en 1200 s, sin ?segundos → 201 con segundos = 60 (de los bytes)", r.status === 201 && r.datos.dictado.segundos === 60, r.datos);
+  r = await put(conDuracion("mp4", 60, 300_000, { inicio: 1200 }), "origen=archivo");
+  ok("D43 m4a de 60 s con un hueco inicial de 1200 s, sin ?segundos → 201 con 60 s", r.status === 201 && r.datos.dictado.segundos === 60, r.datos);
+  r = await put(conDuracion("webm", 960, 300_000, { inicio: 1200 }), "origen=grabacion");
+  ok("D43 … pero 16 min que parten en 1200 s siguen siendo más de 15 → 413", largo(r), r.datos);
+  // Con ?segundos= (que ya pasó el tope de 900), los bytes sólo atajan lo claramente más largo: 900 s + 10 %.
+  r = await put(conDuracion("ogg", 950, 500_000), "segundos=880");
+  ok("D43 el equipo dice 880 s y los bytes 950 s → 201 con 880 s (tope de 990 s con ?segundos)", r.status === 201 && r.datos.dictado.segundos === 880, r.datos);
+  r = await put(conDuracion("ogg", 950, 500_000));
+  ok("D43 … sin ?segundos, 950 s de los bytes → 413 (margen de 10 s)", largo(r), r.datos);
+  r = await put(conDuracion("ogg", 995, 500_000), "segundos=880");
+  ok("D43 … y 995 s de los bytes, aunque el equipo diga 880 → 413", largo(r), r.datos);
+  const reales = conFfmpegDesplazados(60, 1200);
+  if (!reales) info("sin ffmpeg: sólo contenedores mínimos");
+  else
+    for (const a of reales) {
+      r = await put(a.bytes, `segundos=60&origen=archivo&archivo=${a.nombre}`);
+      ok(`D43 ${a.nombre} (60 s) con ?segundos=60 → 201`, r.status === 201 && r.datos.dictado.segundos === 60, [a.bytes.byteLength, r.status, r.datos]);
+    }
+  ok("D43 nada llegó a Gemini", sim.generar().length === 0);
+  await limpiar(token);
+});
+
+seccion("D44 Descartar un borrador cuya receta ya está en la colección, aunque el POST /guardado no llegó");
+await caso("D44", async () => {
+  antes();
+  const { id, d } = await dictarYEsperar(token, WEBM);
+  await ponerRecetas("fam1", [d!.borrador]); // llegó el PUT de la colección; el POST /guardado, no
+  ok("D44 la receta está en la colección y todavía no hay .texto", d!.borrador.id === `rec_${id}` && !(await existe(claveTexto("fam1", id))));
+  // La pared tenía la revisión abierta y la descarta: no puede borrar el audio de una receta guardada.
+  let r = await pedir("DELETE", `/api/dictados/${id}?borrador=1`, { token: tokenPared });
+  ok("D44 DELETE ?borrador=1 → 200 {ok, guardada: true}", r.status === 200 && r.datos.ok === true && r.datos.guardada === true, r.datos);
+  ok("D44 … no borra el audio", await existe(claveAudio("fam1", id)));
+  const t = (await almacenAudios().get(claveTexto("fam1", id), { type: "json" })) as O | null;
+  ok("D44 … completa el guardado: queda el .texto con lo que se dijo", t?.transcripcion === d!.transcripcion && t?.recetaId === `rec_${id}` && t?.modelo === d!.modelo && t?.segundos === 95 && t?.fecha === d!.creado, t);
+  ok("D44 … y el registro sale de la lista", !(await leerDictado("fam1", id)) && !(await pedir("GET", "/api/dictados", { token })).datos.dictados.some((x: O) => x.id === id));
+  r = await pedir("GET", `/api/dictados/${id}/audio`, { token });
+  ok("D44 el audio de la receta se sigue escuchando", r.status === 200 && sha(r.datos) === sha(WEBM));
+  r = await pedir("GET", `/api/dictados/${id}/texto`, { token });
+  ok("D44 … y lo que se dijo", r.status === 200 && r.datos.transcripcion === d!.transcripcion, r.datos);
+  r = await pedir("POST", `/api/dictados/${id}/guardado`, { token, cuerpo: { recetaId: `rec_${id}` } });
+  ok("D44 el POST /guardado que llega después → 200", r.status === 200 && r.datos.ok === true, r.datos);
+  const otra = await subir(token, WEBM, {}, id);
+  ok("D44 volver a subir ese id → 409 ya_guardada", otra.status === 409 && otra.datos.motivo === "ya_guardada", otra.datos);
+  r = await pedir("DELETE", `/api/dictados/${id}?borrador=1`, { token });
+  ok("D44 repetido → 200 {guardada: true} y el audio sigue", r.status === 200 && r.datos.guardada === true && (await existe(claveAudio("fam1", id))), r.datos);
+
+  // Mientras se pide otra versión, lo que se dijo está en `anterior`: es eso lo que queda.
+  dispararActivo = true;
+  const b = await dictarYEsperar(token, cabecera("webm", 3000, 16));
+  dispararActivo = false;
+  r = await pedir("POST", `/api/dictados/${b.id}/procesar`, { token, cuerpo: { otraVez: true } });
+  ok("D44 «Pedir otra versión» deja el borrador en `anterior`", r.status === 202 && (await leerDictado("fam1", b.id))?.d.anterior?.transcripcion === b.d!.transcripcion, r.datos);
+  await ponerRecetas("fam1", [d!.borrador, b.d!.borrador]);
+  r = await pedir("DELETE", `/api/dictados/${b.id}?borrador=1`, { token });
+  const tb = (await almacenAudios().get(claveTexto("fam1", b.id), { type: "json" })) as O | null;
+  ok("D44 … descartarlo con la receta en la colección → guardada, con lo que se dijo antes", r.datos.guardada === true && (await existe(claveAudio("fam1", b.id))) && tb?.transcripcion === b.d!.transcripcion && !(await leerDictado("fam1", b.id)), [r.datos, tb]);
+
+  // La receta de OTRO dictado en la colección no cuenta: el borrador se borra entero.
+  dispararActivo = true;
+  const c = await dictarYEsperar(token, cabecera("webm", 3000, 17));
+  r = await pedir("DELETE", `/api/dictados/${c.id}?borrador=1`, { token });
+  ok("D44 un borrador cuya receta no está en la colección se borra entero", r.status === 200 && !r.datos.guardada && !(await existe(claveAudio("fam1", c.id))) && !(await leerDictado("fam1", c.id)), r.datos);
+  // Sin ?borrador=1 (quitar el audio de la receta) se borra aunque la receta esté.
+  for (const x of [id, b.id]) await pedir("DELETE", `/api/dictados/${x}`, { token });
+  ok("D44 sin ?borrador=1 → borra el audio y el texto", !(await existe(claveAudio("fam1", id))) && !(await existe(claveTexto("fam1", id))) && !(await existe(claveAudio("fam1", b.id))));
+  await ponerRecetas("fam1", []);
   await limpiar(token);
 });
 

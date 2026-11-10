@@ -5,7 +5,8 @@
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/navegador-lib.mts [--puerto 8904]
 // Prueba: MediaRecorder (tipo, pausa, seguir, segundos sin pausas, trozos juntos con cabecera, nivel,
 // aviso de silencio, pausa al ocultar la app, permiso denegado), IndexedDB real (también después de
-// recargar), duracionArchivo, y subir → Gemini → bajar el audio → descartar desde el navegador, sin red y de vuelta.
+// recargar), duracionArchivo, subir → Gemini → bajar el audio → descartar desde el navegador, sin red y de
+// vuelta, y el aviso de una «otra versión» que falló y revisar sin red (lib/dictados/textos.ts).
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -277,6 +278,60 @@ await caso("flujo", async () => {
     if (s.ok) await c.descartarDictado(x.id);
     return { s: s.ok ? "ok" : s, quedan };`);
   ok("vuelve internet: sube y la copia se borra", vuelta.s === "ok" && vuelta.quedan === 0, vuelta);
+});
+
+seccion("«Pedir otra versión» que falla y «Revisar receta» sin red (lib/dictados/textos en Chrome; revisión 3)");
+await caso("otra versión y sin red", async () => {
+  sim.cola.length = 0;
+  sim.guion("*", ["max_tokens", "max_tokens"]); // Gemini corta dos veces: borrador de rescate
+  const r = await en<O>(`
+    const c = await import("/mod/lib/dictados/cliente");
+    const opus = await (await fetch("/archivos/PTT-20261109-WA0001.opus")).blob();
+    const x = c.nuevoPendiente(new File([opus], "PTT-20261109-WA0001.opus", { type: "" }), { origen: "archivo", archivo: "PTT-20261109-WA0001.opus", segundos: 20 });
+    const s = await c.subirPendiente(x, { esperas: [0, 0] });
+    return { id: x.id, ok: s.ok };`);
+  ok("sube el .opus", r.ok, r);
+  while (corridas.length) await corridas.shift();
+  sim.guion("*", ["safety"]); // la otra versión: Gemini no quiere procesar el audio
+  const pedido = await en<O>(`
+    const c = await import("/mod/lib/dictados/cliente");
+    const t = await import("/mod/lib/dictados/textos");
+    const antes = await c.leerDictado(${JSON.stringify(r.id)});
+    const d = await c.procesarDictado(${JSON.stringify(r.id)}, true);
+    return { rescate: antes?.rescate, avisoAntes: t.textoOtraVersionFallo(antes), estado: d?.estado };`);
+  ok("borrador de rescate sin aviso; pedir otra versión → en cola", pedido.rescate === true && pedido.avisoAntes === null && pedido.estado === "subido", pedido);
+  while (corridas.length) await corridas.shift();
+  const v = await en<O>(`
+    const c = await import("/mod/lib/dictados/cliente");
+    const t = await import("/mod/lib/dictados/textos");
+    const d = await c.leerDictado(${JSON.stringify(r.id)});
+    window.__enVentana = d; // lo que la ventana de dictar tiene en memoria
+    return { estado: d?.estado, codigo: d?.error?.codigo, rescate: d?.rescate, borrador: !!d?.borrador, fallo: t.otraVersionFallo(d), aviso: t.textoOtraVersionFallo(d), daLoMismo: t.otraVersionDaLoMismo(d), botones: t.botonesDictado(d) };`);
+  ok("falló: «listo» con el borrador de antes y el error bloqueado", v.estado === "listo" && v.codigo === "bloqueado" && v.rescate === true && v.borrador && v.fallo, v);
+  ok("…«No se pudo hacer otra versión: Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo…»", /^No se pudo hacer otra versión: Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo\. Quedó la versión de antes\.$/.test(v.aviso ?? ""), v.aviso);
+  ok("…se advierte antes de pedirla de nuevo (sigue el botón, con la pregunta)", v.daLoMismo && JSON.stringify(v.botones) === '["revisar","otra_version"]', v);
+  await contexto.setOffline(true);
+  const sinRed = await en<O>(`
+    const c = await import("/mod/lib/dictados/cliente");
+    const t = await import("/mod/lib/dictados/textos");
+    try {
+      await c.leerDictado(${JSON.stringify(r.id)});
+      return { leyo: true };
+    } catch (e) {
+      return { nombre: e?.constructor?.name, abre: t.revisarSinRed(e, window.__enVentana), sinBorrador: t.revisarSinRed(e, { ...window.__enVentana, borrador: undefined }) };
+    }`);
+  await contexto.setOffline(false);
+  ok("sin red: leerDictado lanza SinConexion y la ventana abre igual el borrador que tiene", sinRed.nombre === "SinConexion" && sinRed.abre === true, sinRed);
+  ok("…pero no si en la ventana no hay borrador", sinRed.sinBorrador === false, sinRed);
+  const fin = await en<O>(`
+    const c = await import("/mod/lib/dictados/cliente");
+    const t = await import("/mod/lib/dictados/textos");
+    let e = null;
+    try { await c.procesarDictado("MAL"); } catch (x) { e = x; }
+    const res = { nombre: e?.constructor?.name, abre: t.revisarSinRed(e, window.__enVentana) };
+    await c.descartarBorrador(${JSON.stringify(r.id)});
+    return res;`);
+  ok("con la nube respondiendo que no (400), no se abre", fin.nombre === "RechazoDictado" && fin.abre === false, fin);
 });
 
 seccion("Permiso del micrófono denegado");

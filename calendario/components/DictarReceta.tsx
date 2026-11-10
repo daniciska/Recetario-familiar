@@ -33,9 +33,12 @@ import {
   botonesDictado,
   mensajeError,
   mmss,
+  otraVersionDaLoMismo,
+  revisarSinRed,
   sePuedeRevisar,
   situacion,
   textoMicrofono,
+  textoOtraVersionFallo,
   vistaAvance,
   type Situacion,
   type SubidaVista,
@@ -124,6 +127,8 @@ export default function DictarReceta({
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmarDescarte, setConfirmarDescarte] = useState(false);
+  /** «Pedir otra versión» después de una que falló por el audio mismo: se advierte que va a dar lo mismo. */
+  const [confirmarOtra, setConfirmarOtra] = useState(false);
 
   const vivo = useRef(true);
   const alCambiarRef = useRef(alCambiar);
@@ -316,6 +321,7 @@ export default function DictarReceta({
   const procesar = async (otraVez: boolean) => {
     if (!dictado) return;
     setMsg(null);
+    setConfirmarOtra(false);
     setOcupado(true);
     try {
       const d = await cliente.procesarDictado(dictado.id, otraVez);
@@ -330,9 +336,15 @@ export default function DictarReceta({
     }
   };
 
+  /** «Pedir otra versión»: si la anterior falló por el audio mismo, primero se advierte que va a dar lo mismo. */
+  const pedirOtra = () => (otraVersionDaLoMismo(dictado) ? setConfirmarOtra(true) : void procesar(true));
+  // Si mientras tanto el dictado cambió (otro equipo pidió otra versión), la pregunta ya no corre.
+  const pidiendoIgual = confirmarOtra && otraVersionDaLoMismo(dictado);
+
   /**
-   * Siempre con el dictado recién pedido: desde otro equipo pueden haber pedido otra versión (queda en cola,
-   * sin borrador). Sólo se abre la revisión con un «listo» que trae borrador; si no, se muestra cómo va.
+   * Con el dictado recién pedido: desde otro equipo pueden haber pedido otra versión (queda en cola, sin
+   * borrador). Sólo se abre la revisión con un «listo» que trae borrador; si no, se muestra cómo va. Sin red se
+   * abre el borrador que ya está en la ventana (se corrige sin red y queda en el equipo).
    */
   const revisar = async () => {
     if (!dictado) return;
@@ -349,7 +361,9 @@ export default function DictarReceta({
         alCambiarRef.current?.();
       }
     } catch (e) {
-      if (vivo.current) setMsg(mensajeNube(e));
+      if (!vivo.current) return;
+      if (dictado && revisarSinRed(e, dictado)) alRevisar(dictado);
+      else setMsg(mensajeNube(e));
     } finally {
       if (vivo.current) setOcupado(false);
     }
@@ -475,9 +489,12 @@ export default function DictarReceta({
           esperandoCierre={cerrarAlGuardar}
           msg={msg}
           confirmarDescarte={confirmarDescarte}
+          confirmarOtra={pidiendoIgual}
           ocupado={ocupado}
           alSiDescartar={() => void descartar()}
           alNoDescartar={() => setConfirmarDescarte(false)}
+          alSiOtra={() => void procesar(true)}
+          alNoOtra={() => setConfirmarOtra(false)}
         />
       )}
     </Modal>
@@ -536,8 +553,8 @@ export default function DictarReceta({
     }
     if (!dictado) return [copiaBtn, cerrarBtn];
     const b = botonesDictado(dictado);
-    const otraBtn = (
-      <Boton key="otra" disabled={ocupado} onClick={() => void procesar(true)}>
+    const otraBtn = !pidiendoIgual && (
+      <Boton key="otra" disabled={ocupado} onClick={pedirOtra}>
         {TEXTOS.otraVersion}
       </Boton>
     );
@@ -745,9 +762,12 @@ function Avance({
   esperandoCierre,
   msg,
   confirmarDescarte,
+  confirmarOtra,
   ocupado,
   alSiDescartar,
   alNoDescartar,
+  alSiOtra,
+  alNoOtra,
 }: {
   pendiente: PendienteLocal | null;
   enEquipo: boolean | null;
@@ -758,14 +778,19 @@ function Avance({
   esperandoCierre: boolean;
   msg: string | null;
   confirmarDescarte: boolean;
+  confirmarOtra: boolean;
   ocupado: boolean;
   alSiDescartar: () => void;
   alNoDescartar: () => void;
+  alSiOtra: () => void;
+  alNoOtra: () => void;
 }) {
   const enNube = subida?.e === "ok" || !!dictado;
   const s = dictado ? situacion(dictado) : null;
   const escribiendo = dictado && (dictado.estado === "subido" || dictado.estado === "procesando");
   const lista = dictado?.estado === "listo" && dictado.esReceta !== false;
+  // «Pedir otra versión» falló: quedó el borrador de antes, y se dice por qué (no basta con «¡Lista!»).
+  const fallo = textoOtraVersionFallo(dictado);
   return (
     <div className="space-y-4 text-lg">
       {corte && <p className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">{corte === "maximo" ? TEXTOS.maximoAlcanzado : TEXTOS.cortada}</p>}
@@ -788,6 +813,11 @@ function Avance({
         )}
       </ol>
 
+      {fallo && (
+        <p role="alert" className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">
+          {fallo}
+        </p>
+      )}
       {lista && dictado?.rescate && <p className="rounded-2xl bg-acento-suave px-4 py-3">{TEXTOS.rescate}</p>}
       {vista.sinConexion && <p className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">{vista.sinConexion}</p>}
       {subida?.e === "rechazo" && (
@@ -813,6 +843,19 @@ function Avance({
         <p role="alert" className="font-bold">
           {msg}
         </p>
+      )}
+      {confirmarOtra && (
+        <div className="rounded-2xl bg-acento-suave p-4">
+          <p className="mb-3 font-bold">{TEXTOS.confirmarOtraIgual}</p>
+          <div className="flex flex-wrap gap-2">
+            <Boton disabled={ocupado} onClick={alSiOtra}>
+              {TEXTOS.siOtraIgual}
+            </Boton>
+            <Boton variante="primario" onClick={alNoOtra}>
+              {TEXTOS.no}
+            </Boton>
+          </div>
+        </div>
       )}
       {confirmarDescarte && (
         <div className="rounded-2xl bg-red-600/10 p-4">

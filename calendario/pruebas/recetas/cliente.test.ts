@@ -14,6 +14,7 @@ import { RechazoDictado, SinNube } from "../../lib/dictados/cliente.ts";
 import * as pendientes from "../../lib/dictados/pendientes.ts";
 import { CADA_LOCALES_MS, CADA_MS, ESPERA_SUBIDO_MS, MAX_INTENTOS_SOLOS, debeReintentar, porLimpiar, proximaRevision, recetasConfirmadas, subeSolo, yaGuardados } from "../../lib/dictados/reglas.ts";
 import { crearMotor } from "../../lib/dictados/motor.ts";
+import { otraVersionDaLoMismo, otraVersionFallo, revisarSinRed, textoOtraVersionFallo } from "../../lib/dictados/textos.ts";
 import { RepositorioNube } from "../../lib/datos/repositorioNube.ts";
 import type { Receta } from "../../lib/datos/tipos.ts";
 import { ID_DICTADO, MAX_PENDIENTES, MAX_SEGUNDOS, type CodigoError, type DictadoPublico } from "../../lib/dictados/tipos.ts";
@@ -438,6 +439,74 @@ await caso("clave", async () => {
   await cliente.bajarAudio(p.id).catch((x) => (e = x));
   ok("…y al bajar el audio", e instanceof AccesoRevocado);
   conectar(equipo.token, equipo.equipoId);
+});
+
+seccion("«Pedir otra versión» que falla y «Revisar receta» sin red (revisión 3, pendientes 2 y 3)");
+await caso("otra versión fallida", async () => {
+  sim.cola.length = 0;
+  const p = cliente.nuevoPendiente(blobDe(WEBM), { origen: "grabacion", segundos: 30 });
+  await pendientes.guardar(p);
+  sim.guion("*", ["max_tokens", "max_tokens"]); // Gemini corta dos veces: sólo se rescata lo que se dijo
+  const subida = await cliente.subirPendiente(p, SIN_ESPERAS);
+  ok("sube", subida.ok, subida);
+  await esperar();
+  const rescate = await cliente.leerDictado(p.id);
+  ok("borrador de rescate, listo y sin aviso de otra versión", rescate?.estado === "listo" && rescate.rescate === true && !!rescate.borrador && !otraVersionFallo(rescate) && textoOtraVersionFallo(rescate) === null, rescate);
+
+  // La cuota del día se acaba en los dos modelos: vuelve el borrador de antes, con el error (servidor/dictados.ts, conError).
+  sim.guion("*", ["429dia", "429dia"]);
+  const enCola = await cliente.procesarDictado(p.id, true);
+  ok("pedir otra versión → en cola (202)", enCola?.estado === "subido" && !enCola.error, enCola);
+  await esperar();
+  const cuota = await cliente.leerDictado(p.id);
+  ok("cuota del día: «listo» con el borrador de antes y el error", cuota?.estado === "listo" && cuota.error?.codigo === "cuota_dia" && cuota.rescate === true && cuota.borrador?.nombre === rescate?.borrador?.nombre, cuota);
+  const tCuota = textoOtraVersionFallo(cuota) ?? "";
+  ok("…la app dice que no se pudo y cuándo se puede pedir de nuevo", /^No se pudo hacer otra versión: Se usó la cuota gratis de Gemini de hoy\. Puedes pedirla de nuevo después de las \d{2}:\d{2}\. Quedó la versión de antes\.$/.test(tCuota), tCuota);
+  ok("…sin advertir que da lo mismo (después de esa hora sí se puede)", !otraVersionDaLoMismo(cuota));
+  ok("…y de verdad nadie la vuelve a pedir sola, aunque pase la hora", !!cuota && !debeReintentar(cuota, (cuota.error?.proximo ?? 0) + 60_000, "ok"));
+  const fila = (await cliente.listarDictados()).dictados.find((x) => x.id === p.id);
+  ok("la lista de 🎙️ Dictadas trae el error (la fila lo muestra)", otraVersionFallo(fila) && textoOtraVersionFallo(fila) === tCuota, fila);
+
+  // Gemini no quiere procesar el audio (SAFETY): otra vez da lo mismo.
+  sim.guion("*", ["safety"]);
+  const n0 = sim.generar().length;
+  await cliente.procesarDictado(p.id, true);
+  await esperar();
+  const bloqueada = await cliente.leerDictado(p.id);
+  ok("bloqueado: vuelve el de antes con el error", bloqueada?.estado === "listo" && bloqueada.error?.codigo === "bloqueado" && bloqueada.rescate === true && sim.generar().length === n0 + 1, bloqueada);
+  ok("…y se advierte que pedirla de nuevo va a pasar lo mismo", otraVersionDaLoMismo(bloqueada) && /va a pasar lo mismo/.test(textoOtraVersionFallo(bloqueada) ?? ""), textoOtraVersionFallo(bloqueada));
+
+  // Sin la clave, la nube responde al tiro el borrador con el error (y no lo anota): la pantalla tiene que decirlo con esa respuesta.
+  const clave = env.GEMINI_API_KEY;
+  delete env.GEMINI_API_KEY;
+  const sinClave = await cliente.procesarDictado(p.id, true);
+  env.GEMINI_API_KEY = clave;
+  ok("sin la clave: responde al tiro «listo» con el borrador y el error sin_clave", sinClave?.estado === "listo" && sinClave.error?.codigo === "sin_clave" && !!sinClave.borrador, sinClave);
+  igual("…y la app lo dice", textoOtraVersionFallo(sinClave), "No se pudo hacer otra versión: Falta conectar Gemini (la clave GEMINI_API_KEY en Netlify). Quedó la versión de antes.");
+
+  // Una otra versión que resulta borra el aviso.
+  sim.guion("*", ["ok"]);
+  await cliente.procesarDictado(p.id, true);
+  await esperar();
+  const bien = await cliente.leerDictado(p.id);
+  ok("una versión completa quita el error y el rescate", bien?.estado === "listo" && !bien.error && !bien.rescate && !!bien.borrador && textoOtraVersionFallo(bien) === null, bien);
+
+  // «Revisar receta» en la ventana de dictar: sin red, el borrador que ya está en la ventana se abre igual.
+  cortes = 1;
+  let e: unknown;
+  await cliente.leerDictado(p.id).catch((x) => (e = x));
+  ok("sin red, leerDictado → SinConexion", e instanceof SinConexion, e);
+  ok("…y la ventana abre igual el borrador que ya tiene", revisarSinRed(e, bien));
+  ok("…pero no el de la subida (sin borrador) ni uno en cola", !revisarSinRed(e, subida.ok ? subida.dictado : null) && !revisarSinRed(e, enCola));
+  e = undefined;
+  await cliente.leerDictado("MAL").catch((x) => (e = x));
+  ok("si la nube respondió que no (400), no se abre", e instanceof RechazoDictado && !revisarSinRed(e, bien), e);
+  e = undefined;
+  conectar(`fcli.${equipo.equipoId}.secretoquenoes`, equipo.equipoId);
+  await cliente.leerDictado(p.id).catch((x) => (e = x));
+  conectar(equipo.token, equipo.equipoId);
+  ok("…ni con el equipo revocado (AccesoRevocado)", e instanceof AccesoRevocado && !revisarSinRed(e, bien), e);
+  await cliente.descartarBorrador(p.id);
 });
 
 

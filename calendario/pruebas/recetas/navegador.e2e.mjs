@@ -85,7 +85,7 @@ ff("-f", "lavfi", "-i", "sine=frequency=330:duration=20", "-ac", "1", "-c:a", "l
 const sim = await simuladorGemini({ clave: CLAVE });
 info(`simulador de Gemini en ${sim.url}`);
 const caso_ = (n) => CASOS.find((c) => c.id.startsWith(n)).esperado;
-const PEBRE = caso_("05"), POSTRE = caso_("03"), CALZONES = caso_("10"), TALLARINES = caso_("06"), PASTEL = caso_("01");
+const PEBRE = caso_("05"), POSTRE = caso_("03"), CALZONES = caso_("10"), TALLARINES = caso_("06"), PASTEL = caso_("01"), CAZUELA = caso_("04");
 
 let dev = null;
 let logDev = "";
@@ -811,6 +811,113 @@ try {
     }
   });
   await deCero(tablet); // lo que sigue parte sin restos de esta sección
+
+  // ---------------------------------------------------------------------------------------------
+  seccion("Revisión 3: «Pedir otra versión» que falla y «Revisar receta» sin red");
+  const descartarEnNube = (id) => api(`/api/dictados/${id}?borrador=1`, { token: familia.token, metodo: "DELETE" });
+  const nuevoEnNube = async (antes) => [...(await idsNube())].find((x) => !antes.has(x)) ?? "";
+  const NO_PEDIDA = /Lo más seguro es que vuelva a pasar lo mismo/;
+
+  await caso("otra versión que falla: el aviso en la ventana, en 🎙️ Dictadas y en la revisión; si da lo mismo, pregunta antes (pendiente 2)", async () => {
+    const p = tablet.p;
+    await sinNadaEnCamino();
+    await deCero(tablet);
+    const antes = await idsNube();
+    await subirConGuion(["max_tokens", "max_tokens"]); // borrador de rescate: ofrece «Pedir otra versión»
+    const d = dialogo(p);
+    ok("parte de un borrador de rescate con «Pedir otra versión»", (await ver(d.getByText(/Gemini no alcanzó a ordenar esta receta/), 30_000)) && (await ver(d.getByRole("button", { name: "Pedir otra versión" }), 1000)), await texto(d));
+    const id = await nuevoEnNube(antes);
+    // 1) Se acabó la cuota del día en los dos modelos: vuelve el borrador de antes, con el error.
+    sim.guion("*", ["429dia", "429dia"]);
+    await d.getByRole("button", { name: "Pedir otra versión" }).click();
+    const avisoCuota = /No se pudo hacer otra versión: Se usó la cuota gratis de Gemini de hoy\. Puedes pedirla de nuevo después de las \d{2}:\d{2}\. Quedó la versión de antes\./;
+    ok("ventana: «No se pudo hacer otra versión: Se usó la cuota… Puedes pedirla de nuevo después de las HH:MM…»", await ver(d.getByText(avisoCuota), 30_000), await texto(d));
+    ok("…sigue el borrador de antes (✅ ¡Lista!, el aviso del rescate y «Revisar receta»)", (await texto(d)).includes("✅ ¡Lista!") && (await ver(d.getByText(/Gemini no alcanzó a ordenar esta receta/), 1000)) && (await ver(d.getByRole("button", { name: "Revisar receta" }), 1000)), await texto(d));
+    ok("…y no promete que se reintenta sola", !/se procesa solo|Se vuelve a intentar solo|Puedes cerrar esta ventana/.test(await texto(d)), await texto(d));
+    await foto(p, "tablet-30-otra-version-cuota");
+    // 2) Gemini no quiere procesar el audio (SAFETY). La cuota no daba lo mismo: se pide sin preguntar.
+    sim.guion("*", ["safety"]);
+    const n0 = generados().length;
+    await d.getByRole("button", { name: "Pedir otra versión" }).click();
+    ok("…con la cuota se vuelve a pedir sin preguntar", !(await ver(d.getByText(NO_PEDIDA), 1500)));
+    ok(
+      "ventana: «No se pudo hacer otra versión: Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo…»",
+      await ver(d.getByText(/No se pudo hacer otra versión: Gemini no quiso procesar este audio: si la pides de nuevo, va a pasar lo mismo/), 30_000),
+      await texto(d),
+    );
+    ok("…con un solo pedido a Gemini", generados().length === n0 + 1, generados().length - n0);
+    await foto(p, "tablet-31-otra-version-bloqueada");
+    await d.getByRole("button", { name: "Pedir otra versión" }).click();
+    ok("ventana: pedirla de nuevo primero advierte «Lo más seguro es que vuelva a pasar lo mismo…»", await ver(d.getByText(NO_PEDIDA), 3000), await texto(d));
+    ok("…con «Sí, pedirla igual» y «No», sin pedir nada todavía", (await ver(d.getByRole("button", { name: "Sí, pedirla igual" }), 1000)) && (await ver(d.getByRole("button", { name: "No", exact: true }), 1000)) && generados().length === n0 + 1);
+    await foto(p, "tablet-32-otra-version-da-lo-mismo");
+    await d.getByRole("button", { name: "No", exact: true }).click();
+    ok("«No»: se va la pregunta y vuelve el botón", (await oculto(d.getByText(NO_PEDIDA), 3000)) && (await ver(d.getByRole("button", { name: "Pedir otra versión" }), 1000)));
+    await cerrarDialogo(p);
+    // 3) La fila de 🎙️ Dictadas.
+    await aviso(p).click();
+    const l = dialogo(p);
+    const fila = l.locator("li", { hasText: "No se pudo hacer otra versión" }).first();
+    ok("🎙️ Dictadas: la fila dice «No se pudo hacer otra versión: Gemini no quiso procesar este audio…»", (await ver(fila, 10_000)) && /Gemini no quiso procesar este audio/.test(await texto(fila)), await texto(l));
+    await fila.getByRole("button", { name: "Pedir otra versión" }).click();
+    ok("…«Pedir otra versión» en la fila también pregunta antes", (await ver(fila.getByText(NO_PEDIDA), 3000)) && generados().length === n0 + 1, await texto(fila));
+    await foto(p, "tablet-33-dictadas-otra-version-fallida");
+    await fila.getByRole("button", { name: "No", exact: true }).click();
+    // 4) La revisión.
+    await fila.getByRole("button", { name: "Revisar", exact: true }).click();
+    const e = dialogo(p);
+    ok("revisión: arriba, «No se pudo hacer otra versión: Gemini no quiso…»", await ver(e.getByText(/No se pudo hacer otra versión: Gemini no quiso procesar este audio/), 10_000), await texto(e));
+    await e.getByRole("button", { name: "Pedir otra versión" }).click();
+    ok("revisión: «Pedir otra versión» también pregunta antes", (await ver(e.getByText(NO_PEDIDA), 3000)) && generados().length === n0 + 1, await texto(e));
+    await foto(p, "tablet-34-revisar-otra-version-fallida");
+    // «Sí, pedirla igual», y esta vez Gemini responde: llega la versión completa y el aviso se va.
+    sim.guion("*", [{ respuesta: POSTRE }]);
+    await e.getByRole("button", { name: "Sí, pedirla igual" }).click();
+    ok("…«Sí, pedirla igual» la pide: se cierra la revisión y se abre 🎙️ Dictadas", await ver(dialogo(p).getByText("🎙️ Dictadas"), 10_000), await texto(dialogo(p)));
+    const ya = await hasta(async () => {
+      const x = (await listaDictados(familia.token)).find((y) => y.id === id);
+      return x?.estado === "listo" && !x.error && !x.rescate;
+    }, 40_000);
+    ok("…Gemini manda la versión completa, sin error", ya, (await listaDictados(familia.token)).find((y) => y.id === id));
+    ok("…y la fila ya no dice «No se pudo hacer otra versión»", await oculto(dialogo(p).getByText(/No se pudo hacer otra versión/), 30_000), await texto(dialogo(p)));
+    await dialogo(p).getByRole("button", { name: "Cerrar" }).first().click();
+    await descartarEnNube(id);
+  });
+
+  await caso("«Revisar receta» sin red abre el borrador que ya está en la ventana y lo corregido queda en el equipo (pendiente 3)", async () => {
+    const p = tablet.p;
+    await sinNadaEnCamino();
+    await deCero(tablet);
+    const antes = await idsNube();
+    await subirConGuion([{ respuesta: CAZUELA }]);
+    const d = dialogo(p);
+    ok("«✅ ¡Lista!» en la ventana", await ver(d.getByText("✅ ¡Lista!"), 25_000), await texto(d));
+    const id = await nuevoEnNube(antes);
+    await tablet.c.setOffline(true);
+    await d.getByRole("button", { name: "Revisar receta" }).click();
+    const e = dialogo(p);
+    ok("sin red: se abre «Revisar receta dictada»", await ver(e.getByText("Revisar receta dictada"), 8000), await texto(dialogo(p)));
+    ok("…sin «No hay conexión con la nube»", !(await texto(p.locator("body"))).includes("No hay conexión con la nube"));
+    const nombre = e.getByPlaceholder("Ej.: Pastel de papas");
+    ok("…con el borrador que escribió Gemini", (await nombre.inputValue()) === "Cazuela de ave", await nombre.inputValue());
+    await nombre.fill("Cazuela de la abuela");
+    await foto(p, "tablet-35-revisar-sin-red");
+    await e.getByRole("button", { name: "Después" }).click();
+    await tablet.c.setOffline(false);
+    // Con red: la revisión sigue donde quedó (lo corregido sin red quedó en el equipo).
+    await aviso(p).click();
+    const l = dialogo(p);
+    const fila = l.locator("li", { hasText: "Cazuela de ave" }).first();
+    await ver(fila, 10_000);
+    await fila.getByRole("button", { name: "Revisar", exact: true }).click();
+    const e2 = dialogo(p);
+    ok("con red: «Seguiste donde quedaste.»", await ver(e2.getByText("Seguiste donde quedaste."), 10_000), await texto(e2));
+    ok("…con lo que se corrigió sin red", (await e2.getByPlaceholder("Ej.: Pastel de papas").inputValue()) === "Cazuela de la abuela");
+    await e2.getByRole("button", { name: "Después" }).click();
+    await descartarEnNube(id);
+    await p.evaluate((x) => localStorage.removeItem(`calendario-familiar:revision:${x}`), id);
+  });
+  await deCero(tablet);
 
   // ---------------------------------------------------------------------------------------------
   seccion("Menú con una receta dictada");

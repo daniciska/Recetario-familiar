@@ -9,10 +9,12 @@
 //   almacén "audios" (consistencia fuerte)
 //                                     <familia>/<id>           → los bytes, metadata {mime, mimeReproducir, sha256, segundos, equipo, subido}
 //                                     <familia>/<id>.texto     → {transcripcion, modelo, fecha, segundos, recetaId}: se escribe al guardar
-//                                                                 (sólo si la receta ya está en la colección «recetas»)
+//                                                                 (sólo si la receta ya está en la colección «recetas»; si el
+//                                                                 POST /guardado no llegó, lo completa DELETE ?borrador=1)
 //
 // Duración: el tope de 15 minutos sale de los bytes del audio cuando se puede (gemini.ts, duracionAudio); si
 // no, de `?segundos=` del equipo; y si no hay ninguna, el audio no puede pasar de MAX_AUDIO_SIN_DURACION.
+// Si el equipo mandó `?segundos=`, los bytes son sólo un tope de seguridad, con más margen (TOLERANCIA_CON_EQUIPO).
 //
 // «Pedir otra versión»: el borrador, la transcripción y lo demás quedan en `anterior` mientras Gemini vuelve
 // a escuchar. Si la corrida termina bien, se reemplazan; si falla, vuelven (estado listo, con el `error`).
@@ -50,6 +52,12 @@ import { aRecetaApp, borradorRescate, normalizar, type BorradorReceta } from "./
 export { ID_DICTADO, MAX_AUDIO, MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, MAX_SEGUNDOS };
 /** Margen sobre MAX_SEGUNDOS para la duración que se lee de los bytes (la grabadora corta justo en 900 s). */
 export const TOLERANCIA_SEGUNDOS = 10;
+/**
+ * Con `?segundos=` del equipo (que ya pasó el tope de 900), los bytes sólo atajan un audio claramente más largo:
+ * 900 s + 10 %. Así una lectura del contenedor que se pasa un poco no rechaza un audio bueno con un 413 sin
+ * reintento.
+ */
+export const TOLERANCIA_CON_EQUIPO = 90;
 /** La corrida es dueña del dictado hasta aquí (la función en segundo plano dura hasta 15 min). */
 export const PLAZO_CORRIDA_MS = 14 * 60_000;
 /** Tiempo total para hablar con Gemini en una corrida (reintentos y esperas incluidos). */
@@ -223,8 +231,9 @@ function fechaLarga(isoFecha: string): string | undefined {
  * GET    /api/dictados/:id/texto                        → {transcripcion, modelo, fecha, segundos}
  * POST   /api/dictados/:id/guardado {recetaId}          ya se guardó la receta: queda el texto y el audio
  *                                                       (409 {codigo: RECETA_NO_GUARDADA} si la colección «recetas» no la tiene aún)
- * DELETE /api/dictados/:id?borrador=1                   descartar un borrador; si la receta ya se guardó → {ok, guardada: true}
- *                                                       sin borrar el audio ni lo que se dijo
+ * DELETE /api/dictados/:id?borrador=1                   descartar un borrador; si la receta ya se guardó (.texto, o rec_<id>
+ *                                                       en la colección «recetas») → {ok, guardada: true} sin borrar el audio
+ *                                                       ni lo que se dijo
  * DELETE /api/dictados/:id                              quitar el audio de una receta guardada o borrarla: borra registro, audio y texto
  * POST   /api/dictados/probar                           → {gemini: "ok", modelo} | {gemini: código} (no gasta cuota)
  */
@@ -306,10 +315,12 @@ async function subir(req: Request, s: Sesion, id: string, ahora: number, deps: D
   if (segundosEquipo && segundosEquipo > MAX_SEGUNDOS) return error(MENSAJE_LARGO, 413);
   const tipo = detectarAudio(bytes.subarray(0, 64));
   if (!tipo.ok) return error(tipo.mensaje, 415);
-  // Lo que dicen los bytes manda sobre lo que dice el equipo (que puede no saberlo: WebM de MediaRecorder,
-  // .opus en un navegador que no lo lee). Sin ninguna de las dos, un tope por tamaño.
+  // Los bytes atajan lo que el equipo no sabe o dice mal (WebM de MediaRecorder, .opus en un navegador que no
+  // lo lee): sin ?segundos= mandan ellos (900 s + 10 s); con ?segundos=, sólo atajan un audio claramente más
+  // largo (900 s + 10 %), por si la lectura del contenedor se pasa un poco. Sin ninguna de las dos, un tope por tamaño.
   const segundosAudio = duracionAudio(bytes);
-  if (segundosAudio != null && segundosAudio > MAX_SEGUNDOS + TOLERANCIA_SEGUNDOS) return error(MENSAJE_LARGO, 413);
+  const tope = MAX_SEGUNDOS + (segundosEquipo != null ? TOLERANCIA_CON_EQUIPO : TOLERANCIA_SEGUNDOS);
+  if (segundosAudio != null && segundosAudio > tope) return error(MENSAJE_LARGO, 413);
   if (segundosAudio == null && segundosEquipo == null && bytes.byteLength > MAX_AUDIO_SIN_DURACION) return error(MENSAJE_SIN_DURACION, 413);
   const segundos = segundosEquipo ?? (segundosAudio != null ? Math.max(1, Math.round(segundosAudio)) : undefined);
   const huella = sha256(bytes);
@@ -420,16 +431,37 @@ async function recetaGuardada(f: string, recetaId: string): Promise<boolean> {
 }
 
 /**
+ * Lo que hace POST /guardado una vez que la receta está en la colección: queda el .texto (lo que se dijo, para
+ * la receta) y se borra el registro. Mientras se pide otra versión, lo que se dijo está en `anterior`.
+ */
+async function completarGuardado(f: string, id: string, d: Dictado, recetaId: string) {
+  const v = d.transcripcion ? d : (d.anterior ?? d);
+  const t: TextoDictado = { transcripcion: v.transcripcion ?? "", modelo: v.modelo, fecha: d.creado, segundos: d.segundos, recetaId };
+  await almacenAudios().setJSON(claveTexto(f, id), t);
+  await borrarRegistro(f, id);
+}
+
+/**
  * DELETE. `borrador`: el equipo descarta un BORRADOR (la revisión, la lista, la pantalla de dictar). Si la
- * receta ya se guardó (hay .texto, quizás desde otro equipo que el de la revisión vieja no vio), no se
- * borran ni su audio ni lo que se dijo: sólo el registro que sobra, y se responde `guardada: true`.
+ * receta ya se guardó, no se borran ni su audio ni lo que se dijo: sólo el registro que sobra, y se responde
+ * `guardada: true`. Guardada es que haya .texto (quizás desde otro equipo que el de la revisión vieja no vio)
+ * o que la colección «recetas» ya tenga rec_<id> aunque el POST /guardado no haya llegado (falló o se cortó
+ * la red justo después del PUT de la colección): entonces se completa aquí ese guardado.
  * Sin `borrador` (quitar el audio de una receta guardada, borrar la receta) se borra todo.
  */
 async function descartar(f: string, id: string, borrador: boolean) {
-  if (borrador && (await almacenAudios().getMetadata(claveTexto(f, id)))) {
-    await borrarRegistro(f, id);
-    const cuerpo: RespuestaDescartar = { ok: true, guardada: true };
-    return json(cuerpo);
+  const guardada = () => json({ ok: true, guardada: true } satisfies RespuestaDescartar);
+  if (borrador) {
+    if (await almacenAudios().getMetadata(claveTexto(f, id))) {
+      await borrarRegistro(f, id);
+      return guardada();
+    }
+    const recetaId = `rec_${id}`;
+    if (await recetaGuardada(f, recetaId)) {
+      const leido = await leerDictado(f, id);
+      if (leido) await completarGuardado(f, id, leido.d, recetaId);
+      return guardada();
+    }
   }
   await borrarRegistro(f, id);
   await Promise.all([almacenAudios().delete(claveAudio(f, id)), almacenAudios().delete(claveTexto(f, id))]);
@@ -448,9 +480,7 @@ async function guardado(req: Request, f: string, id: string) {
   // Sólo con la receta de verdad en la nube: si el PUT de la colección falló y este POST llegó, borrar el
   // registro dejaría la revisión sin camino de vuelta. El equipo lo vuelve a intentar más tarde.
   if (!(await recetaGuardada(f, recetaId))) return json({ error: "La receta todavía no está guardada en Recetas.", codigo: RECETA_NO_GUARDADA }, 409);
-  const t: TextoDictado = { transcripcion: d.transcripcion ?? "", modelo: d.modelo, fecha: d.creado, segundos: d.segundos, recetaId };
-  await almacenAudios().setJSON(claveTexto(f, id), t);
-  await borrarRegistro(f, id);
+  await completarGuardado(f, id, d, recetaId);
   return json({ ok: true });
 }
 

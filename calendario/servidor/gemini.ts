@@ -131,11 +131,15 @@ export function detectarAudio(cabeza: Uint8Array): AudioDetectado {
 
 /**
  * Segundos de audio según lo que anota el contenedor, o undefined si no se puede saber. Así el tope de 15
- * minutos no depende sólo de lo que dice el equipo (`?segundos=`). Ogg (Opus/Vorbis): la posición del
- * último paquete; WebM: Duration de Info o, en lo que graba MediaRecorder (sin Duration), el último bloque;
- * MP4/M4A: mvhd o, en MP4 fragmentado (Safari), el final del último fragmento; WAV y AIFF: datos / tasa;
- * FLAC: STREAMINFO; MP3: Xing/Info/VBRI o el bitrate del primer cuadro; AAC: los cuadros ADTS.
- * Un resultado que no calza con el tamaño (menos de 500 bit/s o más de 6 Mbit/s) es una cabecera rota: undefined.
+ * minutos no depende sólo de lo que dice el equipo (`?segundos=`). Siempre lo que DURA, no dónde termina: un
+ * audio puede no partir en 0 (cortado de una transmisión, `ffmpeg -output_ts_offset`), así que se resta el
+ * comienzo. Ogg (Opus/Vorbis): la posición del último paquete menos la del primero; WebM: Duration de Info
+ * o, en lo que graba MediaRecorder (sin Duration), el último bloque menos el primero; MP4/M4A: lo que dura
+ * la pista (mdhd, sin los huecos de la lista de ediciones) o mvhd y, en MP4 fragmentado (Safari), el final
+ * del último fragmento menos el comienzo del primero; WAV y AIFF: datos / tasa; FLAC: STREAMINFO; MP3:
+ * Xing/Info/VBRI o, si no vienen, la suma de los cuadros (el bitrate del primero engaña en un VBR); AAC: los
+ * cuadros ADTS. Un resultado que no calza con el tamaño (menos de 500 bit/s o más de 6 Mbit/s) es una
+ * cabecera rota: undefined.
  */
 export function duracionAudio(b: Uint8Array): number | undefined {
   let s: number | undefined;
@@ -164,14 +168,31 @@ function leerDuracion(b: Uint8Array): number | undefined {
   return undefined;
 }
 
-/** Ogg: granule position de la última página entera del mismo flujo (Opus siempre a 48 kHz, menos el pre-skip). */
+const SIN_GRANULE = 0xffffffffffffffffn; // ningún paquete termina en esta página
+
+/** Largo total de la página Ogg que empieza en `i` (cabecera + tabla + datos), o 0 si no cabe entera. */
+function largoPaginaOgg(b: Uint8Array, i: number): number {
+  if (i + 27 > b.length) return 0;
+  const segs = b[i + 26];
+  if (i + 27 + segs > b.length) return 0;
+  let largo = 27 + segs;
+  for (let k = 0; k < segs; k++) largo += b[i + 27 + k];
+  return i + largo <= b.length ? largo : 0;
+}
+
+/**
+ * Ogg: (granule de la última página entera del flujo − el del comienzo − pre-skip) / tasa (Opus siempre a
+ * 48 kHz). El comienzo es 0 en un archivo normal; si no (cortado de una transmisión, -output_ts_offset), es
+ * el granule de la primera página de audio menos las muestras que trae.
+ */
 function duracionOgg(b: Uint8Array, v: DataView): number | undefined {
   if (b.length < 27 || b[4] !== 0) return undefined;
   const serie = v.getUint32(14, true);
   const ini = 27 + b[26];
   let tasa = 0;
   let salto = 0;
-  if (textoEn(b, ini, 8) === "OpusHead" && ini + 12 <= b.length) {
+  const opus = textoEn(b, ini, 8) === "OpusHead";
+  if (opus && ini + 12 <= b.length) {
     tasa = 48_000;
     salto = v.getUint16(ini + 10, true);
   } else if (textoEn(b, ini, 7) === "\x01vorbis" && ini + 16 <= b.length) tasa = v.getUint32(ini + 12, true);
@@ -179,16 +200,63 @@ function duracionOgg(b: Uint8Array, v: DataView): number | undefined {
   for (let i = b.length - 27; i > 0; i--) {
     if (b[i] !== 0x4f || b[i + 1] !== 0x67 || b[i + 2] !== 0x67 || b[i + 3] !== 0x53 || b[i + 4] !== 0) continue;
     if (v.getUint32(i + 14, true) !== serie) continue;
-    const segs = b[i + 26];
-    if (i + 27 + segs > b.length) continue;
-    let largo = 27 + segs;
-    for (let k = 0; k < segs; k++) largo += b[i + 27 + k];
-    if (i + largo > b.length) continue; // página cortada: la anterior
+    if (!largoPaginaOgg(b, i)) continue; // página cortada: la anterior
     const pos = v.getBigUint64(i + 6, true);
-    if (pos === 0xffffffffffffffffn) continue; // ningún paquete termina en esta página
-    return (Number(pos) - salto) / tasa;
+    if (pos === SIN_GRANULE) continue;
+    const comienzo = comienzoOgg(b, v, serie, opus);
+    return comienzo > Number(pos) ? undefined : (Number(pos) - comienzo - salto) / tasa;
   }
   return undefined;
+}
+
+/**
+ * Granule donde parte el audio: el de la primera página de audio del flujo (la primera con granule, después
+ * de las cabeceras, que tienen 0) menos las muestras de los paquetes que terminan en ella. En Opus se cuentan
+ * por el TOC de cada paquete (RFC 6716 §3.1); en Vorbis (o si no se puede) se estima con lo que avanza la
+ * página siguiente. Si las páginas no se pueden recorrer desde el principio, 0 (como un archivo normal).
+ */
+function comienzoOgg(b: Uint8Array, v: DataView, serie: number, opus: boolean): number {
+  const audio: number[] = [];
+  for (let i = 0, n = 0; n < 256 && audio.length < 2; n++) {
+    if (textoEn(b, i, 4) !== "OggS" || b[i + 4] !== 0) break;
+    const largo = largoPaginaOgg(b, i);
+    if (!largo) break;
+    const pos = v.getBigUint64(i + 6, true);
+    if (v.getUint32(i + 14, true) === serie && pos !== 0n && pos !== SIN_GRANULE) audio.push(i);
+    i += largo;
+  }
+  if (!audio.length) return 0;
+  const primero = Number(v.getBigUint64(audio[0] + 6, true));
+  let muestras = opus ? muestrasPaginaOpus(b, audio[0]) : undefined;
+  if (muestras == null) {
+    if (audio.length < 2) return 0;
+    muestras = Number(v.getBigUint64(audio[1] + 6, true)) - primero;
+  }
+  return Math.max(0, primero - muestras);
+}
+
+/** Muestras (a 48 kHz) de los paquetes Opus que terminan en la página `i`; undefined si no se pueden leer. */
+function muestrasPaginaOpus(b: Uint8Array, i: number): number | undefined {
+  if (b[i + 5] & 1) return undefined; // parte con la continuación de un paquete de la página anterior
+  const segs = b[i + 26];
+  let p = i + 27 + segs;
+  let largo = 0;
+  let total = 0;
+  for (let k = 0; k < segs; k++) {
+    largo += b[i + 27 + k];
+    if (b[i + 27 + k] === 255) continue; // el paquete sigue
+    if (largo) {
+      const toc = b[p];
+      const config = toc >> 3;
+      const cuadro = config < 12 ? [480, 960, 1920, 2880][config & 3] : config < 16 ? [480, 960][config & 1] : [120, 240, 480, 960][config & 3];
+      const cuadros = (toc & 3) === 0 ? 1 : (toc & 3) < 3 ? 2 : largo >= 2 ? b[p + 1] & 0x3f : 0;
+      if (!cuadros) return undefined;
+      total += cuadros * cuadro;
+    }
+    p += largo;
+    largo = 0;
+  }
+  return total;
 }
 
 /** Número de largo variable de EBML (Matroska/WebM). `id` deja el marcador; el tamaño lo quita. */
@@ -219,8 +287,10 @@ function uintBE(b: Uint8Array, i: number, n: number): number {
 
 /**
  * WebM: recorre Segment, Info, Cluster y BlockGroup por dentro (también con tamaño desconocido, como los
- * escribe MediaRecorder) y salta lo demás. Duration de Info si viene; si no, el último bloque (Timecode del
- * Cluster + el relativo del bloque).
+ * escribe MediaRecorder) y salta lo demás. Cada bloque está en Timecode del Cluster + el relativo del bloque.
+ * Sin Duration en Info (MediaRecorder): el último bloque menos el primero. Con Duration: ffmpeg anota ahí
+ * dónde termina (no lo que dura), así que si cubre el último bloque se le resta el primero; si no, ya es lo
+ * que dura (como dice Matroska).
  */
 function duracionWebm(b: Uint8Array, v: DataView): number | undefined {
   const ADENTRO = new Set([0x18538067, 0x1549a966, 0x1f43b675, 0xa0]); // Segment, Info, Cluster, BlockGroup
@@ -228,6 +298,7 @@ function duracionWebm(b: Uint8Array, v: DataView): number | undefined {
   let duracion = 0;
   let cluster = 0;
   let ultimo = -1;
+  let primero = Infinity;
   let i = 0;
   for (let pasos = 0; i < b.length && pasos < 1_000_000; pasos++) {
     const id = vintEbml(b, i, true);
@@ -244,13 +315,19 @@ function duracionWebm(b: Uint8Array, v: DataView): number | undefined {
     else if (id.valor === 0xe7) cluster = uintBE(b, datos, t.valor);
     else if (id.valor === 0xa3 || id.valor === 0xa1) {
       const pista = vintEbml(b, datos, false);
-      if (pista && datos + pista.largo + 2 <= b.length) ultimo = Math.max(ultimo, cluster + v.getInt16(datos + pista.largo));
+      if (pista && datos + pista.largo + 2 <= b.length) {
+        const marca = cluster + v.getInt16(datos + pista.largo);
+        ultimo = Math.max(ultimo, marca);
+        primero = Math.min(primero, marca);
+      }
     }
     i = datos + t.valor;
   }
   const unidad = escala / 1e9;
-  if (duracion > 0) return duracion * unidad;
-  return ultimo > 0 ? ultimo * unidad : undefined;
+  // El primer bloque puede venir un poco antes de 0 (el retardo del códec Opus, −7 ms): eso no alarga nada.
+  const comienzo = Number.isFinite(primero) ? Math.max(0, primero) : 0;
+  if (duracion > 0) return (duracion + 1 / unidad >= ultimo ? duracion - comienzo : duracion) * unidad;
+  return ultimo > comienzo ? (ultimo - comienzo) * unidad : undefined;
 }
 
 /** Cajas de MP4 entre `desde` y `hasta`; la última se corta en `hasta` si dice ser más larga (archivo cortado). */
@@ -270,39 +347,57 @@ function cajasMp4(b: Uint8Array, v: DataView, desde: number, hasta: number, fn: 
   }
 }
 
+/**
+ * MP4/M4A, por pista: lo que anota su mdhd y, si hay fragmentos (MP4 fragmentado, Safari), hasta el final del
+ * último. Las muestras del moov parten en 0 y los fragmentos siguen después; sin muestras en el moov (mdhd en
+ * 0), el audio parte en el tfdt del primer fragmento, que puede no ser 0. La pista manda sobre mvhd, que suma
+ * los huecos de la lista de ediciones (un m4a que no parte en 0 trae un hueco inicial: mvhd dice 1260 s y la
+ * pista 60 s); mvhd y mehd quedan para cuando no hay pistas que leer.
+ */
 function duracionMp4(b: Uint8Array, v: DataView): number | undefined {
   const u32 = (i: number) => (i + 4 <= b.length ? v.getUint32(i) : 0);
   const u64 = (i: number) => (i + 8 <= b.length ? Number(v.getBigUint64(i)) : 0);
+  /** Duración de mvhd/mdhd/mehd (versión 0 o 1); 0 si no se sabe (todos los bits en 1). */
+  const durCaja = (version: number, i: number) =>
+    version === 1 ? (u32(i) === 0xffffffff && u32(i + 4) === 0xffffffff ? 0 : u64(i)) : u32(i) === 0xffffffff ? 0 : u32(i);
   let pelicula = 0; // mvhd
+  const medios = new Map<number, number>(); // track_ID → duration de mdhd (en su timescale)
   let fragmentada = 0; // mehd
   let escalaPelicula = 0;
   const escalas = new Map<number, number>(); // track_ID → timescale (mdhd)
   const porOmision = new Map<number, number>(); // track_ID → default_sample_duration (trex)
-  let finFragmentos = 0; // segundos: tfdt + duración de las muestras del fragmento más tardío
+  const fragmentos = new Map<number, { desde: number; hasta: number }>(); // track_ID → tfdt del primero y fin del último (en su timescale)
   cajasMp4(b, v, 0, b.length, (tipo, d, f) => {
     if (tipo === "moov")
       cajasMp4(b, v, d, f, (t2, d2, f2) => {
         if (t2 === "mvhd") {
           const ver = b[d2];
           escalaPelicula = ver === 1 ? u32(d2 + 20) : u32(d2 + 12);
-          const dur = ver === 1 ? u64(d2 + 24) : u32(d2 + 16);
-          if (escalaPelicula && dur && dur !== 0xffffffff) pelicula = dur / escalaPelicula;
+          const dur = durCaja(ver, ver === 1 ? d2 + 24 : d2 + 16);
+          if (escalaPelicula && dur) pelicula = dur / escalaPelicula;
         } else if (t2 === "mvex")
           cajasMp4(b, v, d2, f2, (t3, d3) => {
-            if (t3 === "mehd") fragmentada = b[d3] === 1 ? u64(d3 + 4) : u32(d3 + 4);
+            if (t3 === "mehd") fragmentada = durCaja(b[d3], d3 + 4);
             if (t3 === "trex") porOmision.set(u32(d3 + 4), u32(d3 + 12));
           });
         else if (t2 === "trak") {
           let pista = 0;
           let escala = 0;
+          let dur = 0;
           cajasMp4(b, v, d2, f2, (t3, d3, f3) => {
             if (t3 === "tkhd") pista = b[d3] === 1 ? u32(d3 + 20) : u32(d3 + 12);
             if (t3 === "mdia")
               cajasMp4(b, v, d3, f3, (t4, d4) => {
-                if (t4 === "mdhd") escala = b[d4] === 1 ? u32(d4 + 20) : u32(d4 + 12);
+                if (t4 !== "mdhd") return;
+                const ver = b[d4];
+                escala = ver === 1 ? u32(d4 + 20) : u32(d4 + 12);
+                dur = durCaja(ver, ver === 1 ? d4 + 24 : d4 + 16);
               });
           });
-          if (escala) escalas.set(pista, escala);
+          if (escala) {
+            escalas.set(pista, escala);
+            medios.set(pista, dur);
+          }
         }
       });
     else if (tipo === "moof")
@@ -330,13 +425,23 @@ function duracionMp4(b: Uint8Array, v: DataView): number | undefined {
             }
           }
         });
-        const escala = escalas.get(pista) ?? [...escalas.values()][0] ?? 0;
-        if (escala && base >= 0) finFragmentos = Math.max(finFragmentos, (base + suma) / escala);
+        if (base < 0) return;
+        const x = fragmentos.get(pista);
+        fragmentos.set(pista, { desde: Math.min(x?.desde ?? base, base), hasta: Math.max(x?.hasta ?? 0, base + suma) });
       });
   });
+  let pistas = 0;
+  for (const pista of new Set([...escalas.keys(), ...fragmentos.keys()])) {
+    const escala = escalas.get(pista) ?? [...escalas.values()][0] ?? 0;
+    const enMoov = medios.get(pista) ?? 0;
+    const x = fragmentos.get(pista);
+    const ticks = x ? Math.max(enMoov, x.hasta) - (enMoov > 0 ? 0 : x.desde) : enMoov;
+    if (escala) pistas = Math.max(pistas, ticks / escala);
+  }
+  if (pistas > 0) return pistas;
   if (pelicula > 0) return pelicula;
   if (fragmentada > 0 && escalaPelicula) return fragmentada / escalaPelicula;
-  return finFragmentos > 0 ? finFragmentos : undefined;
+  return undefined;
 }
 
 function duracionWav(b: Uint8Array, v: DataView): number | undefined {
@@ -386,35 +491,75 @@ const KBPS_MP3: Record<string, number[]> = {
 };
 const TASAS_MP3: Record<number, number[]> = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
 
-/** MP3: salta el ID3v2, busca un cuadro válido (con otro cuadro donde debe) y usa Xing/Info/VBRI o su bitrate. */
+interface CuadroMp3 {
+  largo: number;
+  muestras: number;
+  tasa: number;
+  mpeg1: boolean;
+  clase: number; // versión, capa y tasa: no cambian dentro de un mismo archivo
+}
+
+/** La cabecera de cuadro MPEG audio en `i`, o null si no es una válida (sincronía, versión, capa, bitrate, tasa). */
+function cuadroMp3(b: Uint8Array, i: number): CuadroMp3 | null {
+  if (i + 4 > b.length || b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return null;
+  const ver = (b[i + 1] >> 3) & 3;
+  const capa = 4 - ((b[i + 1] >> 1) & 3); // 1, 2 o 3
+  const ib = b[i + 2] >> 4;
+  const it = (b[i + 2] >> 2) & 3;
+  if (ver === 1 || capa === 4 || ib === 0 || ib === 15 || it === 3) return null;
+  const mpeg1 = ver === 3;
+  const kbps = KBPS_MP3[mpeg1 ? `1-${capa}` : capa === 1 ? "2-1" : "2-2"][ib];
+  const tasa = TASAS_MP3[ver][it];
+  const relleno = (b[i + 2] >> 1) & 1;
+  const muestras = capa === 1 ? 384 : capa === 2 || mpeg1 ? 1152 : 576;
+  const largo = capa === 1 ? (Math.floor((12 * kbps * 1000) / tasa) + relleno) * 4 : Math.floor(((muestras / 8) * kbps * 1000) / tasa) + relleno;
+  return largo < 4 ? null : { largo, muestras, tasa, mpeg1, clase: (ver << 4) | (capa << 2) | it };
+}
+
+/**
+ * MP3: salta el ID3v2, busca un cuadro válido (con otro cuadro donde debe) y usa Xing/Info/VBRI. Sin ellos,
+ * suma los cuadros hasta el final: el bitrate del primero sólo sirve en un CBR, y un VBR sin Xing (p. ej.
+ * `-write_xing 0`) que parte con un cuadro chico salía con más del doble. Si los cuadros no cubren casi todo
+ * el archivo (basura, otro formato), undefined.
+ */
 function duracionMp3(b: Uint8Array, v: DataView): number | undefined {
   let i = 0;
   if (textoEn(b, 0, 3) === "ID3" && b.length >= 10) i = 10 + (((b[6] & 0x7f) << 21) | ((b[7] & 0x7f) << 14) | ((b[8] & 0x7f) << 7) | (b[9] & 0x7f)) + (b[5] & 0x10 ? 10 : 0);
   const tope = Math.min(b.length - 4, i + 65_536);
   for (; i < tope; i++) {
-    if (b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) continue;
-    const ver = (b[i + 1] >> 3) & 3;
-    const capa = 4 - ((b[i + 1] >> 1) & 3); // 1, 2 o 3
-    const ib = b[i + 2] >> 4;
-    const it = (b[i + 2] >> 2) & 3;
-    if (ver === 1 || capa === 4 || ib === 0 || ib === 15 || it === 3) continue;
-    const mpeg1 = ver === 3;
-    const kbps = KBPS_MP3[mpeg1 ? `1-${capa}` : capa === 1 ? "2-1" : "2-2"][ib];
-    const tasa = TASAS_MP3[ver][it];
-    const relleno = (b[i + 2] >> 1) & 1;
-    const muestras = capa === 1 ? 384 : capa === 2 || mpeg1 ? 1152 : 576;
-    const largo = capa === 1 ? (Math.floor((12 * kbps * 1000) / tasa) + relleno) * 4 : Math.floor(((muestras / 8) * kbps * 1000) / tasa) + relleno;
-    if (largo < 4) continue;
-    if (i + largo + 1 < b.length && (b[i + largo] !== 0xff || (b[i + largo + 1] & 0xe0) !== 0xe0)) continue;
+    const c = cuadroMp3(b, i);
+    if (!c) continue;
+    if (i + c.largo + 1 < b.length && (b[i + c.largo] !== 0xff || (b[i + c.largo + 1] & 0xe0) !== 0xe0)) continue;
     const mono = b[i + 3] >> 6 === 3;
-    const x = i + 4 + (mpeg1 ? (mono ? 17 : 32) : mono ? 9 : 17);
+    const x = i + 4 + (c.mpeg1 ? (mono ? 17 : 32) : mono ? 9 : 17);
     const marca = textoEn(b, x, 4);
-    if ((marca === "Xing" || marca === "Info") && x + 12 <= b.length && v.getUint32(x + 4) & 1) return (v.getUint32(x + 8) * muestras) / tasa;
-    if (textoEn(b, i + 36, 4) === "VBRI" && i + 54 <= b.length) return (v.getUint32(i + 50) * muestras) / tasa;
-    const fin = b.length - (textoEn(b, b.length - 128, 3) === "TAG" ? 128 : 0);
-    return ((fin - i) * 8) / (kbps * 1000);
+    if ((marca === "Xing" || marca === "Info") && x + 12 <= b.length && v.getUint32(x + 4) & 1) return (v.getUint32(x + 8) * c.muestras) / c.tasa;
+    if (textoEn(b, i + 36, 4) === "VBRI" && i + 54 <= b.length) return (v.getUint32(i + 50) * c.muestras) / c.tasa;
+    return sumaCuadrosMp3(b, i, c);
   }
   return undefined;
+}
+
+function sumaCuadrosMp3(b: Uint8Array, desde: number, primero: CuadroMp3): number | undefined {
+  const fin = b.length - (textoEn(b, b.length - 128, 3) === "TAG" ? 128 : 0); // ID3v1 al final
+  const igual = (c: CuadroMp3 | null): c is CuadroMp3 => !!c && c.clase === primero.clase;
+  let muestras = 0;
+  let enCuadros = 0;
+  let enSincronia = true; // después de un cuadro entero, el siguiente va pegado
+  for (let i = desde; i + 4 <= fin; ) {
+    const c = cuadroMp3(b, i);
+    // Fuera de sincronía (basura en medio, un tag), un cuadro sólo vale si otro igual viene donde debe.
+    if (igual(c) && i + c.largo <= fin && (enSincronia || i + c.largo === fin || igual(cuadroMp3(b, i + c.largo)))) {
+      muestras += c.muestras;
+      enCuadros += c.largo;
+      i += c.largo;
+      enSincronia = true;
+    } else {
+      i++;
+      enSincronia = false;
+    }
+  }
+  return muestras && enCuadros >= 0.9 * (fin - desde) ? muestras / primero.tasa : undefined;
 }
 
 const TASAS_AAC = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
