@@ -241,6 +241,18 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
 - Protector de pantalla en la pared tras N minutos sin tocar, con hora, clima y próximos eventos encima; no se
   activa con una ventana abierta. De noche, apagado o atenuado.
 
+### Pendiente · Cambiar sólo un día de un evento que se repite (pedido de la familia, 10 nov 2026)
+Ejemplo: las niñas van al colegio de 8:30 a 15:00 todos los días, pero hoy salen más temprano; o hay un feriado
+interno del colegio y la clase de ese día no va.
+- Hoy ya se puede **borrar sólo un día** (abrir el evento → 🗑 Borrar → «Sólo el …»), y eso sirve para el feriado.
+  Pero está escondido detrás de «Borrar»: hay que hacerlo más visible.
+- Lo que falta es **editar sólo un día**: al guardar un cambio en un evento que se repite, preguntar
+  «¿Sólo este día o todas las repeticiones?» (y quizás «este y los siguientes»).
+- Idea técnica: el día cambiado se guarda como un evento aparte ligado a la serie (una excepción en la serie más un
+  evento con `externo.recurrencia` = la fecha original, como ya se hace con los días que se cambian desde el iPhone),
+  y se sincroniza como un día cambiado de la serie (RECURRENCE-ID en iCloud; instancia en Google Calendar), no como un
+  evento suelto. Que mover o borrar la serie entera arrastre también sus días cambiados.
+
 ### Después
 - Avisos en el teléfono: los eventos ya avisan por el Calendario de iOS (fase 2); para quehaceres, Web Push en la app
   instalada en la pantalla de inicio (iOS 16.4+).
