@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useDatos } from "@/lib/store";
 import { useCandado } from "@/lib/candado";
-import type { ComidaPlanificada, Receta, TipoComida } from "@/lib/datos/tipos";
+import type { ComidaPlanificada, ItemComida, Receta, TipoComida } from "@/lib/datos/tipos";
 import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, semanaCorta, sumarDias } from "@/lib/fechas";
 import {
   agruparPorCategoria,
-  claveComida,
   comidasDeSemana,
   generarLista,
   lineaAItem,
@@ -15,7 +14,19 @@ import {
   textoCantidad,
   type LineaGenerada,
 } from "@/lib/compras";
-import { SIN_COLACION, TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import {
+  ESPACIOS_COMIDA,
+  TIPOS_COMIDA,
+  atajosComida,
+  claveComida,
+  itemsLlenos,
+  itemsVisibles,
+  nombreItem,
+  ponerComida,
+  ponerItem,
+  repetirSemana,
+  type Espacio,
+} from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
 import { useIrAHoyEnMovil } from "@/lib/hooks";
 import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, cx } from "./ui";
@@ -34,22 +45,15 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   const dias = diasDeSemana(lunes);
   const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
   useIrAHoyEnMovil(lunes);
-  const nComidas = comidasDeSemana(estado.plan, lunes).filter((c) => c.recetaId).length;
+  // Comidas con alguna receta en cualquiera de sus espacios (de ahí sale la lista de compras).
+  const nComidas = comidasDeSemana(estado.plan, lunes).filter((c) => itemsLlenos(c).some((x) => x.recetaId)).length;
 
   const repetirSemanaPasada = () => {
     let n = 0;
     actualizar("plan", (plan) => {
-      const nuevo = { ...plan };
-      for (const f of dias)
-        for (const t of TIPOS_COMIDA) {
-          const prev = plan[claveComida(sumarDias(f, -7), t.id)];
-          const k = claveComida(f, t.id);
-          if (prev && !nuevo[k]) {
-            nuevo[k] = { ...prev };
-            n++;
-          }
-        }
-      return nuevo;
+      const r = repetirSemana(plan, dias);
+      n = r.copiadas;
+      return r.plan;
     });
     setAviso(n ? `Se copiaron ${n} comidas de la semana pasada.` : "No había nada nuevo que copiar.");
     setTimeout(() => setAviso(null), 3500);
@@ -207,6 +211,25 @@ function FilaComida({
   );
 }
 
+/**
+ * Celda con varios ítems: una línea por ítem lleno (cortada con "…") y, abajo, un "＋" por espacio
+ * vacío. En una fila baja la letra se achica y el pie (los "＋" y las porciones) se oculta, para que
+ * los nombres nunca se monten.
+ */
+const LINEA_BAJA = "[@container(max-height:5.25rem)]:text-xs";
+const LINEA_GRANDE = "2xl:[@container(min-height:7.5rem)]:text-base";
+const PIE_BAJO = "[@container(max-height:6rem)]:hidden";
+/**
+ * Si ni así caben una línea por ítem (Fire HD 8 en el navegador, ≈ 53 px), van seguidos en el mismo
+ * párrafo, "Pan con palta · Plátano · Leche · Té", en 3 líneas como máximo (2 si es más baja).
+ */
+const LISTA_SEGUIDA =
+  "[@container(max-height:4rem)]:line-clamp-3 [@container(max-height:3rem)]:line-clamp-2 [@container(max-height:4rem)]:text-xs [@container(max-height:4rem)]:leading-tight";
+const ITEM_SEGUIDO =
+  "[@container(max-height:4rem)]:inline [@container(max-height:4rem)]:[&:not(:last-child)]:after:content-['_·_']";
+const NOMBRE_SEGUIDO = "[@container(max-height:4rem)]:whitespace-normal";
+const EMOJI_SEGUIDO = "[@container(max-height:4rem)]:mr-0.5";
+
 function Celda({
   tipo,
   comida,
@@ -225,12 +248,19 @@ function Celda({
   enGrilla?: boolean;
   onClick: () => void;
 }) {
-  const receta = comida?.recetaId ? recetas.get(comida.recetaId) : undefined;
-  const nombre = comida ? nombreComida(comida, recetas) : "";
+  // Una receta que se borró de la biblioteca cuenta como espacio vacío.
+  const items = itemsVisibles(comida, tipo.id, recetas);
+  const llenos = items.filter((x): x is ItemComida => !!x);
+  const vacios = items.length - llenos.length;
+  const varios = llenos.length > 1;
+  const conReceta = llenos.some((x) => x.recetaId);
+  const receta = !varios && llenos[0]?.recetaId ? recetas.get(llenos[0].recetaId) : undefined;
+  const nombres = llenos.map((x) => nombreItem(x, recetas));
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-label={`${tipo.nombre}: ${nombres.length ? nombres.join(", ") : "nada todavía"}${vacios && nombres.length ? ` (${vacios} ${vacios === 1 ? "espacio libre" : "espacios libres"})` : ""}`}
       className={cx(
         "relative flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-2xl border-[3px] text-center transition active:scale-[0.97]",
         // En la grilla la celda toma el alto de su fila y es un contenedor: si la fila es baja (Fire HD 8
@@ -239,13 +269,13 @@ function Celda({
         // sólo se corta en sílabas cuando de verdad no cabe (iPad vertical).
         enGrilla ? "min-h-0 px-0.5 py-0.5 [container-type:size]" : "min-h-20 px-1.5 py-1",
         esHoy ? "border-hoy-borde bg-hoy shadow-md" : "border-transparent bg-superficie",
-        !comida && "border-dashed border-borde",
+        !llenos.length && "border-dashed border-borde",
       )}
     >
       {conEtiqueta && <span className="text-xs font-extrabold uppercase text-tinta-suave">{tipo.nombre}</span>}
-      {!comida ? (
+      {!llenos.length ? (
         <span className="text-3xl text-borde">＋</span>
-      ) : (
+      ) : !varios ? (
         <>
           {receta ? (
             <FotoReceta
@@ -254,7 +284,7 @@ function Celda({
                 "size-9 text-3xl",
                 enGrilla && ICONO_GRANDE,
                 enGrilla && ICONO_BAJO,
-                enGrilla && comida.porciones >= 10 && ICONO_ANGOSTO,
+                enGrilla && comida!.porciones >= 10 && ICONO_ANGOSTO,
               )}
             />
           ) : (
@@ -269,7 +299,7 @@ function Celda({
               enGrilla && NOMBRE_BAJO,
             )}
           >
-            {nombre}
+            {nombres[0]}
           </span>
           {receta && (
             <span
@@ -279,73 +309,138 @@ function Celda({
                 enGrilla && "[@container(max-height:3.5rem)]:hidden",
               )}
             >
-              👥{comida.porciones}
+              👥{comida!.porciones}
             </span>
           )}
         </>
+      ) : (
+        <span className={cx("flex w-full min-w-0 flex-col items-center gap-px", enGrilla && LISTA_SEGUIDA)}>
+          {llenos.map((x, i) => {
+            const r = x.recetaId ? recetas.get(x.recetaId) : undefined;
+            return (
+              <span
+                key={i}
+                className={cx(
+                  "flex max-w-full items-baseline justify-center gap-1 font-bold leading-tight",
+                  enGrilla ? cx("text-sm", LINEA_GRANDE, LINEA_BAJA, ITEM_SEGUIDO) : "text-base",
+                  r ? "font-extrabold" : "text-tinta",
+                )}
+              >
+                {r && (
+                  <span aria-hidden className={cx("shrink-0", enGrilla && EMOJI_SEGUIDO)}>
+                    {r.emoji || "🍽️"}
+                  </span>
+                )}
+                {/* En el teléfono hay alto de sobra: un nombre largo sigue en una segunda línea. */}
+                <span className={cx("min-w-0", enGrilla ? cx("truncate", NOMBRE_SEGUIDO) : "line-clamp-2 break-words")}>{nombres[i]}</span>
+              </span>
+            );
+          })}
+        </span>
+      )}
+      {llenos.length > 0 && (vacios > 0 || (varios && conReceta)) && (
+        <span aria-hidden className={cx("num flex items-center gap-2 text-xs font-bold leading-none", enGrilla && PIE_BAJO)}>
+          {vacios > 0 && <span className="tracking-[0.2em] text-borde">{"＋".repeat(vacios)}</span>}
+          {varios && conReceta && <span className="text-tinta-suave">👥{comida!.porciones}</span>}
+        </span>
       )}
     </button>
   );
 }
 
-// ---------- Elegir qué se cocina ----------
+// ---------- Elegir qué se come ----------
 
-const ATAJOS = ["Sobras", "Comemos fuera", "Delivery", "Cada uno se las arregla", "Pan con palta"];
-/** La colación casi nunca es una receta: atajos propios. */
-const ATAJOS_COLACION = ["Fruta", "Yogur", "Sándwich", "Barra de cereal", "Galletas", SIN_COLACION];
+const textoLibre = (x: ItemComida | null | undefined) => (x && !x.recetaId ? (x.texto ?? "") : "");
 
+/**
+ * Lo que se come en una comida, espacio por espacio (ver ESPACIOS_COMIDA): se elige un espacio arriba
+ * y se llena abajo con una receta o con texto libre. Cada cambio se guarda al tiro y pasa al espacio
+ * vacío que sigue; cuando no queda ninguno vacío, se cierra (con un solo espacio, como antes).
+ */
 function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoComida; alCerrar: () => void }) {
   const { estado, actualizar } = useDatos();
   const { proteger } = useCandado();
   const clave = claveComida(fecha, tipo);
   const actual = estado.plan[clave];
+  const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
+  const items = itemsVisibles(actual, tipo, recetas);
+  const espacios = ESPACIOS_COMIDA[tipo];
   const tamFamilia = Math.max(1, estado.miembros.length);
   const [porciones, setPorciones] = useState(actual?.porciones ?? tamFamilia);
+  const primerVacio = Math.max(0, items.findIndex((x) => !x));
+  const [elegido, setElegido] = useState(primerVacio);
   const [busqueda, setBusqueda] = useState("");
-  const [texto, setTexto] = useState(actual && !actual.recetaId ? actual.texto ?? "" : "");
+  const [texto, setTexto] = useState(() => textoLibre(items[primerVacio]));
   const [verReceta, setVerReceta] = useState<Receta | null>(null);
+  const listaRef = useRef<HTMLDivElement>(null);
+  const elegirRef = useRef<HTMLDivElement>(null);
   const t = TIPOS_COMIDA.find((x) => x.id === tipo)!;
   const dia = DIAS_LARGOS[(new Date(fecha + "T12:00:00Z").getUTCDay() + 6) % 7];
+  const unSolo = items.length === 1;
+  // Si otro equipo dejó la comida con menos espacios mientras está abierta.
+  const sel = Math.min(elegido, items.length - 1);
+  const espacio: Espacio | undefined = espacios[sel];
 
-  // Mirar qué hay (y ver la receta) es libre; cambiar la comida pide el PIN en la pared.
-  const poner = (c: ComidaPlanificada | null) =>
+  const seleccionar = (i: number, mostrarAbajo = false) => {
+    setElegido(i);
+    setTexto(textoLibre(items[i]));
+    setBusqueda("");
+    if (mostrarAbajo) elegirRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
+  // Mirar qué hay (y ver una receta) es libre; cambiar el menú pide el PIN en la pared.
+  const ponerEn = (i: number, item: ItemComida | null) =>
     proteger(() => {
-      actualizar("plan", (plan) => {
-        const n = { ...plan };
-        if (c) n[clave] = c;
-        else delete n[clave];
-        return n;
-      });
+      // Se aplica sobre lo último guardado: si otro equipo cambió otro espacio, no se pisa.
+      void actualizar("plan", (plan) => ponerItem(plan, clave, tipo, i, item, porciones));
+      if (!item) return seleccionar(i);
+      const despues = items.map((x, j) => (j === i ? item : x));
+      const siguiente = despues.findIndex((x, j) => j > i && !x);
+      const otro = siguiente >= 0 ? siguiente : despues.findIndex((x) => !x);
+      if (otro < 0) return alCerrar();
+      seleccionar(otro);
+      // En el teléfono: que se vea qué quedó puesto y cuál sigue.
+      listaRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+
+  /** La comida entera de una vez ("Comemos fuera", "Sin colación") o, con null, quitarla. */
+  const ponerTodo = (c: ComidaPlanificada | null) =>
+    proteger(() => {
+      void actualizar("plan", (plan) => ponerComida(plan, clave, c));
       alCerrar();
     });
+
+  // Las porciones se guardan al cerrar (o con el próximo ítem que se ponga).
+  const cerrar = () => {
+    if (actual && porciones !== actual.porciones)
+      proteger(() => void actualizar("plan", (plan) => (plan[clave] ? { ...plan, [clave]: { ...plan[clave], porciones } } : plan)));
+    alCerrar();
+  };
 
   const q = sinTildes(busqueda);
   const filtradas = estado.recetas
     .filter((r) => sinTildes(r.nombre).includes(q))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  const atajosItem = espacio?.atajos ?? [];
+  const atajosTodo = atajosComida(tipo);
 
   if (verReceta) return <RecetaDetalle receta={verReceta} alCerrar={() => setVerReceta(null)} porcionesIniciales={porciones} />;
 
   return (
     <Modal
       titulo={`${t.emoji} ${t.nombre} del ${dia.toLowerCase()} ${partes(fecha).dia}`}
-      alCerrar={alCerrar}
+      alCerrar={cerrar}
       ancho="max-w-3xl"
       pie={
         <>
           {actual && (
-            <Boton variante="peligro" className="mr-auto" onClick={() => poner(null)}>
-              Quitar
+            <Boton variante="peligro" className="mr-auto" onClick={() => ponerTodo(null)}>
+              {unSolo ? "Quitar" : "Quitar todo"}
             </Boton>
           )}
-          {actual?.recetaId && buscarReceta(estado.recetas, actual.recetaId) && (
-            <Boton onClick={() => setVerReceta(buscarReceta(estado.recetas, actual.recetaId!)!)}>📖 Ver receta</Boton>
-          )}
-          {actual?.recetaId && (
-            <Boton variante="primario" onClick={() => poner({ ...actual, porciones })}>
-              Guardar porciones
-            </Boton>
-          )}
+          <Boton variante="primario" onClick={cerrar}>
+            Listo
+          </Boton>
         </>
       }
     >
@@ -356,17 +451,40 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
           <span className="text-base text-tinta-suave">Las cantidades se ajustan solas.</span>
         </div>
 
-        <div>
+        {/* grid-cols-1 (minmax(0, 1fr)): un nombre largo se corta con "…" en vez de ensanchar la columna. */}
+        <div ref={listaRef} className={cx("grid scroll-mt-2 grid-cols-1 gap-2", !unSolo && "sm:grid-cols-2")}>
+          {items.map((x, i) => (
+            <EspacioFila
+              key={i}
+              etiqueta={espacios[i]?.nombre ?? (unSolo ? t.nombre : `Ítem ${i + 1}`)}
+              ejemplo={espacios[i]?.ejemplo}
+              item={x}
+              recetas={recetas}
+              elegido={i === sel && !unSolo}
+              alElegir={() => seleccionar(i, true)}
+              alVaciar={() => ponerEn(i, null)}
+              alVer={(r) => setVerReceta(r)}
+            />
+          ))}
+        </div>
+
+        <div ref={elegirRef} className="scroll-mt-2">
+          {!unSolo && (
+            <h3 className="mb-2 text-xl font-extrabold">
+              Para {espacio?.nombre ? `«${espacio.nombre}»` : `el ítem ${sel + 1}`}
+              {espacio && !espacio.nombre && <span className="font-bold text-tinta-suave"> · p. ej. {espacio.ejemplo.toLowerCase()}</span>}
+            </h3>
+          )}
           <Entrada placeholder="🔎 Buscar receta…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {filtradas.map((r) => (
               <button
                 key={r.id}
                 type="button"
-                onClick={() => poner({ recetaId: r.id, porciones })}
+                onClick={() => ponerEn(sel, { recetaId: r.id })}
                 className={cx(
                   "flex min-h-24 flex-col items-center justify-center gap-1 rounded-2xl border-[3px] bg-superficie p-2 text-center transition active:scale-95",
-                  actual?.recetaId === r.id ? "border-acento" : "border-borde",
+                  items[sel]?.recetaId === r.id ? "border-acento" : "border-borde",
                 )}
               >
                 <FotoReceta receta={r} className="size-12 text-4xl" />
@@ -384,12 +502,16 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
         <div>
           <span className="mb-1.5 block text-base font-bold text-tinta-suave">…o escribe algo sin receta</span>
           <div className="mb-2 flex flex-wrap gap-2">
-            {(tipo === "colacion" ? ATAJOS_COLACION : ATAJOS).map((a) => (
+            {/* Con un solo espacio, ponerlo o poner la comida entera es lo mismo: van todos juntos. */}
+            {(unSolo ? [...new Set([...atajosItem, ...atajosTodo])] : atajosItem).map((a) => (
               <button
                 key={a}
                 type="button"
-                onClick={() => poner({ texto: a, porciones })}
-                className="min-h-11 rounded-full bg-superficie-2 px-4 text-base font-bold"
+                onClick={() => (unSolo ? ponerTodo({ texto: a, porciones }) : ponerEn(sel, { texto: a }))}
+                className={cx(
+                  "min-h-11 rounded-full px-4 text-base font-bold",
+                  items[sel] && !items[sel]!.recetaId && items[sel]!.texto === a ? "bg-acento text-acento-tinta" : "bg-superficie-2",
+                )}
               >
                 {a}
               </button>
@@ -399,22 +521,93 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
             className="flex gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              if (texto.trim()) poner({ texto: texto.trim(), porciones });
+              if (texto.trim()) ponerEn(sel, { texto: texto.trim() });
             }}
           >
-            <Entrada value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Ej.: Completos" />
+            <Entrada value={texto} onChange={(e) => setTexto(e.target.value)} placeholder={`Ej.: ${espacio?.ejemplo ?? "Completos"}`} />
             <Boton type="submit" variante="primario" disabled={!texto.trim()}>
               Poner
             </Boton>
           </form>
         </div>
+
+        {!unSolo && (
+          <div>
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave">Para toda la comida (vacía los demás espacios)</span>
+            <div className="flex flex-wrap gap-2">
+              {atajosTodo.map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => ponerTodo({ texto: a, porciones })}
+                  className="min-h-11 rounded-full border-2 border-borde px-4 text-base font-bold"
+                >
+                  {a}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );
 }
 
-function buscarReceta(lista: Receta[], id: string) {
-  return lista.find((r) => r.id === id);
+/** Un espacio de la comida en el editor: tocarlo lo elige para llenarlo abajo. */
+function EspacioFila({
+  etiqueta,
+  ejemplo,
+  item,
+  recetas,
+  elegido,
+  alElegir,
+  alVaciar,
+  alVer,
+}: {
+  etiqueta: string;
+  ejemplo?: string;
+  item: ItemComida | null;
+  recetas: Map<string, Receta>;
+  elegido: boolean;
+  alElegir: () => void;
+  alVaciar: () => void;
+  alVer: (r: Receta) => void;
+}) {
+  const r = item?.recetaId ? recetas.get(item.recetaId) : undefined;
+  return (
+    <div
+      className={cx(
+        "flex min-h-16 items-center gap-1 rounded-2xl border-[3px] pr-1.5 transition",
+        elegido ? "border-acento bg-acento-suave" : item ? "border-borde bg-superficie" : "border-dashed border-borde bg-superficie",
+      )}
+    >
+      <button type="button" onClick={alElegir} aria-pressed={elegido} className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch py-1.5 pl-3 text-left">
+        {r ? (
+          <FotoReceta receta={r} className="size-10 text-3xl" />
+        ) : (
+          <span aria-hidden className={cx("w-10 shrink-0 text-center text-2xl", !item && "text-borde")}>
+            {item ? "🍴" : "＋"}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 leading-tight">
+          <span className="block text-sm font-extrabold uppercase text-tinta-suave">{etiqueta}</span>
+          <span className={cx("block truncate text-lg", item ? "font-extrabold" : "text-tinta-suave")}>
+            {item ? nombreItem(item, recetas) : ejemplo ? `Ej.: ${ejemplo}` : "Vacío"}
+          </span>
+        </span>
+      </button>
+      {r && (
+        <BotonIcono etiqueta={`Ver la receta: ${r.nombre}`} onClick={() => alVer(r)}>
+          📖
+        </BotonIcono>
+      )}
+      {item && (
+        <BotonIcono etiqueta={`Vaciar ${etiqueta.toLowerCase()}`} onClick={alVaciar}>
+          ✕
+        </BotonIcono>
+      )}
+    </div>
+  );
 }
 
 // ---------- Generar lista de compras ----------

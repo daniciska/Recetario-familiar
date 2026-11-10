@@ -82,6 +82,10 @@ export interface Ingrediente {
   cantidad: number | null; // null = "al gusto"
   unidad: Unidad;
   categoria: CategoriaCompra;
+  // Recetas dictadas (Gemini). Opcionales: las recetas de antes no los tienen.
+  comoLoDijo?: string; // cómo se dijo la cantidad ("un puñadito"), ≤ 200
+  estimado?: true; // sólo con cantidad != null: se calculó a partir de una medida vaga ("≈")
+  nota?: string; // preparación o envase ("picada en cubitos", "tarro de 397 g"), ≤ 200
 }
 
 export interface Receta {
@@ -94,14 +98,28 @@ export interface Receta {
   ingredientes: Ingrediente[];
   pasos: string[];
   nota?: string;
+  dudas?: string[]; // preguntas pendientes de Gemini (≤ 20, de ≤ 300)
+  /** Receta dictada: el audio y lo que se dijo quedan en Blobs (almacén "audios"), no en la receta. */
+  dictado?: { id: string; fecha: string; segundos?: number };
 }
 
 export type TipoComida = "desayuno" | "colacion" | "almuerzo" | "once" | "cena";
 
-export interface ComidaPlanificada {
+/** Lo que va en un espacio de una comida (ver ESPACIOS_COMIDA en lib/comidas.ts). */
+export interface ItemComida {
   recetaId?: Id; // receta de la biblioteca
-  texto?: string; // o algo libre: "Sobras", "Comemos donde la abuela"
-  porciones: number;
+  texto?: string; // o algo libre: "Sobras", "Fruta", "Comemos donde la abuela"
+}
+
+/**
+ * Una comida de un día, con sus espacios (desayuno 4, colación 3, almuerzo: proteína, carbohidrato,
+ * verduras y postre…). El primer espacio va en `recetaId` / `texto`, como cuando cada comida era un
+ * solo ítem (así la siguen viendo los equipos con la versión anterior), y los demás en `mas`.
+ */
+export interface ComidaPlanificada extends ItemComida {
+  porciones: number; // para toda la comida
+  /** Espacios del segundo en adelante, en orden; null = vacío. Sin valor: sólo el primero. */
+  mas?: (ItemComida | null)[];
 }
 
 /** Clave: `${fecha}|${tipo}` */

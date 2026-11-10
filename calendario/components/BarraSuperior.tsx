@@ -6,7 +6,7 @@ import { fechaLarga, type Ahora } from "@/lib/fechas";
 import { iconoClima, type Clima } from "@/lib/hooks";
 import { claveComida, sinTildes } from "@/lib/compras";
 import { cuentasRegresivas, textoFaltan, type CuentaRegresiva } from "@/lib/eventos";
-import { SIN_COLACION, TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import { SIN_COLACION, TIPOS_COMIDA, emojiComida, nombresComida } from "@/lib/comidas";
 import type { TipoComida } from "@/lib/datos/tipos";
 import { BotonIcono } from "./ui";
 
@@ -33,8 +33,10 @@ export default function BarraSuperior({
   const hoyComidas = PRIORIDAD.map((id) => {
     const t = TIPOS_COMIDA.find((x) => x.id === id)!;
     const c = estado.plan[claveComida(ahora.fecha, id)];
-    if (!c || (!c.recetaId && sinTildes(c.texto ?? "") === sinTildes(SIN_COLACION))) return null;
-    return { tipo: t, nombre: nombreComida(c, recetas), emoji: c.recetaId ? recetas.get(c.recetaId)?.emoji : "🍴" };
+    // Todos los ítems de la comida, en orden ("Charquicán · Ensalada · Fruta"); vacía o "Sin colación" no cuenta.
+    const nombres = c ? nombresComida(c, recetas) : [];
+    if (nombres.every((n) => sinTildes(n) === sinTildes(SIN_COLACION))) return null;
+    return { tipo: t, nombre: nombres.join(" · "), emoji: emojiComida(c, recetas) ?? "🍴" };
   }).filter((x): x is NonNullable<typeof x> => !!x && !!x.nombre);
   const destacadas = hoyComidas.slice(0, 2);
 

@@ -6,7 +6,9 @@
 //   acceso/<familia>           → la familia, sus equipos (huella de su clave) y la versión de cada colección
 //   datos/<familia>/<colección> → {datos, version}: un cambio sólo se acepta si parte de la última versión
 //   invitaciones/<huella>      → códigos de un uso (24 h)
+//   dictados/<familia>/<id>    → receta dictada pendiente (servidor/dictados.ts): existe hasta que se guarda o descarta
 // Almacén "fotos": las fotos de las recetas.
+// Almacén "audios" (servidor/dictados.ts): <familia>/<id> → el audio dictado; <familia>/<id>.texto → lo que se dijo.
 
 import { getStore } from "@netlify/blobs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -112,7 +114,7 @@ const claveAcceso = (familiaId: string) => `acceso/${familiaId}`;
  * Exclusión mutua con un blob "sólo si no existe". Sirve cuando no hay ETag para la escritura
  * condicional (el simulador local de Blobs no lo entrega al leer); en producción no se usa.
  */
-async function conCandado<T>(clave: string, fn: () => Promise<T>): Promise<T> {
+export async function conCandado<T>(clave: string, fn: () => Promise<T>): Promise<T> {
   const store = almacen();
   const k = `candados/${clave}`;
   for (let i = 0; i < 80; i++) {

@@ -1,6 +1,7 @@
 // GET /api/datos[?claves=a,b]          → colecciones con su versión
-// PUT /api/datos/:clave {datos, versionBase} → guarda si nadie la cambió desde versionBase (si no, 409 con lo último)
+// PUT /api/datos/:clave {datos, versionBase, esquema} → guarda si nadie la cambió desde versionBase (si no, 409 con lo último)
 // PUT /api/datos {estado}              → reemplaza todo (respaldo, datos de ejemplo, primera subida)
+// `esquema`: 2 en los equipos al día; los de la versión anterior no lo mandan (ver más abajo).
 import type { Config, Context } from "@netlify/functions";
 import {
   CLAVES,
@@ -17,6 +18,8 @@ import {
   reemplazarColeccion,
   type Coleccion,
 } from "../../servidor/comun";
+import { conservarCamposNuevos } from "../../servidor/conservar";
+import { conservarItemsPlan } from "../../lib/comidas";
 import type { ClaveColeccion } from "../../lib/datos/tipos";
 
 export default async (req: Request, context: Context) => {
@@ -40,6 +43,17 @@ export default async (req: Request, context: Context) => {
   if (clave) {
     if (!esClave(clave)) return error("Colección desconocida", 400);
     if (!("datos" in body)) return error("Faltan los datos", 400);
+    // Equipos con la versión anterior (no mandan `esquema` ≥ 2): su normalizar descarta lo que no conoce y,
+    // como guardan la colección entera, lo borrarían. Se repone desde lo guardado, si es la versión de la
+    // que partieron (si no, el guardado igual termina en 409 y lo vuelven a mandar encima de lo último):
+    // en recetas, dudas, enlace al audio y «≈» (servidor/conservar.ts); en el menú, los espacios 2.º en
+    // adelante de cada comida (conservarItemsPlan). `>= 2` y no `!== 2`: un esquema 3 no es un equipo viejo.
+    // Quitar en enero de 2027, cuando todos los equipos hayan recargado.
+    if ((clave === "recetas" || clave === "plan") && !(Number(body.esquema) >= 2)) {
+      const previa = await leerColeccion(s.familiaId, clave);
+      if (previa && previa.version === Number(body.versionBase ?? 0))
+        body.datos = clave === "recetas" ? conservarCamposNuevos(previa.datos, body.datos) : conservarItemsPlan(previa.datos, body.datos);
+    }
     if (JSON.stringify(body.datos).length > MAX_COLECCION) return error("Es demasiado grande para guardarlo", 413);
     const r = await guardarColeccion(s.familiaId, clave, body.datos, Number(body.versionBase ?? 0));
     // Otro equipo la cambió primero: se devuelve lo último para que este equipo rehaga su cambio encima.

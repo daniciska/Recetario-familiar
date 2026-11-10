@@ -4,6 +4,7 @@
 import { CATEGORIAS, UNIDADES } from "../compras";
 import { colorPastel } from "../colores";
 import { canonico } from "../eventos";
+import { ID_DICTADO } from "../dictados/tipos";
 import type {
   Ajustes,
   CategoriaCompra,
@@ -11,6 +12,7 @@ import type {
   EstadoApp,
   Evento,
   Ingrediente,
+  ItemComida,
   ItemCompra,
   Miembro,
   Momento,
@@ -35,6 +37,8 @@ type Obj = Record<string, unknown>;
 const esObj = (x: unknown): x is Obj => typeof x === "object" && x !== null && !Array.isArray(x);
 const txt = (x: unknown, def = ""): string => (typeof x === "string" ? x : def);
 const txtOpc = (x: unknown): string | undefined => (typeof x === "string" && x.trim() ? x : undefined);
+/** Texto recortado (sin espacios a los lados y de `max` caracteres como mucho); vacío = sin valor. */
+const corto = (x: unknown, max: number): string | undefined => (typeof x === "string" && x.trim() ? x.trim().slice(0, max) : undefined);
 const num = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) ? x : null);
 const fecha = (x: unknown): string | undefined => (typeof x === "string" && FECHA.test(x) ? x : undefined);
 const hora = (x: unknown): string | undefined => (typeof x === "string" && HORA.test(x) ? x : undefined);
@@ -120,17 +124,34 @@ function evento(x: unknown): Evento | null {
   });
 }
 
+// Los campos de las recetas dictadas (comoLoDijo, estimado, nota del ingrediente; dudas y dictado de
+// la receta) van con spread condicional: una receta de antes queda exactamente igual, sin claves nuevas.
+
 function ingrediente(x: unknown): Ingrediente | null {
   if (!esObj(x)) return null;
   const unidad = UNIDADES_OK.has(x.unidad as string) ? (x.unidad as Unidad) : "unidad";
   const c = num(x.cantidad);
+  const cantidad = unidad === "al gusto" || c == null || c < 0 ? null : c;
+  const comoLoDijo = corto(x.comoLoDijo, 200);
+  const nota = corto(x.nota, 200);
   return {
     id: id(x.id, "ing"),
     nombre: txt(x.nombre),
-    cantidad: unidad === "al gusto" || c == null || c < 0 ? null : c,
+    cantidad,
     unidad,
     categoria: CATEGORIAS_OK.has(x.categoria as string) ? (x.categoria as CategoriaCompra) : "Otros",
+    ...(comoLoDijo ? { comoLoDijo } : {}),
+    // "≈" sólo tiene sentido con un número.
+    ...(x.estimado === true && cantidad != null ? { estimado: true as const } : {}),
+    ...(nota ? { nota } : {}),
   };
+}
+
+/** Enlace de una receta dictada con su audio y lo que se dijo (en Blobs): sólo con un id válido. */
+function enlaceDictado(x: unknown): Receta["dictado"] {
+  if (!esObj(x) || typeof x.id !== "string" || !ID_DICTADO.test(x.id)) return undefined;
+  const segundos = num(x.segundos);
+  return { id: x.id, fecha: txt(x.fecha).slice(0, 40), ...(segundos && segundos > 0 ? { segundos: Math.round(segundos) } : {}) };
 }
 
 function receta(x: unknown): Receta | null {
@@ -138,6 +159,8 @@ function receta(x: unknown): Receta | null {
   const porciones = num(x.porciones);
   const tiempo = num(x.tiempoMin);
   const foto = txt(x.foto);
+  const dudas = lista(x.dudas, (q) => corto(q, 300) ?? null).slice(0, 20);
+  const dictado = enlaceDictado(x.dictado);
   return {
     id: id(x.id, "rec"),
     nombre: txt(x.nombre, "Receta sin nombre"),
@@ -148,20 +171,43 @@ function receta(x: unknown): Receta | null {
     ingredientes: lista(x.ingredientes, ingrediente),
     pasos: lista(x.pasos, (p) => (typeof p === "string" ? p : null)),
     nota: txtOpc(x.nota),
+    ...(dudas.length ? { dudas } : {}),
+    ...(dictado ? { dictado } : {}),
   };
 }
 
+/** Una receta suelta, reparada (p. ej. el borrador de una receta dictada antes de guardarlo). */
+export const normalizarReceta = (x: unknown): Receta | null => receta(x);
+
+/** Espacios de una comida que se aceptan (ver ESPACIOS_COMIDA en lib/comidas.ts: hoy son 4 como máximo). */
+const MAX_ITEMS_COMIDA = 12;
+
+function itemComida(x: unknown): ItemComida | null {
+  if (!esObj(x)) return null;
+  const recetaId = txtOpc(x.recetaId);
+  const texto = txtOpc(x.texto);
+  return recetaId || texto ? { ...(recetaId ? { recetaId } : {}), ...(texto ? { texto } : {}) } : null;
+}
+
+/**
+ * El primer espacio de cada comida va en `recetaId` / `texto` (lo único que había antes de los
+ * espacios: así se lee lo guardado entonces) y los demás en `mas`. Una comida con el primero vacío
+ * se conserva si tiene algo en los otros.
+ */
 function plan(x: unknown): PlanComidas {
   const p: PlanComidas = {};
   if (!esObj(x)) return p;
   for (const [k, v] of Object.entries(x)) {
     if (!CLAVE_PLAN.test(k) || !esObj(v)) continue;
+    const mas = Array.isArray(v.mas) ? v.mas.slice(0, MAX_ITEMS_COMIDA - 1).map(itemComida) : [];
+    while (mas.length && !mas[mas.length - 1]) mas.pop();
     const c: ComidaPlanificada = {
       recetaId: txtOpc(v.recetaId),
       texto: txtOpc(v.texto),
       porciones: Math.max(1, Math.round(num(v.porciones) ?? 4)),
+      ...(mas.length ? { mas } : {}),
     };
-    if (c.recetaId || c.texto) p[k] = c;
+    if (c.recetaId || c.texto || mas.length) p[k] = c;
   }
   return p;
 }

@@ -19,6 +19,13 @@ type Colecciones = Record<string, { datos: unknown; version: number }>;
 
 const CADA = 20_000;
 const COMPLETO_CADA = 30 * 60_000;
+/**
+ * Va en cada guardado de una colección. Los equipos con la versión anterior a las recetas dictadas y a
+ * los espacios del menú no lo mandan, y el servidor les repone lo que su normalizar descarta
+ * (netlify/functions/api-datos.mts). Con 2, lo que llega se guarda tal cual (un equipo al día sí puede
+ * borrar una duda o vaciar un espacio a propósito).
+ */
+const ESQUEMA = 2;
 
 export class RepositorioNube implements Repositorio {
   private copia = new RepositorioLocal();
@@ -169,7 +176,7 @@ export class RepositorioNube implements Repositorio {
     try {
       const { status, datos } = await api<{ version?: number; datos?: unknown; error?: string }>(`/api/datos/${clave}`, {
         metodo: "PUT",
-        cuerpo: { datos: valor, versionBase: this.versiones[clave] ?? 0 },
+        cuerpo: { datos: valor, versionBase: this.versiones[clave] ?? 0, esquema: ESQUEMA },
         token: this.sesion.token,
       });
       this.marcarConexion(true);

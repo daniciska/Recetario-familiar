@@ -21,7 +21,7 @@ import {
 import { duracionDias, ocurrenciasEnRango, seRepite, textoHora } from "@/lib/eventos";
 import { iconoClima, useIrAHoyEnMovil, type Clima } from "@/lib/hooks";
 import { claveComida } from "@/lib/compras";
-import { TIPOS_COMIDA, nombreComida } from "@/lib/comidas";
+import { TIPOS_COMIDA, emojiComida, nombreComida, nombresComida } from "@/lib/comidas";
 import { Avatar, Boton, BotonIcono, Segmentos, cx } from "./ui";
 import EventoModal from "./EventoModal";
 
@@ -260,9 +260,13 @@ function TarjetaEvento({
 function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void }) {
   const { estado } = useDatos();
   const recetas = new Map(estado.recetas.map((r) => [r.id, r]));
+  // Todos los ítems de la comida en una línea ("Charquicán · Ensalada · Fruta").
   const lista = TIPOS_COMIDA.filter((t) => t.id === "almuerzo" || t.id === "cena")
-    .map((t) => ({ t, c: estado.plan[claveComida(fecha, t.id)] }))
-    .filter((x) => x.c);
+    .map((t) => {
+      const c = estado.plan[claveComida(fecha, t.id)];
+      return { t, nombre: c ? nombreComida(c, recetas) : "" };
+    })
+    .filter((x) => x.nombre);
   if (!lista.length) return null;
   return (
     <button
@@ -274,7 +278,7 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
       }}
       className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base"
     >
-      {lista.map(({ t, c }) => (
+      {lista.map(({ t, nombre }) => (
         <span
           key={t.id}
           className={cx(
@@ -284,7 +288,7 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
             lista.length > 1 && "[@media(max-height:650px)]:md:block [@media(max-height:650px)]:md:truncate",
           )}
         >
-          <span aria-hidden>{t.emoji}</span> {nombreComida(c!, recetas)}
+          <span aria-hidden>{t.emoji}</span> {nombre}
         </span>
       ))}
     </button>
@@ -535,12 +539,22 @@ function Dia({
           <div className="mb-2 text-lg font-extrabold uppercase text-acento">Menú del día</div>
           {TIPOS_COMIDA.map((t) => {
             const c = estado.plan[claveComida(fecha, t.id)];
+            // Los ítems de la comida, uno por línea (sin los espacios vacíos).
+            const nombres = c ? nombresComida(c, recetas) : [];
             return (
               <div key={t.id} className="flex items-center gap-3 border-b border-borde py-2.5 last:border-0">
-                <span className="text-3xl">{c?.recetaId ? recetas.get(c.recetaId)?.emoji : t.emoji}</span>
-                <div>
+                <span className="text-3xl">{emojiComida(c, recetas) ?? t.emoji}</span>
+                <div className="min-w-0">
                   <div className="text-sm font-bold uppercase text-tinta-suave">{t.nombre}</div>
-                  <div className="text-xl font-extrabold">{c ? nombreComida(c, recetas) : "—"}</div>
+                  {nombres.length ? (
+                    nombres.map((n, i) => (
+                      <div key={i} className={cx("break-words leading-tight", i === 0 ? "text-xl font-extrabold" : "text-lg font-bold")}>
+                        {n}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-xl font-extrabold">—</div>
+                  )}
                 </div>
               </div>
             );

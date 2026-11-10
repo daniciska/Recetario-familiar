@@ -7,6 +7,9 @@ import type {
   Unidad,
 } from "./datos/tipos";
 import { diasDeSemana } from "./fechas";
+import { claveComida, itemsLlenos } from "./comidas";
+
+export { claveComida };
 
 export const CATEGORIAS: { nombre: CategoriaCompra; emoji: string }[] = [
   { nombre: "Verduras y frutas", emoji: "🥬" },
@@ -337,10 +340,8 @@ export interface LineaGenerada {
   descontado?: string;
   /** Ya está pendiente en la lista (lo mandó antes el menú de esta semana y aún no se compra). */
   enLista?: boolean;
-}
-
-export function claveComida(fecha: string, tipo: string) {
-  return `${fecha}|${tipo}`;
+  /** Alguna cantidad sumada venía estimada (receta dictada: «≈ 500 g» a partir de «un buen trozo»). */
+  estimado?: true;
 }
 
 export function comidasDeSemana(plan: PlanComidas, lunes: string): ComidaPlanificada[] {
@@ -358,7 +359,8 @@ function claveSuma(nombre: string, unidad: Unidad): { clave: string; b: Base } {
 }
 
 /**
- * Junta los ingredientes del menú de la semana, escalados por porciones y sumados.
+ * Junta los ingredientes del menú de la semana (las recetas de todos los espacios de cada comida),
+ * escalados por las porciones de la comida y sumados.
  * Si se pasa la lista de compras, descuenta lo que ya está comprado de esa semana.
  */
 export function generarLista(
@@ -371,25 +373,30 @@ export function generarLista(
   const acumulado = new Map<string, LineaGenerada>();
 
   for (const comida of comidasDeSemana(plan, lunes)) {
-    const receta = comida.recetaId ? porId.get(comida.recetaId) : undefined;
-    if (!receta) continue;
-    for (const ing of receta.ingredientes) {
-      if (!ing.nombre.trim()) continue;
-      const { clave, b } = claveSuma(ing.nombre, ing.unidad);
-      const cant = escalar(ing.cantidad, receta, comida.porciones);
-      const previo = acumulado.get(clave);
-      if (previo) {
-        if (cant != null) previo.cantidad = (previo.cantidad ?? 0) + cant * b.factor;
-        if (!previo.recetas.includes(receta.nombre)) previo.recetas.push(receta.nombre);
-      } else {
-        acumulado.set(clave, {
-          clave,
-          nombre: ing.nombre.trim().replace(/\s+/g, " "),
-          cantidad: cant == null ? null : cant * b.factor,
-          unidad: b.unidad,
-          categoria: ing.categoria,
-          recetas: [receta.nombre],
-        });
+    for (const item of itemsLlenos(comida)) {
+      const receta = item.recetaId ? porId.get(item.recetaId) : undefined;
+      if (!receta) continue;
+      for (const ing of receta.ingredientes) {
+        if (!ing.nombre.trim()) continue;
+        const { clave, b } = claveSuma(ing.nombre, ing.unidad);
+        const cant = escalar(ing.cantidad, receta, comida.porciones);
+        const previo = acumulado.get(clave);
+        const estimado = ing.estimado === true && cant != null;
+        if (previo) {
+          if (cant != null) previo.cantidad = (previo.cantidad ?? 0) + cant * b.factor;
+          if (!previo.recetas.includes(receta.nombre)) previo.recetas.push(receta.nombre);
+          if (estimado) previo.estimado = true;
+        } else {
+          acumulado.set(clave, {
+            clave,
+            nombre: ing.nombre.trim().replace(/\s+/g, " "),
+            cantidad: cant == null ? null : cant * b.factor,
+            unidad: b.unidad,
+            categoria: ing.categoria,
+            recetas: [receta.nombre],
+            ...(estimado ? { estimado: true as const } : {}),
+          });
+        }
       }
     }
   }

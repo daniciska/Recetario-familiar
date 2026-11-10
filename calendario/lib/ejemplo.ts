@@ -1,5 +1,6 @@
-import type { EstadoApp, Ingrediente, Receta, Unidad, CategoriaCompra } from "./datos/tipos";
-import { adivinarCategoria, claveComida } from "./compras";
+import type { EstadoApp, Ingrediente, Receta, Unidad, CategoriaCompra, TipoComida } from "./datos/tipos";
+import { adivinarCategoria } from "./compras";
+import { armarComida, claveComida } from "./comidas";
 import { hoy, lunesDe, sumarDias } from "./fechas";
 import { COLORES_MIEMBRO } from "./colores";
 
@@ -178,20 +179,29 @@ export function estadoEjemplo(): EstadoApp {
 
   const plan: EstadoApp["plan"] = {};
   const ahoraIso = new Date().toISOString();
-  const poner = (dia: number, tipo: string, recetaId: string | undefined, porciones = 4, texto?: string) => {
-    plan[claveComida(d(dia), tipo)] = { recetaId, porciones, texto };
+  // Cada ítem es un id de receta ("rec_…"), un texto o null (espacio vacío), en el orden de
+  // ESPACIOS_COMIDA (almuerzo: proteína, carbohidrato, verduras, postre).
+  const poner = (dia: number, tipo: TipoComida, items: (string | null)[], porciones = 4) => {
+    const c = armarComida(
+      items.map((x) => (x === null ? null : x.startsWith("rec_") ? { recetaId: x } : { texto: x })),
+      porciones,
+    );
+    if (c) plan[claveComida(d(dia), tipo)] = c;
   };
-  poner(0, "almuerzo", "rec_charquican");
-  poner(0, "colacion", undefined, 2, "Manzana y yogur");
-  poner(2, "colacion", undefined, 2, "Sándwich de quesillo");
-  poner(1, "almuerzo", "rec_cazuela");
-  poner(2, "cena", "rec_porotos_riendas");
-  poner(3, "almuerzo", undefined, 4, "Sobras de porotos");
-  poner(4, "once", "rec_sopaipillas");
-  poner(5, "desayuno", "rec_tostadas_palta");
-  poner(5, "almuerzo", "rec_pastel_choclo", 6);
-  poner(6, "almuerzo", undefined, 4, "Donde la abuela 👵");
-  poner(6, "once", "rec_tostadas_palta");
+  poner(0, "desayuno", ["Pan con palta", "Plátano", "Leche", "Té"]);
+  poner(0, "colacion", ["Manzana", "Mandarina", "Galletas"], 2);
+  // El charquicán ya trae la carne, la papa y las verduras.
+  poner(0, "almuerzo", ["rec_charquican", null, "Ensalada de tomate", "Fruta"]);
+  poner(1, "almuerzo", ["rec_cazuela"]);
+  poner(1, "cena", ["Huevos revueltos", "Pan", "Ensalada"]);
+  poner(2, "colacion", ["Plátano", "Uvas", "Sándwich de quesillo"], 2);
+  poner(2, "cena", ["rec_porotos_riendas", null, "Ensalada chilena"]);
+  poner(3, "almuerzo", ["Sobras de porotos"]);
+  poner(4, "once", ["rec_sopaipillas"]);
+  poner(5, "desayuno", ["rec_tostadas_palta", "Fruta picada", "Yogur", "Café"]);
+  poner(5, "almuerzo", ["rec_pastel_choclo", null, "Ensalada chilena", "Jalea"], 6);
+  poner(6, "almuerzo", ["Donde la abuela 👵"]);
+  poner(6, "once", ["rec_tostadas_palta"]);
 
   return {
     version: 1,
