@@ -79,7 +79,7 @@ function escribiendo(): boolean {
  * se publique una versión nueva: cada 10 minutos, con la pantalla visible, un HEAD a la página compara
  * su ETag con la del momento en que se abrió; si cambió y sigue igual un minuto después (no es un
  * servidor a medio actualizar), recarga apenas se pueda. Así la tablet de la pared no se queda horas con
- * la versión anterior (ver README → «Menú por espacios», límites de la transición).
+ * la versión anterior (ver README → «Equipos con la versión anterior», límite de la transición).
  *
  * Sólo recarga si el servidor responde (sin internet, recargar dejaría la pantalla de error
  * del navegador), si nadie tocó la pantalla en los últimos 2 minutos y si no hay cambios que

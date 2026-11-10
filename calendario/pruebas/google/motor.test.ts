@@ -938,8 +938,8 @@ await caso("Google no aplica todo lo que se le mandó → la pared relee lo que 
   );
   await quieto("repetición ignorada", fam, con);
 
-  // b) Dos PATCH (la serie y un día cambiado): el segundo da 400 → aviso «no aceptó parte del cambio» y la
-  //    pared relee: queda lo que Google sí guardó.
+  // b) Dos PATCH (un día cambiado y la serie): el del día da 400 → aviso con el día y el motivo de Google y la
+  //    pared relee en la misma sincronización (la vuelta siguiente): queda lo que Google sí guardó.
   const fam2 = await h.familia([ev("d2", { titulo: "Teatro", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-01-28" })]);
   const cal2 = h.nuevoCalendario();
   const con2 = h.conexionGoogle(cal2);
@@ -954,13 +954,12 @@ await caso("Google no aplica todo lo que se le mandó → la pared relee lo que 
   const r2 = await h.sync(fam2, con2);
   inj.quitar();
   const avisos2 = await avisosDe(fam2, con2);
-  await h.sync(fam2, con2);
   const l2 = await h.leerEventos(fam2);
   ok(
-    "el segundo PATCH rechazado → aviso «no aceptó parte del cambio» y la pared queda como Google (la serie cambiada, el día no)",
+    "el PATCH del día rechazado → aviso «no aceptó el cambio del día 26-11-2026 de …: <motivo>» y, en la misma sincronización, la pared queda como Google (la serie cambiada, el día no)",
     r2.ok &&
       inj.disparos === 1 &&
-      avisos2.some((a) => /no aceptó parte del cambio/.test(a)) &&
+      avisos2.some((a) => /no aceptó el cambio del día 26-11-2026 de "🦄 Teatro infantil": The specified time range is empty/.test(a)) &&
       l2.find((e) => e.id === "d2")?.titulo === "Teatro infantil" &&
       !l2.find((e) => e.externo?.recurrencia)?.lugar &&
       sim.evento(cal2, gid("d2"))?.summary === "🦄 Teatro infantil",
@@ -1264,6 +1263,179 @@ await caso("el aviso de una vuelta sigue a la vista después de la vuelta que re
     { r, disparos: inj.disparos, porTipo: sim.contadores.porTipo, avisos },
   );
   await quieto("aviso de la primera vuelta", fam, con);
+});
+
+seccion("13. Plazos con muchas piezas y rechazos de una parte (revisión de 3bed136)");
+/** Una serie semanal con `n` fantasmas (días que Google materializó idénticos a la serie) y la pared al día. */
+async function conFantasmas(n: number) {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("f9", { titulo: "Teatro", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-06-28", lugar: "Sala 1" })]);
+  await h.sync(fam, con);
+  sim.interruptores.fantasmasAlLeer = true;
+  sim.interruptores.probFantasma = 1;
+  const cuantas = () => h.vivos(cal).filter((e) => e.recurringEventId).length;
+  for (let i = 0; i < 3 * n && cuantas() < n; i++) await h.sync(fam, con, 24_000);
+  sim.interruptores.fantasmasAlLeer = false;
+  sim.interruptores.probFantasma = 0.3;
+  await h.sync(fam, con, 24_000);
+  return { cal, con, fam, n: cuantas() };
+}
+const tituloSerie = (cal: string) => h.vivos(cal).find((e) => !e.recurringEventId && /Teatro/.test(e.summary ?? ""))?.summary;
+const titulosDias = (cal: string) => h.vivos(cal).filter((e) => e.recurringEventId).map((e) => e.summary);
+
+await caso("muchas fantasmas: el cambio y lo demás de la vuelta suben en la sincronización normal", async () => {
+  // Antes se exigía plazo para el principal y TODAS sus fantasmas: con 6 o más, la sincronización normal
+  // (6,5 s) lanzaba TIEMPO antes de escribir nada, el motor se detenía y tampoco subía «Dentista» (nuevo)
+  // hasta la programada. Ahora: el principal y lo demás primero; las fantasmas, con el tiempo que quede.
+  for (const [n, lat] of [
+    [7, 150],
+    [10, 400],
+  ] as const) {
+    const { cal, con, fam, n: hay } = await conFantasmas(n);
+    ok(`${n} fantasmas, latencia ${lat} ms: el calendario tiene las ${n} y la pared una serie`, hay === n && (await h.leerEventos(fam)).length === 1, hay);
+    await h.cambiarEvento(fam, "f9", { titulo: "Teatro musical" });
+    await h.guardarEventos(fam, (l) => [...l, ev("n9", { titulo: "Dentista", fecha: "2026-11-20" })]);
+    sim.latenciaMs = lat;
+    sim.reiniciarContadores();
+    let r: Awaited<ReturnType<typeof h.sync>>;
+    try {
+      r = await h.sync(fam, con, 6500);
+    } finally {
+      sim.latenciaMs = 0;
+    }
+    const l = await h.leerEventos(fam);
+    const dif = await h.comparar(fam, con);
+    ok(
+      `${n} fantasmas, latencia ${lat} ms: en la sincronización normal suben el título de la serie y «Dentista», sin error, y la pared (sin días cambiados) coincide con Google`,
+      r.ok && !r.error && tituloSerie(cal) === "🦄 Teatro musical" && h.vivos(cal).some((e) => e.summary === "🦄 Dentista") && l.length === 2 && !dif.length,
+      { r, porTipo: sim.contadores.porTipo, titulo: tituloSerie(cal), l: l.map(h.resumen), dif },
+    );
+    const r2 = await h.sync(fam, con, 24_000);
+    const l2 = await h.leerEventos(fam);
+    ok(
+      `${n} fantasmas, latencia ${lat} ms: a más tardar la programada pone al día todos sus días; la pared sigue sin días cambiados y sin avisos`,
+      r2.ok && !r2.pendiente && titulosDias(cal).length === n && titulosDias(cal).every((t) => t === "🦄 Teatro musical") && l2.length === 2 && !(await avisosDe(fam, con)).length,
+      { r2, dias: titulosDias(cal), l2: l2.map(h.resumen), avisos: await avisosDe(fam, con) },
+    );
+    await quieto(`${n} fantasmas puestas al día`, fam, con);
+  }
+});
+
+await caso("fantasmas rezagadas: no se ven como días cambiados y otra sincronización las termina", async () => {
+  // La sincronización se corta mientras se ponen al día las fantasmas (cada PATCH de una fantasma tarda): las
+  // que faltan quedan rezagadas (marca cfv en el principal). La pared no las muestra como días cambiados y
+  // la sincronización siguiente las termina. Si alguien cambia una rezagada (la web), deja de serlo: es un
+  // día cambiado como cualquier otro y no se pisa.
+  const { cal, con, fam, n } = await conFantasmas(5);
+  await h.cambiarEvento(fam, "f9", { titulo: "Teatro de títeres", lugar: "Sala 2" });
+  const lento = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId !== gid("f9"), respuestas.demora(1800), 99);
+  const r = await h.sync(fam, con, 6500);
+  lento.quitar();
+  const est = await h.estado(fam, con);
+  const viejos = h.vivos(cal).filter((e) => e.recurringEventId && e.summary === "🦄 Teatro");
+  const l = await h.leerEventos(fam);
+  ok(
+    "la sincronización cortada: la serie con el título nuevo, algunas fantasmas todavía con el viejo, pendiente y la pared sin días cambiados",
+    r.ok && est?.pendiente === true && tituloSerie(cal) === "🦄 Teatro de títeres" && viejos.length > 0 && viejos.length < n && l.length === 1 && !(await h.comparar(fam, con)).length,
+    { r, viejos: viejos.length, n, l: l.map(h.resumen), cfv: sim.evento(cal, gid("f9"))?.extendedProperties },
+  );
+  // La web cambia una de las rezagadas: ahora es un día cambiado de verdad.
+  const tocada = viejos[0];
+  sim.actor("web", cal).editar(tocada.id, { location: "Patio" });
+  const r2 = await h.sync(fam, con, 24_000);
+  const l2 = await h.leerEventos(fam);
+  const dia = l2.find((e) => e.externo?.recurrencia);
+  ok(
+    "la siguiente termina las demás; la que cambió la web no se pisa y la pared la muestra como día cambiado",
+    r2.ok &&
+      !r2.pendiente &&
+      sim.evento(cal, tocada.id)?.location === "Patio" &&
+      sim.evento(cal, tocada.id)?.summary === "🦄 Teatro" &&
+      titulosDias(cal).filter((t) => t === "🦄 Teatro de títeres").length === n - 1 &&
+      l2.length === 2 &&
+      dia?.lugar === "Patio",
+    { r2, dias: h.vivos(cal).filter((e) => e.recurringEventId).map((e) => [e.summary, e.location]), l2: l2.map(h.resumen) },
+  );
+  await quieto("rezagadas terminadas", fam, con);
+});
+
+await caso("sin plazo para empezar el cambio de una serie: lo demás de la vuelta sigue", async () => {
+  // Una serie con 6 días cambiados (en la web) y en la pared se cambian el lugar de todos y el título: son 7
+  // PATCH (400 + 700·7 ms), más de lo que queda en la sincronización normal. Antes, ese TIEMPO (lanzado sin
+  // escribir nada) detenía la vuelta y «Control» (nuevo) no subía; ahora sólo esa serie queda pendiente.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("g1", { titulo: "Guitarra", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-03-25" })]);
+  await h.sync(fam, con);
+  for (let i = 0; i < 6; i++) {
+    const f = new Date(Date.UTC(2026, 10, 19 + 7 * i)).toISOString().slice(0, 10);
+    sim.actor("web", cal).moverDia(gid("g1"), f, { dateTime: `${f}T18:00:00-03:00`, timeZone: "America/Santiago" }, { dateTime: `${f}T19:00:00-03:00`, timeZone: "America/Santiago" });
+  }
+  await h.sync(fam, con);
+  ok("la pared tiene la serie y sus 6 días cambiados", (await h.leerEventos(fam)).filter((e) => e.externo?.recurrencia).length === 6);
+  await h.guardarEventos(fam, (l) => [
+    ...l.map((e) => (e.id === "g1" ? { ...e, titulo: "Guitarra eléctrica", actualizado: ahoraIso() } : e.externo?.recurrencia ? { ...e, lugar: "Sala 4", actualizado: ahoraIso() } : e)),
+    ev("n8", { titulo: "Control", fecha: "2026-11-21" }),
+  ]);
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con, 6500);
+  const est = await h.estado(fam, con);
+  ok(
+    "la sincronización normal: «Control» sube; la serie no se empieza (nada escrito en ella), sin error y pendiente",
+    r.ok && !r.error && est?.pendiente === true && h.vivos(cal).some((e) => e.summary === "🦄 Control") && sim.evento(cal, gid("g1"))?.summary === "🦄 Guitarra" && !sim.contadores.porTipo["events.patch"],
+    { r, porTipo: sim.contadores.porTipo, est: est && { pendiente: est.pendiente, error: est.error } },
+  );
+  const r2 = await h.sync(fam, con, 24_000);
+  const l2 = await h.leerEventos(fam);
+  ok(
+    "la programada sube la serie entera (título y los 6 días)",
+    r2.ok && sim.evento(cal, gid("g1"))?.summary === "🦄 Guitarra eléctrica" && h.vivos(cal).filter((e) => e.recurringEventId && e.location === "Sala 4").length === 6 && l2.filter((e) => e.externo?.recurrencia && e.lugar === "Sala 4").length === 6,
+    { r2, l2: l2.map(h.resumen) },
+  );
+  await quieto("serie sin plazo para empezar", fam, con);
+});
+
+await caso("Google rechaza el principal después de escribir un día cambiado", async () => {
+  // Título de la serie + lugar de un día cambiado en la misma tanda; Google rechaza (400) el PATCH del
+  // principal cuando el del día ya se escribió. Antes: aviso genérico («no aceptó parte del cambio de …») y
+  // el título volvía atrás recién en la sincronización siguiente, que además borraba el aviso. Ahora: el
+  // aviso dice el motivo de Google y la segunda vuelta de la misma sincronización relee (la pared vuelve a
+  // lo que Google guardó y el aviso sigue a la vista).
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("p9", { titulo: "Piano", repeticion: "semanal", fecha: "2026-11-16", horaInicio: "17:00", horaFin: "18:00" })]);
+  await h.sync(fam, con);
+  sim
+    .actor("web", cal)
+    .moverDia(gid("p9"), "2026-11-23", { dateTime: "2026-11-23T19:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-23T20:00:00-03:00", timeZone: "America/Santiago" });
+  await h.sync(fam, con);
+  const dia = (await h.leerEventos(fam)).find((e) => e.externo?.recurrencia)!;
+  await h.guardarEventos(fam, (l) => l.map((e) => (e.id === "p9" ? { ...e, titulo: "Piano con la tía", actualizado: ahoraIso() } : e.id === dia.id ? { ...e, lugar: "Casa de la tía", actualizado: ahoraIso() } : e)));
+  const inj = sim.inyectar(
+    (p) => p.tipo === "events.patch" && p.eventoId === gid("p9"),
+    respuestas.status(400, { error: { code: 400, message: "Invalid value", errors: [{ reason: "invalid", message: "Invalid value" }] } }),
+    5,
+  );
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  inj.quitar();
+  const avisos = await avisosDe(fam, con);
+  const l = await h.leerEventos(fam);
+  ok(
+    "una sola sincronización: aviso con el motivo de Google y la pared ya volvió a lo de Google (el título viejo, el lugar del día nuevo)",
+    r.ok &&
+      avisos.some((a) => /no aceptó "🦄 Piano con la tía": Invalid value/.test(a)) &&
+      !avisos.some((a) => /parte del cambio/.test(a)) &&
+      l.find((e) => e.id === "p9")?.titulo === "Piano" &&
+      l.find((e) => e.id === dia.id)?.lugar === "Casa de la tía" &&
+      sim.evento(cal, gid("p9"))?.summary === "🦄 Piano" &&
+      h.vivos(cal).find((e) => e.recurringEventId)?.location === "Casa de la tía",
+    { r, avisos, porTipo: sim.contadores.porTipo, l: l.map(h.resumen) },
+  );
+  await h.sync(fam, con);
+  ok("…la sincronización siguiente (sin nada que hacer) deja el aviso a la vista", (await avisosDe(fam, con)).some((a) => /Invalid value/.test(a)), await avisosDe(fam, con));
+  await quieto("principal rechazado después del día", fam, con);
 });
 
 seccion("Al final");

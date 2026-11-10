@@ -22,14 +22,21 @@
 //   que Google pase a las excepciones no deja viejo el If-Match de una excepción, y si algo se corta a
 //   medias lo escrito es "propio" (marca cfh) y la vuelta siguiente termina el cambio en vez de revertirlo.
 //   Las fantasmas van después del principal (si él no se escribe, no se tocan); si Google ya les pasó el
-//   cambio (412), se releen y se les manda sólo lo que les falte. Sin plazo para todo, no se empieza.
+//   cambio (412), se releen y se les manda sólo lo que les falte. Sin plazo para las excepciones y el
+//   principal, no se empieza (TiempoSinEmpezar: el motor sigue con lo demás). Las fantasmas no esperan al
+//   plazo: pocas y con tiempo, ahí mismo; si no, al final de la vuelta (pendientes(), después de lo que
+//   escriba el motor) o en otra. Mientras tanto la marca cfv del principal (serie.ts) hace que las que
+//   faltan no se vean como días cambiados.
+// - Si Google rechaza una parte de un cambio (400) después de escribir otra, el aviso lleva su motivo y la
+//   vuelta siguiente de la misma sincronización relee la serie (pendientes() → true): la pared vuelve a lo
+//   que Google guardó junto con el aviso.
 // - El token sólo va a la base aceptada (Google o, para pruebas, http://127.0.0.1 / localhost) y no se
 //   siguen redirecciones (redirect: "error").
 //
 // API:
 //   class GoogleCalendar implements Transporte
 //     constructor(cuenta, base = baseApiGoogle(), espera = 8000, hasta = Infinity)
-//     ctag, listar, traer, existe, crear, actualizar, borrar, avisos   (contrato del motor)
+//     ctag, listar, traer, existe, crear, actualizar, borrar, avisos, pendientes   (contrato del motor)
 //     calendario(calId): {nombre, zona, rol}       GET events?maxResults=1 (para conectar y "Probar")
 //     pedirJSON(metodo, ruta, {query, cuerpo, ifMatch}): RespuestaGoogle
 //                                                   para compartir.ts y la autoprueba: token, plazos,
@@ -41,6 +48,7 @@
 //   ID_CALENDARIO, idCalendarioValido(id), normalizarIdCalendario(entrada), rutaCalendario(calId)
 //   problemaDeRol(rol, nombre, correo): string | null   texto de PERMISO según el accessRole
 //   errorTiempo(), NO_EDITABLE, class LimiteDeUso (ErrorCalDAV SERVIDOR de un 429 / 403 usageLimits)
+//   class TiempoSinEmpezar (ErrorCalDAV TIEMPO: no había plazo para empezar un cambio; nada se escribió)
 //
 // servidor/google/* nunca importa servidor/sincronizar.ts.
 
@@ -50,8 +58,21 @@ import { NoSePuedeEscribir } from "../ics";
 import { ZONA } from "../../lib/fechas";
 import type { Transporte } from "../proveedores";
 import { descartarToken, localhost, tokenDeAcceso, type CuentaServicio } from "./cuenta";
-import { finIgualInicio, fusionar, marcar, planear, planearCreacion, seVeIgual, sinHoraDeTermino, type Cuerpo, type Op } from "./escritura";
-import { agrupar, hrefSerie, normRec, serieAIcs, textoPlano, type EvG, type HoraG, type Serie } from "./serie";
+import { alcanzarSerie, finIgualInicio, fusionar, marcar, planear, planearCreacion, seVeIgual, sinHoraDeTermino, type Cuerpo, type Op } from "./escritura";
+import {
+  MARCA_FANTASMAS,
+  agrupar,
+  esFantasma,
+  hrefSerie,
+  instanteDeHora,
+  marcaFantasmas,
+  normRec,
+  serieAIcs,
+  textoPlano,
+  type EvG,
+  type HoraG,
+  type Serie,
+} from "./serie";
 
 export const URL_API_GOOGLE = "https://www.googleapis.com/calendar/v3/";
 /** Adónde van los pedidos: Google, o GOOGLE_API_URL si es de esta máquina (pruebas). */
@@ -128,6 +149,16 @@ export function problemaDeRol(rol: string, nombre: string, correo: string): stri
 // ---------- Errores ----------
 
 export const errorTiempo = () => new ErrorCalDAV("Se acabó el tiempo para hablar con Google Calendar", 0, "TIEMPO");
+
+/**
+ * TIEMPO antes de escribir nada: no queda plazo para empezar ese cambio (crear o actualizar). El motor lo
+ * deja pendiente sin detener la vuelta: lo demás que quepa (algo más corto) sigue.
+ */
+export class TiempoSinEmpezar extends ErrorCalDAV {
+  constructor() {
+    super("Se acabó el tiempo para hablar con Google Calendar", 0, "TIEMPO");
+  }
+}
 
 /**
  * Google pidió esperar (429, o 403 con un motivo de límite de uso): SERVIDOR, nunca PERMISO. El texto es
@@ -211,6 +242,26 @@ interface Listado {
   nombre: string;
 }
 
+/** Cuántas fantasmas se ponen al día en la misma pasada que el principal (más, al final de la vuelta). */
+const MAX_EN_LINEA = 3;
+
+/** Primero las de hoy en adelante (las más próximas antes), después las pasadas (las más recientes antes). */
+function prioridad(ops: readonly Op[]): Op[] {
+  const desde = Date.now() - 86_400_000;
+  const t = (o: Op) => {
+    const x = instanteDeHora(o.pieza.originalStartTime);
+    return Number.isFinite(x) ? x : -Infinity;
+  };
+  return [...ops].sort((a, b) => {
+    const ta = t(a);
+    const tb = t(b);
+    const fa = ta >= desde;
+    const fb = tb >= desde;
+    if (fa !== fb) return fa ? -1 : 1;
+    return fa ? ta - tb : tb - ta;
+  });
+}
+
 const tituloDe = (s: Serie) => s.principal?.summary?.trim() || s.vivas[0]?.summary?.trim() || "Sin título";
 const fechaLegible = (f: string) => (/^\d{4}-\d{2}-\d{2}$/.test(f) ? `${f.slice(8, 10)}-${f.slice(5, 7)}-${f.slice(0, 4)}` : f);
 const sinHoraDeTerminoTexto = (t: string) => `"${t}": Google Calendar no acepta eventos sin hora de término; ponle una en la pared.`;
@@ -224,6 +275,12 @@ export class GoogleCalendar implements Transporte {
   private listados = new Map<string, Promise<Listado>>();
   private memoExiste = new Map<string, boolean>();
   private pendientesAviso: string[] = [];
+  /** Fantasmas que no alcanzaron a seguir un cambio de esta vuelta (las pone al día pendientes()). */
+  private cola: { calId: string; op: Op; T: string }[] = [];
+  /** Series (id) que esta vuelta empezó a escribir o borró: sus rezagadas del listado ya no valen. */
+  private tocadas = new Set<string>();
+  /** Calendarios con una serie que Google no dejó como se le mandó: la vuelta siguiente la relee. */
+  private releer = new Set<string>();
 
   /**
    * @param base   la API (por omisión baseApiGoogle()); cualquier otra que no sea Google ni local se ignora
@@ -450,13 +507,15 @@ export class GoogleCalendar implements Transporte {
 
   /**
    * PATCH de una pieza con If-Match. Un rechazo de Google (400, 403 de un evento no editable) vuelve como
-   * NoSePuedeEscribir (sin lanzarlo): quien llama decide si es todo el cambio o sólo una parte.
+   * NoSePuedeEscribir (sin lanzarlo), con el motivo de Google: quien llama decide si es todo el cambio o
+   * sólo una parte. `dia` (AAAA-MM-DD): es una excepción, para el texto.
    */
   private async parche(
     calId: string,
     pieza: EvG,
     cuerpo: Cuerpo,
     T: string,
+    dia?: string,
   ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } | "conflicto" | "noExiste" | NoSePuedeEscribir> {
     const ruta = `${rutaCalendario(calId)}/events/${encodeURIComponent(pieza.id)}`;
     const pedir = (c: Cuerpo) => this.pedirJSON("PATCH", ruta, { query: { fields: CAMPOS_PATCH }, cuerpo: c, ...(pieza.etag ? { ifMatch: pieza.etag } : {}) });
@@ -479,7 +538,8 @@ export class GoogleCalendar implements Transporte {
     if (!rechazo) throw this.errorDe(r, "cambiar el calendario");
     if (r.status === 403) return new NoSePuedeEscribir(noEditableTexto(T));
     if (sinFin) return new NoSePuedeEscribir(sinHoraDeTerminoTexto(T));
-    return new NoSePuedeEscribir(`Google Calendar no aceptó "${T}"${r.mensaje ? `: ${r.mensaje}` : ""}.`);
+    const motivo = r.mensaje ? `: ${r.mensaje}` : "";
+    return new NoSePuedeEscribir(dia ? `Google Calendar no aceptó el cambio del día ${fechaLegible(dia)} de "${T}"${motivo}.` : `Google Calendar no aceptó "${T}"${motivo}.`);
   }
 
   /**
@@ -516,18 +576,53 @@ export class GoogleCalendar implements Transporte {
     return { pieza: fresca, cuerpo: marcar(fresca, cuerpo) };
   }
 
+  /**
+   * Pone al día una fantasma (lo de `op`), después del principal o al final de la vuelta. Un 412 es que
+   * Google le cambió algo después del principal (le pasó el cambio, o sólo una parte, con lo que su If-Match
+   * quedó viejo) o que alguien la tocó: se vuelve a leer y se le manda sólo lo que le falte, si eso sigue
+   * como estaba en el listado (ver alDia); si no, no se pisa ("otro"). "corte": se acabó el plazo (no
+   * alcanza `reserva` para releerla) o Google falló; queda para después (es una rezagada: ver serie.ts).
+   */
+  private async seguirUna(
+    calId: string,
+    op: Op,
+    T: string,
+    reserva: number,
+  ): Promise<{ pieza: EvG; r?: { json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } } | "corte" | "otro" | NoSePuedeEscribir> {
+    const corte = (e: unknown) => {
+      if (e instanceof ErrorCalDAV) return "corte" as const;
+      throw e;
+    };
+    let pieza = op.pieza;
+    let r = await this.parche(calId, pieza, op.cuerpo, T, op.fecha).catch(corte);
+    if (r === "conflicto") {
+      if (this.queda() < reserva) return "corte";
+      const d = await this.alDia(calId, op).catch(corte);
+      if (d === "corte") return d;
+      if (!d) return "otro";
+      if (!d.cuerpo) return { pieza: d.pieza }; // Google ya le pasó todo
+      if (this.queda() < reserva) return "corte";
+      pieza = d.pieza;
+      r = await this.parche(calId, pieza, d.cuerpo, T, op.fecha).catch(corte);
+    }
+    if (r === "corte" || r instanceof NoSePuedeEscribir) return r;
+    if (r === "conflicto" || r === "noExiste") return "otro";
+    return { pieza, r };
+  }
+
   async actualizar(url: string, href: string, ics: string, etag: string): Promise<{ etag: string | null } | "conflicto" | "noExiste"> {
     const l = await this.listado(url);
     const serie = l.series.get(href);
     if (!serie) return "noExiste";
     if (serie.etag !== etag) return "conflicto";
     const plan = planear(serie, ics); // NoSePuedeEscribir antes de escribir nada
-    const n = plan.ops.length + (plan.maestro ? 1 : 0) + plan.seguir.length;
-    if (!n) return { etag: null };
-    // Sin tiempo para todo (las fantasmas incluidas), no se empieza: el motor lo deja pendiente sin contarlo
-    // como falla y lo hace una vuelta con más plazo (la programada). Empezar y cortarse a medias podría dejar
-    // en Google días distintos de la serie que la pared no muestra.
-    if (this.queda() < 400 + 700 * n) throw errorTiempo();
+    const n = plan.ops.length + (plan.maestro ? 1 : 0);
+    if (!n && !plan.seguir.length) return { etag: null };
+    // Sin tiempo para las excepciones y el principal, no se empieza: el motor lo deja pendiente (sin
+    // contarlo como falla) y sigue con lo demás que quepa; lo hace una vuelta con más plazo. Las fantasmas no
+    // cuentan aquí: si no alcanzan, quedan para el final de la vuelta (pendientes()) o para otra.
+    if (this.queda() < 400 + 700 * Math.max(n, 1)) throw new TiempoSinEmpezar();
+    this.tocadas.add(serie.id);
     const T = plan.avisoTitulo;
     let escritos = 0;
     // Cómo queda cada pieza según lo que respondió Google (para el etag del próximo listado).
@@ -536,17 +631,19 @@ export class GoogleCalendar implements Transporte {
     let previsible = !plan.releer; // (planear ya sabe que lo que quede no se leerá igual que la pared)
     const despues = (pieza: EvG, r: { json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean }): EvG => {
       const etag = texto(r.json.etag);
+      const updated = texto(r.json.updated);
       // Borrar `end` con un PATCH (el respaldo "sin hora de término") no está documentado: lo que quedó se
       // relee en vez de suponerlo.
       if (!etag || r.sinFin) previsible = false;
-      return { ...fusionar(pieza, r.enviado), etag };
+      return { ...fusionar(pieza, r.enviado), etag, ...(updated ? { updated } : {}) };
     };
     // Lo que Google rechaza (400, evento no editable) no se reintenta: se sigue con lo demás. Si al final no
     // se escribió nada, es NoSePuedeEscribir (el motor deja lo de Google, con el aviso de Google); si algo
-    // sí, queda un aviso y la vuelta siguiente relee lo que quedó.
-    let rechazo: NoSePuedeEscribir | null = null;
+    // sí, queda el aviso (con el motivo de Google) y la vuelta siguiente de la misma sincronización relee
+    // lo que quedó (pendientes() dice que queda trabajo), así la pared vuelve atrás junto con el aviso.
+    const rechazos: NoSePuedeEscribir[] = [];
     const rechazada = (e: NoSePuedeEscribir) => {
-      rechazo ??= e;
+      rechazos.push(e);
       previsible = false;
     };
     // 1. Las excepciones, antes que el principal: si Google pasa a las excepciones un título nuevo del
@@ -554,7 +651,7 @@ export class GoogleCalendar implements Transporte {
     //    que ya no está o que cambió es "conflicto" (nunca "noExiste": la serie sigue ahí); la vuelta
     //    siguiente la relee.
     for (const op of plan.ops) {
-      const r = await this.parche(url, op.pieza, op.cuerpo, T);
+      const r = await this.parche(url, op.pieza, op.cuerpo, T, op.fecha);
       if (r === "conflicto" || r === "noExiste") return "conflicto";
       if (r instanceof NoSePuedeEscribir) rechazada(r);
       else {
@@ -562,10 +659,16 @@ export class GoogleCalendar implements Transporte {
         piezas.set(op.pieza.id, despues(op.pieza, r));
       }
     }
-    // 2. El principal ("noExiste" sólo si no se escribió nada antes: la serie ya no está).
+    // 2. El principal ("noExiste" sólo si no se escribió nada antes: la serie ya no está). Si la serie
+    //    tiene fantasmas, lleva la marca cfv (serie.ts): las que no alcancen a seguir el cambio no se verán
+    //    como días cambiados.
     let principalEscrito = false;
     if (plan.maestro) {
-      const r = await this.parche(url, serie.principal!, plan.maestro, T);
+      let maestro = plan.maestro;
+      const cancelan = new Set(plan.ops.filter((o) => o.tipo === "cancelar").map((o) => o.id));
+      const marca = marcaFantasmas(principal, fusionar(principal, maestro), serie.fantasmas.filter((f) => !cancelan.has(f.id)), Date.now());
+      if (marca !== undefined) maestro = marcar(principal, { ...maestro, extendedProperties: { private: { [MARCA_FANTASMAS]: marca } } });
+      const r = await this.parche(url, serie.principal!, maestro, T);
       if (r === "conflicto") return r;
       if (r === "noExiste") return escritos ? "conflicto" : "noExiste";
       if (r instanceof NoSePuedeEscribir) rechazada(r);
@@ -578,63 +681,79 @@ export class GoogleCalendar implements Transporte {
           const recibida = Array.isArray(r.json.recurrence) ? (r.json.recurrence as unknown[]).filter((x): x is string => typeof x === "string") : [];
           if (JSON.stringify(normRec(recibida)) !== JSON.stringify(normRec(enviada))) {
             previsible = false;
+            this.releer.add(url);
             this.avisar(`Google Calendar no aceptó cambiar la repetición de "${T}"; quedó como está allá.`);
           }
         }
       }
     }
-    if (rechazo && !escritos) throw rechazo;
-    const parteRechazada = () => this.avisar(`Google Calendar no aceptó parte del cambio de "${T}".`);
-    if (rechazo) parteRechazada();
-    // 3. Las fantasmas, sólo con el principal ya escrito (antes, una fantasma cambiada sería un día distinto
-    //    de la serie vieja que la pared no tiene, y si el principal no se pudiera escribir quedaría así).
-    //    Un 412 es que Google le cambió algo después del principal (le pasó el cambio, o sólo una parte, con
-    //    lo que su If-Match quedó viejo) o que alguien la tocó: se vuelve a leer y se le manda sólo lo que le
-    //    falte, si eso sigue como estaba en el listado (ver alDia); si no, no se pisa y la vuelta siguiente
-    //    relee. Si se acaba el plazo o Google falla aquí, lo de la pared ya está en Google: no se lanza (la
-    //    vuelta siguiente revertiría la pared por esos días); se relee y esos días quedan como días cambiados.
-    const faltanDias = () => this.avisar(`"${T}": el cambio no se alcanzó a pasar a todos sus días en Google Calendar; los que faltan quedaron como días cambiados.`);
-    if (principalEscrito) {
-      const corte = (e: unknown) => {
-        if (e instanceof ErrorCalDAV) return "corte" as const;
-        throw e;
-      };
-      for (let i = 0; i < plan.seguir.length; i++) {
-        const op = plan.seguir[i];
-        // Lo que necesitan las fantasmas que quedan (un reintento no se come su plazo).
-        const reserva = 400 + 700 * (plan.seguir.length - i);
-        let pieza = op.pieza;
-        let r = await this.parche(url, pieza, op.cuerpo, T).catch(corte);
-        if (r === "conflicto" && this.queda() >= reserva) {
-          const d = await this.alDia(url, op).catch(corte);
-          if (d === "corte") r = d;
-          else if (d && !d.cuerpo) {
-            piezas.set(d.pieza.id, d.pieza); // Google ya le pasó todo
-            continue;
-          } else if (d?.cuerpo && this.queda() >= reserva) {
-            pieza = d.pieza;
-            r = await this.parche(url, pieza, d.cuerpo, T).catch(corte);
-          }
+    if (rechazos.length && !escritos) throw rechazos[0];
+    if (rechazos.length) {
+      for (const e of rechazos) this.avisar(e.message);
+      this.releer.add(url);
+    }
+    // 3. Las fantasmas, después del principal y sólo si se escribió (o si no había que cambiarlo: entonces
+    //    son rezagadas de un cambio anterior). Antes, una fantasma cambiada sería un día distinto de la
+    //    serie vieja que la pared no tiene, y si el principal no se pudiera escribir quedaría así. Pocas y con
+    //    plazo: aquí mismo. Si no, quedan para el final de la vuelta (pendientes(), después de lo demás que
+    //    tenga que escribir el motor) o para otra: con la marca cfv son rezagadas, no días cambiados.
+    if ((principalEscrito || !plan.maestro) && plan.seguir.length) {
+      const cola = prioridad(plan.seguir);
+      let i = 0;
+      if (cola.length <= MAX_EN_LINEA && this.queda() >= 400 + 700 * cola.length) {
+        for (; i < cola.length; i++) {
+          const r = await this.seguirUna(url, cola[i], T, 400 + 700 * (cola.length - i));
+          if (r === "corte") break;
+          if (r === "otro") previsible = false;
+          else if (r instanceof NoSePuedeEscribir) {
+            previsible = false;
+            this.avisar(r.message);
+          } else piezas.set(r.pieza.id, r.r ? despues(r.pieza, r.r) : r.pieza);
         }
-        if (r === "corte") {
-          previsible = false;
-          faltanDias();
-          break;
-        }
-        if (r === "conflicto" || r === "noExiste") previsible = false;
-        else if (r instanceof NoSePuedeEscribir) {
-          previsible = false;
-          parteRechazada();
-        } else piezas.set(pieza.id, despues(pieza, r));
       }
-      if (plan.sinSeguir) {
+      if (i < cola.length) {
         previsible = false;
-        faltanDias();
+        for (const op of cola.slice(i)) this.cola.push({ calId: url, op, T });
       }
     } else if (plan.seguir.length) previsible = false;
     // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
     // queda igual a lo que Google guardó.
     return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null };
+  }
+
+  /**
+   * Al final de la vuelta, con el tiempo que quede (después de lo que escribió el motor): las fantasmas
+   * que no alcanzaron a seguir un cambio de esta vuelta y las rezagadas de otras (ver serie.ts), primero las
+   * de hoy en adelante. true si queda trabajo para la vuelta siguiente: rezagadas que no alcanzaron, o una
+   * serie que Google no dejó como se le mandó y hay que releer (así la pared vuelve atrás en la misma
+   * sincronización, con su aviso). Nunca lanza un ErrorCalDAV: lo que falle queda para otra vuelta.
+   */
+  async pendientes(url: string): Promise<boolean> {
+    const trabajo = this.cola.filter((x) => x.calId === url);
+    this.cola = this.cola.filter((x) => x.calId !== url);
+    const l = await this.listados.get(url)?.catch(() => null);
+    if (l) {
+      for (const s of l.series.values()) {
+        if (this.tocadas.has(s.id) || s.soloLectura || !s.principal) continue;
+        for (const f of s.fantasmas) {
+          if (esFantasma(f, s.principal)) continue;
+          const op = alcanzarSerie(f, s.principal);
+          if (op) trabajo.push({ calId: url, op, T: tituloDe(s) });
+        }
+      }
+    }
+    const releer = this.releer.has(url);
+    this.releer.delete(url);
+    const orden = new Map(prioridad(trabajo.map((x) => x.op)).map((op, i) => [op, i]));
+    trabajo.sort((a, b) => orden.get(a.op)! - orden.get(b.op)!);
+    for (let i = 0; i < trabajo.length; i++) {
+      if (this.queda() < 1200) return true;
+      const { op, T } = trabajo[i];
+      const r = await this.seguirUna(url, op, T, 1200);
+      if (r === "corte") return true;
+      if (r instanceof NoSePuedeEscribir) this.avisar(r.message);
+    }
+    return releer;
   }
 
   /**
@@ -658,7 +777,7 @@ export class GoogleCalendar implements Transporte {
     const ruta = `${rutaCalendario(url)}/events`;
     const c = planearCreacion(ics); // NoSePuedeEscribir si no hay evento principal
     const k = c.dias.length;
-    if (this.queda() < 400 + 700 * (1 + 2 * k)) throw errorTiempo();
+    if (this.queda() < 400 + 700 * (1 + 2 * k)) throw new TiempoSinEmpezar();
     const T = c.titulo;
     let sinFin = false;
     let id: string | null = null;
@@ -758,6 +877,7 @@ export class GoogleCalendar implements Transporte {
     if (serie.etag !== etag) return "conflicto";
     const T = tituloDe(serie);
     if (serie.soloLectura || !serie.principal) throw new NoSePuedeEscribir(`"${T}" solo se puede borrar en Google Calendar.`);
+    this.tocadas.add(serie.id);
     const r = await this.pedirJSON("DELETE", `${rutaCalendario(url)}/events/${encodeURIComponent(serie.principal.id)}`, {
       ...(serie.principal.etag ? { ifMatch: serie.principal.etag } : {}),
     });

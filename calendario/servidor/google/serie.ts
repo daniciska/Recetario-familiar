@@ -7,10 +7,13 @@
 // - canceladas → EXDATE en el principal (y se recuerda cuál vino de cuál: `p2`), salvo las huérfanas
 //   (la serie se movió de hora y ya no calzan con ninguna ocurrencia: en Google no ocultan nada);
 // - vivas      → un VEVENT con RECURRENCE-ID;
-// - fantasmas  → excepciones idénticas a la serie (Google a veces las materializa): no se muestran.
+// - fantasmas  → excepciones idénticas a la serie (Google a veces las materializa), o "rezagadas" (que
+//                quedaron atrás de un cambio del panel; marca cfv del principal): no se muestran.
 //
 // API:
 //   agrupar(items, calId, zonaCal): Map<href, Serie>
+//   esFantasma(x, p), esRezagada(x, p)            (una rezagada está en serie.fantasmas pero no es esFantasma)
+//   marcaFantasmas(antes, despues, fantasmas, ahora)   la marca cfv para el PATCH del principal (MARCA_FANTASMAS)
 //   hrefSerie(calId, id): string                  el href de una serie (el mismo que arma agrupar)
 //   proyectar(serie): { ics, p2, porClave }        (con memo por serie; determinista)
 //   serieAIcs(serie): string                       = proyectar(serie).ics
@@ -313,7 +316,7 @@ const duracion = (e: EvG) => (e.endTimeUnspecified ? "~" : String(instanteDeHora
 const tipoHora = (t: HoraG | undefined) => (t?.date ? "date" : t?.dateTime ? "dateTime" : "");
 
 /** Excepción idéntica a la serie en lo que ve el panel (Google a veces las materializa sin cambios). */
-function esFantasma(x: EvG, p: EvG): boolean {
+export function esFantasma(x: EvG, p: EvG): boolean {
   return (
     recorte(x.summary) === recorte(p.summary) &&
     recorte(textoPlano(x.description ?? "")) === recorte(textoPlano(p.description ?? "")) &&
@@ -326,6 +329,108 @@ function esFantasma(x: EvG, p: EvG): boolean {
     tipoHora(x.start) === tipoHora(x.originalStartTime) &&
     duracion(x) === duracion(p)
   );
+}
+
+// ---------- Fantasmas rezagadas (marca cfv del principal) ----------
+//
+// Cuando el panel cambia una serie, a sus fantasmas les manda lo mismo (escritura.ts), pero puede que no
+// alcance a hacerlo en la misma vuelta (el plazo, o un corte): las que faltan quedan con el valor de antes
+// y se verían como días cambiados que nadie hizo. Por eso el PATCH del principal lleva, en
+// extendedProperties.private.cfv, por cada campo que cambia (s título, d nota, l lugar, h duración) la
+// huella del valor de antes y cuándo se cambió. Una excepción que difiere de la serie sólo en valores de
+// antes de esa lista, y que nadie tocó desde ese cambio (su `updated` no es posterior), es una fantasma
+// "rezagada": no se muestra (cuenta como fantasma) y el transporte la pone al día cuando puede. Si alguien
+// la cambió después (o el iPhone borró la marca), es un día cambiado como cualquier otro.
+
+/** Clave de la marca en extendedProperties.private del principal. */
+export const MARCA_FANTASMAS = "cfv";
+/** Cuántas entradas guarda la marca (las más recientes; Google acepta hasta 1024 caracteres por valor). */
+const MAX_MARCA = 24;
+/**
+ * Margen del "cuándo se cambió": al aplicar el cambio del principal, Google puede tocar las excepciones
+ * (pasarles el título) y su `updated` queda un poco después de la hora de este servidor.
+ */
+const MARGEN_MARCA = 120_000;
+
+interface Rezago {
+  campo: string;
+  huella: string;
+  /** ms (segundos enteros): hasta cuándo una excepción con ese valor sigue siendo "de antes del cambio". */
+  hasta: number;
+}
+
+const CAMPOS_FANTASMA: [string, (e: EvG) => string][] = [
+  ["s", (e) => recorte(e.summary)],
+  ["d", (e) => recorte(textoPlano(e.description ?? ""))],
+  ["l", (e) => recorte(e.location)],
+  ["h", duracion],
+];
+const huellaValor = (v: string) => sha256(v).toString("hex").slice(0, 12);
+
+function leerMarca(p: EvG | undefined): Rezago[] {
+  const t = p?.extendedProperties?.private?.[MARCA_FANTASMAS];
+  if (typeof t !== "string") return [];
+  const r: Rezago[] = [];
+  for (const x of t.split(",")) {
+    const m = /^([sdlh])\.([0-9a-f]{12})\.([0-9a-z]{1,9})$/.exec(x.trim());
+    if (m) r.push({ campo: m[1], huella: m[2], hasta: parseInt(m[3], 36) * 1000 });
+  }
+  return r;
+}
+
+/** Las entradas de la marca que explican a `x` como rezagada de `p`, o null si no lo es (ver arriba). */
+function rezagadaCon(x: EvG, p: EvG, marca: readonly Rezago[]): Rezago[] | null {
+  if (!marca.length || !p.start || !x.start || !x.originalStartTime) return null;
+  if ((x.status ?? "confirmed") !== (p.status ?? "confirmed")) return null;
+  if (instanteDeHora(x.start) !== instanteDeHora(x.originalStartTime)) return null;
+  if (tipoHora(x.start) !== tipoHora(p.start) || tipoHora(x.start) !== tipoHora(x.originalStartTime)) return null;
+  const t = Date.parse(x.updated ?? "");
+  if (!Number.isFinite(t)) return null;
+  const usa: Rezago[] = [];
+  for (const [campo, valor] of CAMPOS_FANTASMA) {
+    const v = valor(x);
+    if (v === valor(p)) continue;
+    const h = huellaValor(v);
+    const e = marca.find((y) => y.campo === campo && y.huella === h && t <= y.hasta);
+    if (!e) return null;
+    usa.push(e);
+  }
+  return usa.length ? usa : null;
+}
+
+/** ¿Una fantasma que quedó atrás de un cambio de la serie hecho desde el panel? (ver arriba) */
+export function esRezagada(x: EvG, p: EvG): boolean {
+  return !!rezagadaCon(x, p, leerMarca(p));
+}
+
+/**
+ * La marca cfv que tiene que llevar el PATCH del principal que pasa de `antes` a `despues`. `fantasmas`
+ * son las de la serie que siguen ahí después del cambio (normales y rezagadas, sin las que se cancelan):
+ * sin ninguna, no hace falta. Por cada campo que cambia, la huella del valor de `antes` (hasta `ahora` más
+ * MARGEN_MARCA), y las entradas de la marca de antes que todavía explican alguna rezagada. undefined: no
+ * hay que mandar nada (queda la que está); null: hay que borrarla.
+ */
+export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG[], ahora: number): string | null | undefined {
+  const r: Rezago[] = [];
+  const poner = (e: Rezago) => {
+    const y = r.find((z) => z.campo === e.campo && z.huella === e.huella);
+    if (!y) r.push({ ...e });
+    else y.hasta = Math.max(y.hasta, e.hasta);
+  };
+  if (fantasmas.length) {
+    const hasta = Math.ceil((ahora + MARGEN_MARCA) / 1000) * 1000;
+    for (const [campo, valor] of CAMPOS_FANTASMA) if (valor(antes) !== valor(despues)) poner({ campo, huella: huellaValor(valor(antes)), hasta });
+    const vieja = leerMarca(antes);
+    for (const x of fantasmas) for (const e of rezagadaCon(x, antes, vieja) ?? []) poner(e);
+  }
+  const previa = antes.extendedProperties?.private?.[MARCA_FANTASMAS];
+  if (!r.length) return previa === undefined ? undefined : null;
+  const texto = r
+    .sort((a, b) => b.hasta - a.hasta)
+    .slice(0, MAX_MARCA)
+    .map((e) => `${e.campo}.${e.huella}.${(e.hasta / 1000).toString(36)}`)
+    .join(",");
+  return texto === previa ? undefined : texto;
 }
 
 const NOMBRES_REC = new Set(["rrule", "exrule", "rdate", "exdate"]);
@@ -389,9 +494,10 @@ export function agrupar(items: readonly EvG[], calId: string, zonaCal: string | 
     const vivas: EvG[] = [];
     const fantasmas: EvG[] = [];
     const canceladas: EvG[] = [];
+    const marca = leerMarca(p);
     for (const x of g.excepciones) {
       if (x.status === "cancelled") canceladas.push(x);
-      else if (p && esFantasma(x, p)) fantasmas.push(x);
+      else if (p && (esFantasma(x, p) || rezagadaCon(x, p, marca))) fantasmas.push(x);
       else vivas.push(x);
     }
     if (!p && !vivas.length) continue;

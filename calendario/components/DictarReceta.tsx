@@ -771,7 +771,8 @@ function Avance({
       {corte && <p className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">{corte === "maximo" ? TEXTOS.maximoAlcanzado : TEXTOS.cortada}</p>}
       <ol className="space-y-2" aria-label="Avance">
         {enEquipo === false ? (
-          <li className="rounded-2xl bg-red-600/15 px-4 py-2.5 text-lg font-bold text-red-700 noche:text-red-300">{TEXTOS.sinCopiaLocal}</li>
+          // Sin copia en el equipo: el aviso rojo mientras el audio está sólo aquí; ya en la nube, sobra.
+          vista.enRiesgo && <li className="rounded-2xl bg-red-600/15 px-4 py-2.5 text-lg font-bold text-red-700 noche:text-red-300">{TEXTOS.sinCopiaLocal}</li>
         ) : (
           <Paso hecho={enEquipo === true} actual={enEquipo === null}>
             {TEXTOS.guardadoEquipo(pendiente?.segundos)}

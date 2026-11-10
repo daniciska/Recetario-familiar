@@ -13,7 +13,7 @@
 
 import { ErrorCalDAV } from "./caldav";
 import { nombreProveedor, textoSinCuenta, transporteDe, type Transporte } from "./proveedores";
-import { LimiteDeUso } from "./google/transporte";
+import { LimiteDeUso, TiempoSinEmpezar } from "./google/transporte";
 import {
   NoSePuedeEscribir,
   SUFIJO_UID,
@@ -552,8 +552,11 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: OpcionesVuel
     };
     const alFallar = (e: unknown) => {
       if (!(e instanceof ErrorCalDAV)) throw e;
-      detenido = true;
       pendiente = true;
+      // (Google) No quedaba plazo para empezar ese cambio y no se escribió nada: queda para la próxima
+      // vuelta y lo demás que quepa sigue. (CalDAV nunca lo lanza.)
+      if (e instanceof TiempoSinEmpezar) return;
+      detenido = true;
       if (e.codigo !== "TIEMPO") falla ??= e;
     };
 
@@ -862,6 +865,9 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: OpcionesVuel
       }),
     );
     const rechazo = trabajos.find((t): t is PromiseRejectedResult => t.status === "rejected");
+    // 4b. Lo que el calendario dejó para el final de la vuelta, con el tiempo que quede (Google: los días
+    //     de una serie que no alcanzaron a seguir un cambio). (CalDAV no tiene nada.)
+    if (cal.pendientes && !detenido && !rechazo && (await cal.pendientes(conexion.url))) pendiente = true;
 
     // 5. Guardar los cambios en la colección (sin pisar lo que otro equipo guardó entre medio). Si
     //    mientras tanto se desconectó el calendario, no se guarda nada.

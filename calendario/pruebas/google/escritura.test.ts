@@ -6,8 +6,9 @@
 import ICAL from "ical.js";
 import { NoSePuedeEscribir, escribirRecurso, huellaGrupo, leerRecurso, parsear } from "../../servidor/ics";
 import type { Evento } from "../../lib/datos/tipos";
-import { agrupar, huellaPieza, serieAIcs, type EvG, type HoraG, type Serie } from "../../servidor/google/serie";
+import { MARCA_FANTASMAS, agrupar, esRezagada, huellaPieza, marcaFantasmas, serieAIcs, type EvG, type HoraG, type Serie } from "../../servidor/google/serie";
 import {
+  alcanzarSerie,
   cuerpoInsert,
   cuerposDeHora,
   finIgualInicio,
@@ -319,8 +320,7 @@ caso("C2b: las fantasmas reciben lo mismo que el principal (seguir)", () => {
       seguir[0].tipo === "cambiar" &&
       claves(seguir[0].cuerpo) === "summary" &&
       seguir[0].cuerpo.summary === "🦄 Natación y clavados" &&
-      seguir[0].fecha === "2026-12-02" &&
-      !p.sinSeguir,
+      seguir[0].fecha === "2026-12-02",
   );
   T(
     "nota y lugar de la serie → la fantasma con description y location",
@@ -349,16 +349,70 @@ caso("C2b: las fantasmas reciben lo mismo que el principal (seguir)", () => {
   );
   T("sólo la repetición («hasta») → a la fantasma no se le manda nada", plan(natacion(), enPrincipal((e) => ({ ...e, repetirHasta: "2027-03-31" }))), (p, seguir) => claves(p.maestro) === "recurrence" && !seguir.length);
   T("sólo un día cambiado → a la fantasma no se le manda nada", plan(natacion(), (l) => l.map((e) => (esPrincipal(e) ? e : { ...e, lugar: "Piscina 2" }))), (p, seguir) => !p.maestro && p.ops.length === 1 && !seguir.length);
-  // Muchas fantasmas: hasta MAX_SEGUIR (por fecha); las demás quedan contadas en sinSeguir.
+  // Muchas fantasmas: todas, por fecha (cuántas se mandan en la misma pasada lo decide el transporte; las
+  // demás quedan rezagadas, con la marca cfv del principal, y se ponen al día después).
   const muchas = Array.from({ length: 12 }, (_, i): EvG => {
     const d = new Date(Date.UTC(2026, 10, 25 + 7 * i));
     const f = d.toISOString().slice(0, 10);
     return { ...fantasmaNat(), id: `${idNat}_${f.replace(/-/g, "")}T120000Z`, etag: `"f${i}"`, originalStartTime: h(`${f}T09:00:00-03:00`), start: h(`${f}T09:00:00-03:00`), end: h(`${f}T10:00:00-03:00`) };
   });
   T(
-    "12 fantasmas → se ponen al día las 10 primeras y quedan 2 en sinSeguir",
+    "12 fantasmas → las 12 en seguir, por fecha",
     plan([principalNat(), ...muchas], enPrincipal((e) => ({ ...e, titulo: "Natación (todas)" }))),
-    (p, seguir) => seguir.length === 10 && p.sinSeguir === 2 && seguir[0].fecha === "2026-11-25" && seguir[9].fecha === "2027-01-27",
+    (_p, seguir) => seguir.length === 12 && seguir[0].fecha === "2026-11-25" && seguir[11].fecha === "2027-02-10",
+  );
+});
+
+caso("C2c: fantasmas rezagadas (de un cambio anterior que no alcanzó a pasarles)", () => {
+  // La serie ya tiene el título nuevo (con la marca cfv); su fantasma del 2-dic quedó con el de antes.
+  const nuevo = principalNat({ summary: "🦄 Natación libre", end: h("2026-11-04T10:30:00-03:00") });
+  const marca = marcaFantasmas(principalNat(), nuevo, [fantasmaNat()], Date.parse("2026-11-08T12:00:00.000Z")) as string;
+  const pM = { ...nuevo, extendedProperties: { private: { cfh: "x", [MARCA_FANTASMAS]: marca } } };
+  const items = [pM, vivaNat(), canceladaNat(), fantasmaNat()];
+  ok("la fantasma es rezagada (título y duración de antes)", esRezagada(fantasmaNat(), pM));
+  const o = alcanzarSerie(fantasmaNat(), pM);
+  ok(
+    "alcanzarSerie: el título y la hora de término (con su mismo inicio), con la marca cfh de cómo queda",
+    !!o &&
+      claves(o.cuerpo) === "end,start,summary" &&
+      o.cuerpo.summary === "🦄 Natación libre" &&
+      (o.cuerpo.end as { dateTime: string }).dateTime === "2026-12-02T10:30:00-03:00" &&
+      (o.cuerpo.start as { dateTime: string }).dateTime === "2026-12-02T09:00:00-03:00" &&
+      (o.cuerpo.extendedProperties as { private: { cfh: string } }).private.cfh === huellaPieza(fusionar(fantasmaNat(), { summary: "🦄 Natación libre", end: h("2026-12-02T10:30:00-03:00"), start: h("2026-12-02T09:00:00-03:00") })),
+    o && sinPieza({ ops: [o], seguir: [], avisoTitulo: "" } as unknown as Plan),
+  );
+  ok("alcanzarSerie de una que ya está igual → null", alcanzarSerie({ ...fantasmaNat(), summary: "🦄 Natación libre", end: h("2026-12-02T10:30:00-03:00") }, pM) === null);
+  ok(
+    "a una serie sin hora de término: la rezagada pasa a «sin hora de término» (end: null)",
+    (() => {
+      const x = alcanzarSerie(fantasmaNat(), { ...pM, end: undefined, endTimeUnspecified: true });
+      return !!x && x.cuerpo.endTimeUnspecified === true && x.cuerpo.end === null && "start" in x.cuerpo;
+    })(),
+  );
+  // Un cambio nuevo en la pared (sólo el lugar): al principal se le manda el lugar, y a la rezagada todo lo
+  // que le falta para quedar como la serie B (título, término y lugar).
+  const p = plan(items, enPrincipal((e) => ({ ...e, lugar: "Piscina olímpica" })));
+  ok(
+    "planear con una rezagada: maestro con el lugar; seguir con lo que le falta (lugar, título y término)",
+    !(p instanceof Error) && claves(p.maestro) === "location" && p.seguir.length === 1 && claves(p.seguir[0].cuerpo) === "end,location,start,summary" && p.seguir[0].cuerpo.location === "Piscina olímpica",
+    sinPieza(p),
+  );
+  // Sin cambios en el principal (sólo un día cambiado): igual se la pone al día.
+  const p2 = plan(items, (l) => l.map((e) => (esPrincipal(e) ? e : { ...e, lugar: "Piscina 2" })));
+  ok("sólo un día cambiado → sin maestro, el día en ops y la rezagada en seguir", !(p2 instanceof Error) && !p2.maestro && p2.ops.length === 1 && p2.seguir.length === 1 && p2.seguir[0].cuerpo.summary === "🦄 Natación libre", sinPieza(p2));
+  // Borrar ese día en la pared: se cancela (no se la pone al día).
+  const p3 = plan(items, enPrincipal((e) => ({ ...e, excepciones: [...(e.excepciones ?? []), "2026-12-02"] })));
+  ok("borrar el día de la rezagada → se cancela", !(p3 instanceof Error) && p3.ops.some((o) => o.tipo === "cancelar" && o.id === fantasmaNat().id) && !p3.seguir.length, sinPieza(p3));
+  // marcar y sinHoraDeTermino conservan la marca cfv del cuerpo del principal.
+  const c = marcar(principalNat(), { summary: "X", extendedProperties: { private: { cfh: "viejo", [MARCA_FANTASMAS]: marca } } });
+  const sinFin = sinHoraDeTermino({ ...c, start: h("2026-11-04T09:00:00-03:00"), end: h("2026-11-04T09:00:00-03:00") }, principalNat());
+  ok(
+    "marcar y sinHoraDeTermino conservan cfv (y rehacen cfh)",
+    (c.extendedProperties as { private: Record<string, string> }).private[MARCA_FANTASMAS] === marca &&
+      (c.extendedProperties as { private: Record<string, string> }).private.cfh === huellaPieza(fusionar(principalNat(), { summary: "X" })) &&
+      (sinFin.extendedProperties as { private: Record<string, string> }).private[MARCA_FANTASMAS] === marca &&
+      !("end" in sinFin),
+    [c.extendedProperties, sinFin.extendedProperties],
   );
 });
 

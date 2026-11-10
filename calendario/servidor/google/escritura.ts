@@ -7,7 +7,9 @@
 // - un día borrado → EXDATE en recurrence, o cancelar la excepción de ese día si existe;
 // - un día cambiado que se edita → PATCH de esa excepción;
 // - las "fantasmas" (días que Google materializó idénticos a la serie) reciben lo mismo que el principal
-//   (textos y, si cambió la duración, la hora de término), para que sigan siendo iguales a la serie.
+//   (textos y, si cambió la duración, la hora de término), para que sigan siendo iguales a la serie; las
+//   "rezagadas" (fantasmas que no alcanzaron a seguir un cambio anterior, ver serie.ts) reciben todo lo
+//   que les falta para quedar como la serie.
 // Lo que Google no deja hacer sin cambiar otra cosa (mover una serie que tiene días cambiados, revivir
 // un día cancelado allá, crear o deshacer un día cambiado) lanza NoSePuedeEscribir: el motor deja lo de
 // Google y avisa.
@@ -16,12 +18,14 @@
 //   vista(ics): Record<clave, VistaPieza>          clave "" = principal; si no, claveValor(RECURRENCE-ID)
 //   ocurre(principalB, original): boolean          ¿la regla de B (sin EXDATE) genera ese inicio?
 //   planear(serie, icsB): Plan                     { maestro?, ops, seguir, avisoTitulo } o NoSePuedeEscribir
+//   alcanzarSerie(f, p): Op | null                 lo que le falta a una fantasma rezagada para quedar como la serie p
 //   seVeIgual(serie, ics): boolean                 ¿la serie proyectada se ve igual que ese .ics? (sin nada que mandar)
 //   cuerposDeHora(vevent, conRecurrencia)          { start, end } con date/dateTime/timeZone (null = borrar)
 //   recurrenciaDe(vevent): string[]                RRULE/EXRULE/RDATE + un EXDATE por valor
 //   cuerpoInsert(veventB, uid, gen): Cuerpo        cuerpo de events.insert (con id y marca)
 //   planearCreacion(icsB): Creacion                todo lo que necesita crear() (insert + días cambiados)
-//   fusionar(base, parche), marcar(base, cuerpo)   mezcla "como PATCH" y marca de escritura propia (cfh)
+//   fusionar(base, parche), marcar(base, cuerpo)   mezcla "como PATCH" y marca de escritura propia (cfh;
+//                                                  conserva las otras claves de extendedProperties.private del cuerpo)
 //   finIgualInicio(cuerpo), sinHoraDeTermino(cuerpo, base)   respaldo para "sin hora de término"
 //   tipos VistaPieza, HoraCuerpo, Cuerpo, Op, Plan, DiaNuevo, Creacion
 //
@@ -38,6 +42,7 @@ import {
   basicoUTC,
   claveHora,
   claveValor,
+  esFantasma,
   esZonaUTC,
   fechaDeClave,
   huellaPieza,
@@ -45,6 +50,7 @@ import {
   normRec,
   proyectar,
   relojEn,
+  textoPlano,
   zonaValida,
   type EvG,
   type HoraG,
@@ -92,12 +98,12 @@ export interface Plan {
   ops: Op[];
   /**
    * PATCH de las fantasmas (no canceladas en este plan) con lo mismo que cambia el principal: textos y, si
-   * cambió la duración, la hora de término con su mismo inicio. Van después del principal y sólo si se
-   * escribió (si no, quedarían distintas de la serie vieja). Hasta MAX_SEGUIR, por fecha.
+   * cambió la duración, la hora de término con su mismo inicio; a las rezagadas, todo lo que les falta para
+   * quedar como el principal B. Van después del principal y sólo si se escribió (si no, quedarían
+   * distintas de la serie vieja). Todas, por fecha: cuántas se mandan en la misma pasada lo decide el
+   * transporte (las demás, al final de la vuelta o en otra: ver la marca cfv en serie.ts).
    */
   seguir: Op[];
-  /** Fantasmas que no entraron en `seguir` (más de MAX_SEGUIR): quedarán como días cambiados. */
-  sinSeguir?: number;
   /** SUMMARY de B (para los avisos). */
   avisoTitulo: string;
   /**
@@ -401,16 +407,22 @@ export function fusionar<T extends object>(base: T, parche: Cuerpo): T {
   return r as T;
 }
 
-/** El cuerpo con extendedProperties.private.cfh = huella de cómo quedará la pieza (`base`) si Google lo acepta tal cual. */
+/**
+ * El cuerpo con extendedProperties.private.cfh = huella de cómo quedará la pieza (`base`) si Google lo
+ * acepta tal cual. Las otras claves privadas que ya traía el cuerpo (la marca cfv del principal) se
+ * conservan; las públicas no se mandan.
+ */
 export function marcar(base: EvG | Record<string, never>, cuerpo: Cuerpo): Cuerpo {
-  const { extendedProperties: _, ...limpio } = cuerpo;
+  const { extendedProperties: ext, ...limpio } = cuerpo;
+  const privadas = esObjeto(ext) && esObjeto(ext.private) ? ext.private : {};
+  const { cfh: _, ...otras } = privadas;
   const cfh = huellaPieza(fusionar(base as EvG, limpio));
-  return { ...limpio, extendedProperties: { private: { cfh } } };
+  return { ...limpio, extendedProperties: { private: { ...otras, cfh } } };
 }
 
 /** Respaldo cuando Google no acepta fin = inicio: sin `end` y con endTimeUnspecified (y la marca de nuevo). */
 export function sinHoraDeTermino(cuerpo: Cuerpo, base: EvG | Record<string, never> = {}): Cuerpo {
-  const { end: _, extendedProperties: __, ...resto } = cuerpo;
+  const { end: _, ...resto } = cuerpo;
   return marcar(base, { ...resto, endTimeUnspecified: true });
 }
 
@@ -423,8 +435,6 @@ function ajustarFin(cuerpo: Cuerpo, base: EvG) {
 // ---------- Planear un cambio ----------
 
 const TEXTOS = ["summary", "description", "location"] as const;
-/** Cuántas fantasmas se ponen al día por cambio (cada una es un PATCH; más no cabrían en el plazo de una vuelta). */
-export const MAX_SEGUIR = 10;
 
 const horaCuerpo = (t: HoraG | undefined): HoraCuerpo => ({ date: t?.date ?? null, dateTime: t?.dateTime ?? null, timeZone: t?.timeZone ?? null });
 
@@ -474,6 +484,31 @@ export function seVeIgual(serie: Serie, ics: string): boolean {
 
 function op(tipo: Op["tipo"], pieza: EvG, clave: string, cuerpo: Cuerpo): Op {
   return { tipo, id: pieza.id, etag: pieza.etag, cuerpo: marcar(pieza, cuerpo), clave, fecha: fechaDeClave(clave), pieza };
+}
+
+const duracionMs = (e: EvG) => (e.endTimeUnspecified ? NaN : instanteDeHora(e.end) - instanteDeHora(e.start));
+
+/**
+ * Lo que le falta a una fantasma rezagada (ver serie.ts) para quedar igual a la serie `p` (el principal
+ * como queda): los textos que difieren y, si dura distinto, la hora de término con su mismo inicio (o
+ * "sin hora de término", como el principal). null si no le falta nada que el panel vea.
+ */
+export function alcanzarSerie(f: EvG, p: EvG): Op | null {
+  const clave = claveHora(f.originalStartTime);
+  if (!clave || !f.start) return null;
+  const c: Cuerpo = {};
+  if ((f.summary ?? "").trim() !== (p.summary ?? "").trim()) c.summary = p.summary ?? "";
+  if (textoPlano(f.description ?? "").trim() !== textoPlano(p.description ?? "").trim()) c.description = p.description ?? "";
+  if ((f.location ?? "").trim() !== (p.location ?? "").trim()) c.location = p.location ?? "";
+  if (p.endTimeUnspecified) {
+    if (!f.endTimeUnspecified) Object.assign(c, { start: horaCuerpo(f.start), end: null, endTimeUnspecified: true });
+  } else {
+    const dur = duracionMs(p);
+    const hora = Number.isFinite(dur) && duracionMs(f) !== dur ? horaConDuracion(f, dur) : null;
+    if (hora) Object.assign(c, hora);
+  }
+  ajustarFin(c, f);
+  return Object.keys(c).length ? op("cambiar", f, clave, c) : null;
 }
 
 /**
@@ -595,14 +630,20 @@ export function planear(serie: Serie, icsB: string): Plan {
   // mismo. Con la misma duración no se les toca la hora (siguen iguales aunque la serie cambie de inicio,
   // porque planear ya exigió que la regla nueva genere su día).
   const seguir: Op[] = [];
-  let sinSeguir = 0;
   const textos: Cuerpo = {};
   for (const k of TEXTOS) if (k in m) textos[k] = m[k];
   const horaB = cambioHorario ? cuerposDeHora(vB, conRecurrencia) : null;
   const durB = horaB ? instanteDeHora(horaB.end) - instanteDeHora(horaB.start) : NaN;
+  const principalB = fusionar(principal, m);
   for (const f of serie.fantasmas) {
     const clave = claveHora(f.originalStartTime);
     if (canceladas.has(f.id) || !clave) continue;
+    if (!esFantasma(f, principal)) {
+      // Rezagada de un cambio anterior: todo lo que le falta para quedar como el principal B.
+      const o = alcanzarSerie(f, principalB);
+      if (o) seguir.push(o);
+      continue;
+    }
     const c: Cuerpo = { ...textos };
     if (Number.isFinite(durB) && !(f.endTimeUnspecified && durB === 0)) {
       const durF = f.endTimeUnspecified ? NaN : instanteDeHora(f.end) - instanteDeHora(f.start);
@@ -610,9 +651,7 @@ export function planear(serie: Serie, icsB: string): Plan {
       if (hora) Object.assign(c, hora);
     }
     ajustarFin(c, f);
-    if (!Object.keys(c).length) continue;
-    if (seguir.length >= MAX_SEGUIR) sinSeguir++;
-    else seguir.push(op("cambiar", f, clave, c));
+    if (Object.keys(c).length) seguir.push(op("cambiar", f, clave, c));
   }
 
   ops.sort((a, b) => (a.tipo !== b.tipo ? (a.tipo === "cambiar" ? -1 : 1) : a.clave < b.clave ? -1 : a.clave > b.clave ? 1 : 0));
@@ -625,7 +664,6 @@ export function planear(serie: Serie, icsB: string): Plan {
     ops,
     seguir,
     avisoTitulo: T,
-    ...(sinSeguir ? { sinSeguir } : {}),
     ...(releer ? { releer } : {}),
   };
 }

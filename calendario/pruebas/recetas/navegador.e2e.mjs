@@ -13,7 +13,8 @@
 //
 // Desde calendario/, con out/ recién compilado (comparte .next/ y out/ con quien compile a la vez):
 //   npm run build && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs \
-//     pruebas/recetas/navegador.e2e.mjs [--puerto 8900] [--capturas <carpeta>] [--salida <archivo.txt>]
+//     pruebas/recetas/navegador.e2e.mjs [--puerto 8900] [--capturas <carpeta>] [--prefijo r2-] [--salida <archivo.txt>]
+// (--prefijo: va delante del nombre de cada captura, para no pisar las de otra corrida en la misma carpeta).
 // Necesita /usr/bin/google-chrome, Playwright (global) y ffmpeg. netlify-cli se toma de la caché de npx
 // (NETLIFY_CLI="…" para usar otro). Imprime OK/MAL por comprobación y sale con 1 si hubo algún MAL.
 
@@ -31,7 +32,8 @@ const arg = (n, def) => {
 };
 const PUERTO = Number(arg("--puerto", "8900"));
 const CAPTURAS = arg("--capturas", mkdtempSync(join(tmpdir(), "dictar-capturas-")));
-const SALIDA = arg("--salida", join(CAPTURAS, "salida.txt"));
+const PREFIJO = arg("--prefijo", "");
+const SALIDA = arg("--salida", join(CAPTURAS, `${PREFIJO}salida.txt`));
 const NETLIFY = (process.env.NETLIFY_CLI ?? "npx --offline -y netlify-cli@27.16.3").split(" ");
 const CHROME = "/usr/bin/google-chrome";
 const URL_APP = `http://localhost:${PUERTO}`;
@@ -99,7 +101,7 @@ async function levantar(conClave) {
   );
   const anotar = (b) => {
     logDev += b.toString();
-    appendFileSync(join(CAPTURAS, "netlify-dev.log"), b);
+    appendFileSync(join(CAPTURAS, `${PREFIJO}netlify-dev.log`), b);
   };
   dev.stdout.on("data", anotar);
   dev.stderr.on("data", anotar);
@@ -184,7 +186,7 @@ const IPHONE = {
 };
 const foto = async (p, nombre) => {
   await dormir(450); // que termine la animación de la ventana
-  await p.screenshot({ path: join(CAPTURAS, `${nombre}.png`) });
+  await p.screenshot({ path: join(CAPTURAS, `${PREFIJO}${nombre}.png`) });
 };
 const dialogo = (p) => p.locator("[role=dialog]").last();
 const ver = async (loc, ms = 10_000) => {
@@ -287,7 +289,9 @@ try {
     ok("…con el paso «⏳ Esperando a Gemini»", (await texto(dialogo(p))).includes("⏳ Esperando a Gemini"));
     await foto(p, "tablet-04-esperando-gemini");
     await cerrarDialogo(p);
-    ok("aviso en Recetas: «Gemini está pasando 1 receta…»", await ver(p.getByText("🎙️ Gemini está pasando 1 receta…"), 10_000), await texto(aviso(p)));
+    // Hallazgo 26: esperando la clave no es «Gemini está pasando…».
+    ok("aviso en Recetas: «⏳ 1 receta dictada espera que conecten Gemini (falta la clave) →»", await ver(p.getByText("⏳ 1 receta dictada espera que conecten Gemini (falta la clave) →"), 10_000), await texto(aviso(p)));
+    ok("…y no dice «Gemini está pasando»", !(await texto(aviso(p))).includes("está pasando"), await texto(aviso(p)));
     ok("sin clave no se llamó a Gemini", generados().length === 0, generados().length);
   });
 
@@ -605,6 +609,210 @@ try {
   });
 
   // ---------------------------------------------------------------------------------------------
+  seccion("Revisión 2: rescate, sin copia en el equipo, cerrar al terminar y lista vieja");
+  const idsNube = async () => new Set((await listaDictados(familia.token)).map((x) => x.id));
+  /**
+   * Cada caso de esta sección parte de cero: el guion del simulador vacío, con red y la página recargada (sin
+   * ventanas abiertas ni parches de una prueba anterior), así un caso que falla no arrastra a los demás.
+   */
+  async function deCero({ c, p }) {
+    sim.cola.length = 0;
+    await c.setOffline(false);
+    const aceptar = (d) => void (d.type() === "beforeunload" ? d.accept() : d.dismiss()).catch(() => {});
+    p.on("dialog", aceptar);
+    try {
+      await abrir(p, "#recetas");
+      await p.reload({ waitUntil: "domcontentloaded" });
+      await p.locator("main").first().waitFor({ timeout: 20_000 });
+      await dormir(800);
+    } finally {
+      p.off("dialog", aceptar);
+    }
+  }
+  const sinNadaEnCamino = () => hasta(async () => !(await listaDictados(familia.token)).some((x) => x.estado === "subido" || x.estado === "procesando"), 60_000);
+
+  await caso("borrador de rescate: «Pedir otra versión» en la ventana, en la lista y en la revisión (hallazgo 0)", async () => {
+    const p = tablet.p;
+    await deCero(tablet);
+    await subirConGuion(["max_tokens", "max_tokens"]); // Gemini corta dos veces: sólo se rescata lo que se dijo
+    const d = dialogo(p);
+    ok("rescate: «✅ ¡Lista!» con el aviso de que faltan ingredientes y pasos", await ver(d.getByText(/Gemini no alcanzó a ordenar esta receta/), 30_000), await texto(d));
+    ok("rescate: en la ventana están «Pedir otra versión» y «Revisar receta»", (await ver(d.getByRole("button", { name: "Pedir otra versión" }), 1000)) && (await ver(d.getByRole("button", { name: "Revisar receta" }), 1000)), await texto(d));
+    ok("rescate: el pie no dice «Puedes cerrar…» (ya está lista)", !(await texto(d)).includes("Puedes cerrar esta ventana"));
+    await foto(p, "tablet-23-rescate");
+    await cerrarDialogo(p);
+    await aviso(p).click();
+    const l = dialogo(p);
+    const fila = l.locator("li", { hasText: "Gemini no alcanzó a ordenar esta receta" }).first();
+    ok("rescate en 🎙️ Dictadas: la fila explica y ofrece «Pedir otra versión»", (await ver(fila, 10_000)) && (await ver(fila.getByRole("button", { name: "Pedir otra versión" }), 1000)), await texto(l));
+    await foto(p, "tablet-24-rescate-lista");
+    await fila.getByRole("button", { name: "Revisar", exact: true }).click();
+    const e = dialogo(p);
+    ok("rescate en la revisión: el aviso del servidor y «Pedir otra versión» en el pie", (await ver(e.getByText(/Gemini no alcanzó a ordenar la receta/), 10_000)) && (await ver(e.getByRole("button", { name: "Pedir otra versión" }), 1000)), await texto(e));
+    await foto(p, "tablet-25-rescate-revisar");
+    sim.guion("*", [{ respuesta: POSTRE }]);
+    await e.getByRole("button", { name: "Pedir otra versión" }).click();
+    ok("otra versión desde la revisión: se cierra y se abre 🎙️ Dictadas", await ver(dialogo(p).getByText("🎙️ Dictadas"), 10_000), await texto(dialogo(p)));
+    const ya = await hasta(async () => !(await listaDictados(familia.token)).some((x) => x.rescate), 40_000);
+    ok("…y Gemini manda una versión completa (sin la marca de rescate)", ya, (await listaDictados(familia.token)).map((x) => [x.estado, x.nombre, x.rescate]));
+    await dialogo(p).getByRole("button", { name: "Cerrar" }).first().click();
+  });
+
+  await caso("«Revisar igual» desde una lista vieja no abre un borrador vacío (hallazgo 16)", async () => {
+    const p = tablet.p;
+    await deCero(tablet);
+    await subirConGuion(["no_receta"]);
+    await ver(dialogo(p).getByText(/🤔 Gemini no encontró una receta/), 25_000);
+    await cerrarDialogo(p);
+    ok("no queda nada en cola ni con Gemini", await sinNadaEnCamino());
+    // Recetas se vuelve a abrir: el tablet lee la lista una vez y, sin nada en camino, no la vuelve a mirar solo.
+    await abrir(p, "#ajustes");
+    await abrir(p, "#recetas");
+    await dormir(1500);
+    await aviso(p).click();
+    const l = dialogo(p);
+    await l.getByText("🎙️ Dictadas").first().waitFor();
+    const id = (await listaDictados(familia.token)).find((x) => x.estado === "listo" && x.esReceta === false)?.id;
+    ok("la fila «🤔 No parece receta» con «Revisar igual»", !!id && (await ver(l.getByRole("button", { name: "Revisar igual" }), 5000)), id);
+    // Desde otro equipo piden otra versión: en la nube queda en cola, sin borrador. El tablet todavía no lo sabe.
+    sim.guion("*", [{ lento: 12_000, luego: { respuesta: CALZONES } }]);
+    const r = await api(`/api/dictados/${id}/procesar`, { token: unido.token, metodo: "POST", cuerpo: { otraVez: true } });
+    ok("el iPhone pidió otra versión (202)", r.status === 202, r.status);
+    await l.getByRole("button", { name: "Revisar igual" }).first().click();
+    ok("no se abre la revisión con un borrador vacío", !(await ver(p.getByText("Revisar receta dictada"), 3000)));
+    ok("avisa que cambió en otro equipo", await ver(l.getByText(/Esta receta dictada cambió en otro equipo/), 5000), await texto(l));
+    ok("…y la lista se pone al día (en cola o con Gemini)", await ver(l.getByText(/⏳ En cola|Gemini está escribiendo la receta/), 10_000), await texto(l));
+    await foto(p, "tablet-26-lista-vieja");
+    await l.getByRole("button", { name: "Cerrar" }).first().click();
+  });
+
+  await caso("sin copia en el equipo y sin conexión: no dice «a salvo» ni «Puedes cerrar» y pregunta antes de cerrar (hallazgos 10 y 21)", async () => {
+    const p = tablet.p;
+    await sinNadaEnCamino();
+    await deCero(tablet);
+    sim.guion("*", [{ respuesta: PEBRE }]);
+    // IndexedDB falla al escribir (equipo lleno, el error de iOS al perder la conexión con IndexedDB…).
+    await p.evaluate(() => {
+      const t = IDBDatabase.prototype.transaction;
+      window.__transaccionIdb = t;
+      IDBDatabase.prototype.transaction = function (almacenes, modo, ...resto) {
+        if (modo === "readwrite") throw new DOMException("El equipo está lleno", "QuotaExceededError");
+        return t.call(this, almacenes, modo, ...resto);
+      };
+    });
+    const antes = await idsNube();
+    await botonDictar(p).click();
+    await grabar(p, 3.5);
+    await tablet.c.setOffline(true);
+    await terminar(p);
+    const d = dialogo(p);
+    ok("aviso rojo: «Este equipo no pudo guardar una copia del audio… No la cierres»", await ver(d.getByText(/no pudo guardar una copia del audio.*No la cierres/), 15_000), await texto(d));
+    ok("subiendo sin copia: no dice «Puedes cerrar» y ofrece «📤 Guardar una copia»", !(await texto(d)).includes("Puedes cerrar") && (await ver(d.getByRole("button", { name: "📤 Guardar una copia en Archivos" }), 1000)), await texto(d));
+    ok("sin conexión y sin copia: «el audio todavía no llega a la nube»", await ver(d.getByText(/Sin conexión: el audio todavía no llega a la nube/), 30_000), await texto(d));
+    const t = await texto(d);
+    ok("…sin «a salvo en este equipo» ni «Puedes cerrar esta ventana»", !t.includes("a salvo en este equipo") && !t.includes("Puedes cerrar esta ventana"), t);
+    const [descarga] = await Promise.all([p.waitForEvent("download", { timeout: 10_000 }), d.getByRole("button", { name: "📤 Guardar una copia en Archivos" }).click()]);
+    ok("«📤 Guardar una copia» baja el audio (.webm)", /^receta-dictada-.*\.webm$/.test(descarga.suggestedFilename()), descarga.suggestedFilename());
+    await foto(p, "tablet-27-sin-copia-sin-red");
+    await p.keyboard.press("Escape");
+    ok("Escape: «Este audio no quedó guardado en ningún lado…» en vez de cerrar", await ver(d.getByText(/Este audio no quedó guardado en ningún lado/), 3000), await texto(d));
+    ok("…con «Cerrar y perderlo», «No cerrar» y la copia", (await ver(d.getByRole("button", { name: "Cerrar y perderlo" }), 1000)) && (await ver(d.getByRole("button", { name: "No cerrar" }), 1000)) && (await ver(d.getByRole("button", { name: "📤 Guardar una copia en Archivos" }), 1000)));
+    await foto(p, "tablet-28-confirmar-perder");
+    await d.getByRole("button", { name: "No cerrar" }).click();
+    await d.getByRole("button", { name: "Cerrar", exact: true }).last().click(); // el «Cerrar» del pie
+    ok("«Cerrar» del pie también pregunta", await ver(d.getByText(/Este audio no quedó guardado en ningún lado/), 3000));
+    await d.getByRole("button", { name: "No cerrar" }).click();
+    await p.locator("[role=dialog] [aria-label=Cerrar]").first().click(); // la ✕
+    ok("la ✕ también pregunta", await ver(d.getByText(/Este audio no quedó guardado en ningún lado/), 3000));
+    await d.getByRole("button", { name: "No cerrar" }).click();
+    ok("con «No cerrar» la ventana sigue abierta", await ver(d.getByText(/Sin conexión: el audio todavía no llega a la nube/), 1000));
+    await tablet.c.setOffline(false);
+    if (!(await ver(d.getByText("✅ Guardado en la nube"), 15_000))) await d.getByRole("button", { name: "Reintentar ahora" }).click();
+    ok("vuelve internet: llega a la nube y queda lista", await ver(d.getByText("✅ ¡Lista!"), 40_000), await texto(d));
+    ok("ya en la nube: no quedan los avisos de copia ni de pérdida", !(await texto(d)).includes("no pudo guardar una copia") && !(await ver(d.getByRole("button", { name: "📤 Guardar una copia en Archivos" }), 500)));
+    const nuevos = [...(await idsNube())].filter((x) => !antes.has(x));
+    ok("un solo dictado nuevo en la nube", nuevos.length === 1, nuevos);
+    await cerrarDialogo(p);
+    ok("ya en la nube, «Cerrar» cierra sin preguntar", await oculto(p.getByRole("dialog"), 5000));
+    await p.evaluate(() => {
+      IDBDatabase.prototype.transaction = window.__transaccionIdb;
+    });
+  });
+
+  await caso("cerrar justo después de «Terminar»: se espera el audio, se guarda y se sube (hallazgos 11 y 23)", async () => {
+    const p = tablet.p;
+    await sinNadaEnCamino();
+    await deCero(tablet);
+    sim.guion("*", [{ respuesta: POSTRE }]);
+    // MediaRecorder entrega el último trozo 2 s después de stop() (en Safari puede tardar así).
+    await p.evaluate(() => {
+      const parar = MediaRecorder.prototype.stop;
+      window.__pararGrabadora = parar;
+      MediaRecorder.prototype.stop = function () {
+        setTimeout(() => parar.call(this), 2000);
+      };
+    });
+    const antes = await idsNube();
+    await botonDictar(p).click();
+    await grabar(p, 3.5);
+    await terminar(p);
+    await p.keyboard.press("Escape");
+    await p.locator("[role=dialog] [aria-label=Cerrar]").first().click({ timeout: 1000 }).catch(() => {});
+    const d = dialogo(p);
+    ok("Escape y ✕ justo después de «Terminar»: la ventana no se cierra de golpe y dice «💾 Guardando la grabación…»", await ver(d.getByText("💾 Guardando la grabación…"), 1500), await texto(d));
+    await foto(p, "tablet-29-guardando-grabacion");
+    ok("…y se cierra sola apenas queda guardada", await oculto(p.getByRole("dialog"), 15_000));
+    let nuevo = "";
+    const llego = await hasta(async () => {
+      nuevo = [...(await idsNube())].find((x) => !antes.has(x)) ?? "";
+      return !!nuevo;
+    }, 30_000);
+    ok("la grabación llegó a la nube aunque se cerró la ventana", llego, nuevo);
+    const lista = await hasta(async () => (await listaDictados(familia.token)).find((x) => x.id === nuevo)?.estado === "listo", 40_000);
+    ok("…y Gemini la pasó a receta", lista);
+    const enIdb = await p.evaluate(
+      () =>
+        new Promise((ok) => {
+          const r = indexedDB.open("calendario-familiar-dictados", 1);
+          r.onsuccess = () => {
+            const q = r.result.transaction("resumen").objectStore("resumen").count();
+            q.onsuccess = () => ok(q.result);
+          };
+        }),
+    );
+    ok("…y la copia del equipo se borró", enIdb === 0, enIdb);
+    await p.evaluate(() => {
+      MediaRecorder.prototype.stop = window.__pararGrabadora;
+    });
+  });
+
+  await caso("sin permiso del micrófono: los pasos según el equipo (hallazgo 28)", async () => {
+    const FIRE = "Mozilla/5.0 (Linux; Android 11; KFTRWI) AppleWebKit/537.36 (KHTML, like Gecko) Silk/126.4.1 like Chrome/126.0.6478.188 Safari/537.36";
+    for (const [nombre, op] of [
+      ["fire", { viewport: { width: 1280, height: 800 }, userAgent: FIRE }],
+      ["iphone-sin-permiso", IPHONE],
+    ]) {
+      const { c, p } = await contexto(nombre, op, sesionTablet);
+      // Lo que da el navegador cuando el permiso está denegado.
+      await c.addInitScript(() => {
+        navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));
+      });
+      await abrir(p, "#recetas");
+      await botonDictar(p).click();
+      await dialogo(p).getByRole("button", { name: "⏺ Empezar a grabar" }).click();
+      const al = dialogo(p).getByRole("alert").first();
+      await ver(al, 10_000);
+      const t = await texto(al);
+      if (nombre === "fire") {
+        ok("tablet Fire sin permiso: pasos de Chrome, Silk y Fully Kiosk (no los del iPhone)", /Silk/.test(t) && /Fully Kiosk/.test(t) && !/iPhone/.test(t), t);
+        await foto(p, "fire-01-sin-permiso-microfono");
+      } else ok("iPhone sin permiso: Ajustes → Apps → Safari → Micrófono", /iPhone o iPad: Ajustes → Apps → Safari → Micrófono/.test(t), t);
+      await c.close();
+    }
+  });
+  await deCero(tablet); // lo que sigue parte sin restos de esta sección
+
+  // ---------------------------------------------------------------------------------------------
   seccion("Menú con una receta dictada");
   await caso("la receta dictada en un espacio del menú y en la lista de compras", async () => {
     const p = tablet.p;
@@ -675,6 +883,43 @@ try {
     await aviso(p).click();
     await foto(p, "iphone-08-dictadas");
     await dialogo(p).getByRole("button", { name: "Cerrar" }).first().click();
+  });
+
+  await caso("«Guardar receta» sin conexión: el error se ve junto al botón y no se toca dos veces (hallazgo 27)", async () => {
+    const p = iphone.p;
+    await deCero(iphone);
+    await aviso(p).click();
+    await dialogo(p).getByRole("button", { name: "Revisar", exact: true }).first().click();
+    const e = dialogo(p);
+    await e.getByText("Revisar receta dictada").waitFor({ timeout: 10_000 });
+    // La nube tarda y después no responde (mala señal): el guardado de la colección «recetas» da 503.
+    let puts = 0;
+    await iphone.c.route("**/api/datos/recetas", async (r) => {
+      if (r.request().method() !== "PUT") return r.continue();
+      puts++;
+      await dormir(2500);
+      await r.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    });
+    await e.getByRole("heading", { name: "Pasos" }).scrollIntoViewIfNeeded();
+    await e.locator(".desliza").first().evaluate((x) => x.scrollTo(0, x.scrollHeight));
+    await e.getByRole("button", { name: "Guardar receta" }).click();
+    const boton = e.getByRole("button", { name: "Guardando…" });
+    ok("mientras espera a la nube, el botón dice «Guardando…» y está bloqueado", (await ver(boton, 1500)) && (await boton.isDisabled()), await texto(e));
+    await boton.click({ force: true, timeout: 1000 }).catch(() => {});
+    const alerta = e.getByRole("alert").filter({ hasText: /No se pudo guardar: no hay conexión/ });
+    ok("aparece «No se pudo guardar: no hay conexión…»", await ver(alerta, 10_000), await texto(e));
+    const visible = await alerta.evaluate((x) => {
+      const r = x.getBoundingClientRect();
+      const y = r.top + Math.min(r.height / 2, 12);
+      const en = document.elementFromPoint(r.left + r.width / 2, y);
+      return r.bottom <= window.innerHeight && r.top >= 0 && !!en && (en === x || x.contains(en));
+    });
+    ok("…a la vista junto a los botones (no arriba, fuera de la pantalla)", visible);
+    ok("…y se intentó guardar una sola vez", puts === 1, puts);
+    await foto(p, "iphone-09-guardar-sin-conexion");
+    await iphone.c.unroute("**/api/datos/recetas");
+    await e.getByRole("button", { name: "Guardar receta" }).click();
+    ok("con la nube de vuelta se guarda y se cierra", await oculto(p.getByText("Revisar receta dictada"), 15_000));
   });
 
   seccion("Al final");

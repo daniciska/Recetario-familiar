@@ -6,11 +6,15 @@
 import { escribirRecurso, instanteLocal, leerRecurso } from "../../servidor/ics";
 import type { Evento } from "../../lib/datos/tipos";
 import {
+  MARCA_FANTASMAS,
   agrupar,
+  esFantasma,
   esPropia,
+  esRezagada,
   etagSerie,
   huellaPieza,
   inst,
+  marcaFantasmas,
   normRec,
   proyectar,
   serieAIcs,
@@ -485,6 +489,46 @@ caso("huellaPieza: nunca calza si cambió algo que lee el panel (1.000 cambios a
   ok("0 de 1.000 cambios siguen pareciendo propios", calzan === 0, { calzan, ejemplo });
   ok("sin marca no es propia; con una marca ajena tampoco", !esPropia({ ...bases[0], extendedProperties: undefined }) && !esPropia({ ...bases[0], extendedProperties: { private: { cfh: "0000000000000000" } } }));
   ok("cambios que el panel no lee no quitan la marca (recordatorios, color, Meet)", esPropia({ ...bases[0], etag: '"99"', updated: "2027-01-01T00:00:00Z", sequence: 9, attendees: [{ email: "a@b.cl" }] }));
+});
+
+caso("fantasmas rezagadas (marca cfv del principal)", () => {
+  // La serie cambió de título y de lugar desde el panel, y su fantasma del 2-dic no alcanzó a seguirla.
+  const base = natacion();
+  const [p0, , , f0] = base;
+  const ahora = Date.parse("2026-11-08T12:00:00.000Z");
+  const nuevo = { ...p0, summary: "🦄 Natación libre", location: "Piscina 2", updated: "2026-11-08T12:00:05.000Z" };
+  const marca = marcaFantasmas(p0, nuevo, [f0], ahora);
+  ok("la marca: una entrada por campo que cambió (título y lugar), con su hora", typeof marca === "string" && /^[sl]\.[0-9a-f]{12}\.[0-9a-z]+,[sl]\.[0-9a-f]{12}\.[0-9a-z]+$/.test(marca) && marca.includes("s.") && marca.includes("l."), marca);
+  const conMarca = (p: EvG, m: string | null | undefined) => ({ ...p, extendedProperties: { private: { cfh: "x", ...(m ? { [MARCA_FANTASMAS]: m } : {}) } } });
+  const pM = conMarca(nuevo, marca as string);
+  ok("sin fantasmas no hace falta la marca; sin cambios de esos campos, tampoco", marcaFantasmas(p0, nuevo, [], ahora) === undefined && marcaFantasmas(p0, { ...p0, recurrence: ["RRULE:FREQ=WEEKLY"] }, [f0], ahora) === undefined);
+  ok("si ya no explica a nadie, se borra (null)", marcaFantasmas(pM, { ...pM, summary: "Otra" }, [], ahora) === null, marcaFantasmas(pM, { ...pM, summary: "Otra" }, [], ahora));
+  const s = unaSerie([pM, base[1], base[2], f0]);
+  ok("la fantasma con el título y el lugar de antes es rezagada: cuenta como fantasma y no es esFantasma", s.fantasmas.length === 1 && s.vivas.length === 1 && esRezagada(f0, pM) && !esFantasma(f0, pM));
+  const g = leer(s);
+  ok("…y la pared no la ve como día cambiado (2 eventos, ninguno el 2-dic)", g.eventos.length === 2 && !g.eventos.some((e) => e.fecha === "2026-12-02"), g.eventos.map(resumen));
+  ok("a medias (Google ya le pasó el título; el lugar sigue viejo) también", esRezagada({ ...f0, summary: nuevo.summary }, pM));
+  ok("con un valor que no es de antes (otro lugar) es un día cambiado", !esRezagada({ ...f0, location: "Patio" }, pM) && unaSerie([pM, { ...f0, location: "Patio" }]).vivas.length === 1);
+  ok("si alguien la tocó después del cambio (updated posterior a la marca + margen) es un día cambiado", !esRezagada({ ...f0, updated: "2026-11-08T12:10:00.000Z" }, pM) && esRezagada({ ...f0, updated: "2026-11-08T12:01:00.000Z" }, pM));
+  ok("movida de hora, cancelada o sin updated: no es rezagada", !esRezagada({ ...f0, start: h("2026-12-02T10:00:00-03:00"), end: h("2026-12-02T11:00:00-03:00") }, pM) && !esRezagada({ ...f0, updated: undefined }, pM) && unaSerie([pM, { ...f0, status: "cancelled" }]).canceladas.length === 1);
+  ok("sin la marca (p. ej. el iPhone borró las extendedProperties) es un día cambiado", !esRezagada(f0, nuevo) && unaSerie([nuevo, f0]).vivas.length === 1);
+  // Otro cambio (la hora de término) antes de que se ponga al día: la marca nueva conserva las entradas
+  // que todavía la explican y agrega la de la duración.
+  const otro = { ...pM, end: h("2026-11-04T10:30:00-03:00") };
+  const marca2 = marcaFantasmas(pM, otro, [f0], ahora + 60_000);
+  const pM2 = conMarca(otro, marca2 as string);
+  ok("un segundo cambio conserva lo que explica a la rezagada y agrega la duración", typeof marca2 === "string" && marca2.split(",").length === 3 && marca2.includes("h.") && esRezagada(f0, pM2), marca2);
+  ok("…y una fantasma normal del segundo cambio (título y lugar nuevos, duración vieja) también es rezagada", esRezagada({ ...f0, summary: nuevo.summary, location: "Piscina 2" }, pM2));
+  ok("la marca nunca pasa de 24 entradas", (() => {
+    let p = p0;
+    for (let i = 0; i < 40; i++) {
+      const q = { ...p, summary: `T${i}` };
+      const m = marcaFantasmas(p, q, [{ ...f0, summary: p.summary }], ahora + i * 1000);
+      p = conMarca(q, typeof m === "string" ? m : (p.extendedProperties?.private?.[MARCA_FANTASMAS] ?? null));
+    }
+    const m = p.extendedProperties?.private?.[MARCA_FANTASMAS] ?? "";
+    return m.split(",").length <= 24 && m.length < 1024;
+  })());
 });
 
 for (const r of resultados) console.log(r);

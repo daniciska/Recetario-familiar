@@ -545,7 +545,6 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
                   key={a}
                   type="button"
                   onClick={() => ponerTodo({ texto: a, porciones })}
-                  aria-pressed={entera && actual?.texto === a}
                   className={cx(
                     "min-h-11 rounded-full border-2 px-4 text-base font-bold",
                     entera && actual?.texto === a ? "border-acento bg-acento text-acento-tinta" : "border-borde",

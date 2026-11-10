@@ -28,6 +28,12 @@ export interface Transporte {
   borrar(url: string, href: string, etag: string): Promise<"ok" | "conflicto" | "noExiste">;
   /** Avisos para la familia acumulados en esta vuelta (se vacían al leerlos). */
   avisos?(): string[];
+  /**
+   * Al final de la vuelta, con el tiempo que quede: lo que el calendario dejó para después (Google: los
+   * días de una serie que no alcanzaron a seguir un cambio). true si queda trabajo para la vuelta siguiente.
+   * Nunca lanza un ErrorCalDAV. (CalDAV no lo tiene.)
+   */
+  pendientes?(url: string): Promise<boolean>;
 }
 
 type Proveedor = ConexionCalendario["proveedor"];

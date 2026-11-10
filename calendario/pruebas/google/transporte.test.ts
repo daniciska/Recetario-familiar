@@ -744,20 +744,32 @@ await caso("varias piezas: el principal y un día cambiado", async () => {
   sim.inyectar(delDia, respuestas.error("notFound"));
   const { r: r3b } = await cambiarEnPanel(gc(), cal, uid, cambio("🦄 Natación C2", "Piscina C2"));
   ok("404 en el día cambiado (el primer PATCH) → \"conflicto\", sin tocar el principal", r3b.valor === "conflicto" && sim.evento(cal, s.id).summary === "🦄 Natación A", [r3b.valor, codigo(r3b)]);
-  // 400 en la segunda: aviso y {etag:null}.
+  // 400 en la segunda (el principal), con el día ya escrito: el aviso dice el motivo de Google (antes era
+  // un genérico «no aceptó parte del cambio»), {etag: null} y pendientes() → true (la vuelta siguiente de
+  // la misma sincronización relee: la pared vuelve atrás junto con el aviso).
   const t4 = gc();
   sim.inyectar(delPrincipal, respuestas.error("timeRangeEmpty"));
   const { r: r4 } = await cambiarEnPanel(t4, cal, uid, cambio("🦄 Natación D", "Piscina D"));
   const av = t4.avisos();
-  ok("400 en la segunda → aviso «no aceptó parte del cambio» y {etag: null}", JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && av.length === 1 && /parte del cambio/.test(av[0]), [r4.valor, av]);
-  // 400 en el día (el primero): se sigue con el principal; aviso y {etag:null}.
+  const rel4 = await t4.pendientes(cal);
+  ok(
+    "400 en la segunda → aviso con el motivo de Google («no aceptó \"…\": The specified time range is empty»), {etag: null} y pendientes() → true (releer)",
+    JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && av.length === 1 && /no aceptó "🦄 Natación D": The specified time range is empty\.$/.test(av[0]) && rel4 === true && (await gc().pendientes(cal)) === false,
+    [r4.valor, av, rel4],
+  );
+  // 400 en el día (el primero): se sigue con el principal; aviso con el día y el motivo, {etag:null} y releer.
   const t4b = gc();
   sim.inyectar(delDia, respuestas.error("timeRangeEmpty"));
   const { r: r4b } = await cambiarEnPanel(t4b, cal, uid, cambio("🦄 Natación D2", "Piscina D2"));
   const av4b = t4b.avisos();
   ok(
-    "400 en el día cambiado → el principal igual se escribe; aviso «no aceptó parte del cambio» y {etag: null}",
-    JSON.stringify(r4b.valor) === JSON.stringify({ etag: null }) && sim.evento(cal, s.id).summary === "🦄 Natación D2" && sim.evento(cal, dia.id).location === "Piscina D" && av4b.length === 1 && /parte del cambio/.test(av4b[0]),
+    "400 en el día cambiado → el principal igual se escribe; aviso «no aceptó el cambio del día 18-11-2026 de \"…\": <motivo>», {etag: null} y releer",
+    JSON.stringify(r4b.valor) === JSON.stringify({ etag: null }) &&
+      sim.evento(cal, s.id).summary === "🦄 Natación D2" &&
+      sim.evento(cal, dia.id).location === "Piscina D" &&
+      av4b.length === 1 &&
+      /no aceptó el cambio del día 18-11-2026 de "🦄 Natación D2": The specified time range is empty/.test(av4b[0]) &&
+      (await t4b.pendientes(cal)) === true,
     [r4b.valor, codigo(r4b), av4b],
   );
   // 503 en la segunda: se lanza (el motor deja de escribir y reintenta).
@@ -790,11 +802,41 @@ await caso("fantasmas: después del principal, dentro del plazo, y un 412 se rel
   const lugar = (x: string) => enPrincipal((e) => ({ ...e, lugar: x }));
   const patches = () => sim.registro.filter((x) => x.tipo === "events.patch").map((x) => decodeURIComponent(x.ruta.split("/").pop() ?? ""));
   ok("la fantasma no se ve en la pared", (await leer(gc(), cal)).find((x) => x.g?.uid === uid)?.g?.eventos.length === 1);
-  // 1. Plazo para un PATCH pero no para dos (400 + 700·2 ms): no se empieza (TIEMPO, sin escribir nada).
+  // 1. Sin plazo para el principal (400 + 700 ms): no se empieza (TiempoSinEmpezar, sin escribir nada).
+  const tx = gc({ hasta: Date.now() + 1000 });
+  sim.reiniciarContadores();
+  const { r: rx } = await cambiarEnPanel(tx, cal, uid, lugar("Piscina 0"));
+  ok(
+    "sin plazo para el principal → TiempoSinEmpezar (TIEMPO) antes de escribir",
+    codigo(rx) === "TIEMPO" && rx.error instanceof transporteGoogle.TiempoSinEmpezar && escrituras() === 0 && !patches().length,
+    [codigo(rx), patches()],
+  );
+  // 1b. Plazo para el principal pero no para la fantasma (el principal tarda): se escribe el principal, con
+  //     la marca cfv, y la fantasma queda para después. Antes se exigía plazo para todo: con 6 o más
+  //     fantasmas, la sincronización normal no empezaba (TIEMPO) y tampoco subía lo demás de la vuelta.
   const t0 = gc({ hasta: Date.now() + 1700 });
+  const lento = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === s.id, respuestas.demora(750));
   sim.reiniciarContadores();
   const { r: r0 } = await cambiarEnPanel(t0, cal, uid, lugar("Piscina 1"));
-  ok("sin plazo para el principal y la fantasma → TIEMPO antes de escribir", codigo(r0) === "TIEMPO" && escrituras() === 0 && !patches().length, [codigo(r0), patches()]);
+  lento.quitar();
+  const cfv = sim.evento(cal, s.id).extendedProperties?.private?.cfv;
+  ok(
+    "plazo para el principal pero no para la fantasma → el principal (con la marca cfv) y {etag: null}; la fantasma no se toca todavía",
+    !r0.error && JSON.stringify(r0.valor) === JSON.stringify({ etag: null }) && JSON.stringify(patches()) === JSON.stringify([s.id]) && sim.evento(cal, s.id).location === "Piscina 1" && typeof cfv === "string" && /^l\.[0-9a-f]{12}\.[0-9a-z]+$/.test(cfv) && !sim.evento(cal, f.id).location,
+    [codigo(r0), mensaje(r0), r0.valor, patches(), cfv],
+  );
+  ok("…pendientes() sin plazo → true, sin pedidos", (await t0.pendientes(cal)) === true && contar("events.patch") === 1, sim.contadores.porTipo);
+  const l0 = await leer(gc(), cal);
+  ok("…mientras tanto la fantasma rezagada no se ve como día cambiado (la serie sigue con 1 evento en la pared)", l0.find((x) => x.g?.uid === uid)?.g?.eventos.length === 1, l0.find((x) => x.g?.uid === uid)?.g?.eventos.map((e) => [e.titulo, e.lugar]));
+  const t0b = gc();
+  await t0b.listar(cal);
+  sim.reiniciarContadores();
+  const p0b = await t0b.pendientes(cal);
+  ok("…y otra vuelta (pendientes() con su listado) la pone al día: 1 PATCH, nada más pendiente", p0b === false && contar("events.patch") === 1 && sim.evento(cal, f.id).location === "Piscina 1" && sim.evento(cal, f.id).colorId === "5", [p0b, sim.contadores.porTipo]);
+  sim.reiniciarContadores();
+  const t0c = gc();
+  await t0c.listar(cal);
+  ok("…y la siguiente ya no tiene nada que hacer", (await t0c.pendientes(cal)) === false && escrituras() === 0);
   // 2. Con plazo: el principal y después la fantasma; el etag previsto es el del listado siguiente.
   const t1 = gc();
   sim.reiniciarContadores();
@@ -830,18 +872,23 @@ await caso("fantasmas: después del principal, dentro del plazo, y un 412 se rel
   } finally {
     sim.interruptores.propagarTituloAExcepciones = false;
   }
-  // 4. Se acaba el plazo en el PATCH de la fantasma: el principal ya está escrito, así que no se lanza; queda
-  //    un aviso y {etag: null} (el motor relee).
+  // 4. Se acaba el plazo en el PATCH de la fantasma: el principal ya está escrito, así que no se lanza:
+  //    {etag: null} (el motor relee) y sin aviso; la fantasma, rezagada, no se ve como día cambiado y otra
+  //    vuelta la pone al día. (Antes quedaba como día cambiado con el lugar viejo, con un aviso.)
   const t4 = gc({ hasta: Date.now() + 2600 });
   const freno = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === f.id, respuestas.demora(5000));
   const { r: r4 } = await cambiarEnPanel(t4, cal, uid, lugar("Piscina 4"));
   freno.quitar();
   const av4 = t4.avisos();
+  const l4 = await leer(gc(), cal);
   ok(
-    "TIEMPO en la fantasma → sin error, {etag: null} y el aviso «…no se alcanzó a pasar a todos sus días…»",
-    !r4.error && JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && sim.evento(cal, s.id).location === "Piscina 4" && av4.some((a) => /no se alcanzó a pasar a todos sus días/.test(a)),
+    "TIEMPO en la fantasma → sin error, {etag: null}, sin aviso y la pared sin día cambiado",
+    !r4.error && JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && sim.evento(cal, s.id).location === "Piscina 4" && !av4.length && l4.find((x) => x.g?.uid === uid)?.g?.eventos.length === 1,
     [codigo(r4), mensaje(r4), r4.valor, av4],
   );
+  const t5 = gc();
+  await t5.listar(cal);
+  ok("…otra vuelta la pone al día", (await t5.pendientes(cal)) === false && sim.evento(cal, f.id).location === "Piscina 4", sim.evento(cal, f.id).location);
 });
 
 await caso("repetición que Google no aceptó (serie dividida)", async () => {
