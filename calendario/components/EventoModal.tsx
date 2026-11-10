@@ -26,6 +26,8 @@ export default function EventoModal({
 }) {
   const { estado, actualizar, nube } = useDatos();
   const calendarios = nube?.calendarios ?? [];
+  // Con Google Calendar, una serie también se cambia en calendar.google.com (no sólo en el iPhone).
+  const allaTambien = calendarios[0]?.proveedor === "google" ? " o en Google Calendar" : "";
   const { proteger } = useCandado();
   const [f, setF] = useState<Evento>(
     () =>
@@ -325,14 +327,14 @@ export default function EventoModal({
           <div className="rounded-2xl bg-superficie-2 px-4 py-3">
             <span className="block text-lg font-bold">↻ Cambio de un solo día de una serie</span>
             <span className="block text-base text-tinta-suave">
-              En el iPhone se cambió sólo este día; el resto de la serie sigue igual. Aquí puedes moverlo o cambiarlo.
+              En el iPhone{allaTambien} se cambió sólo este día; el resto de la serie sigue igual. Aquí puedes moverlo o cambiarlo.
             </span>
           </div>
         ) : repeticionDeAfuera ? (
           <div className="rounded-2xl bg-superficie-2 px-4 py-3">
             <span className="block text-lg font-bold">↻ {textoRepeticion(f)}</span>
             <span className="block text-base text-tinta-suave">
-              Para cambiar cómo se repite, hazlo en el Calendario del iPhone. Aquí puedes cambiar lo demás.
+              Para cambiar cómo se repite, hazlo en el Calendario del iPhone{allaTambien}. Aquí puedes cambiar lo demás.
             </span>
           </div>
         ) : (
@@ -460,7 +462,9 @@ export default function EventoModal({
               <span className="block text-base text-tinta-suave">
                 {f.soloPanel
                   ? "Queda sólo en el panel: no se ve en los iPhone."
-                  : "Se ve en el Calendario de los iPhone de la familia y avisa con sus alertas."}
+                  : calendarios[0].proveedor === "google"
+                    ? "Se ve en el Calendario de los iPhone de la familia y en Google Calendar (los avisos son de cada uno)."
+                    : "Se ve en el Calendario de los iPhone de la familia y avisa con sus alertas."}
               </span>
             </span>
           </button>

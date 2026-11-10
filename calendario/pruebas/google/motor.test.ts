@@ -1,0 +1,857 @@
+// Pruebas de punta a punta del motor con Google Calendar (plan de pruebas C4, puntos 1 a 11): el motor
+// real (servidor/sincronizar.ts, sin cambios de lógica) con el transporte real, el simulador de la API y
+// Blobs en memoria. Sin red: todo en 127.0.0.1 (ver pruebas/h.ts).
+//
+//   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/motor.test.ts
+import * as h from "../h.ts";
+import { respuestas, es } from "./mock-google.mts";
+import type { Evento } from "../../lib/datos/tipos.ts";
+
+const { ok, seccion, caso, ev, gid } = h;
+const sim = await h.arrancar({ semilla: 7 });
+const ahoraIso = () => new Date().toISOString();
+const avisosDe = async (fam: string, con: ReturnType<typeof h.conexionGoogle>) => (await h.estado(fam, con))?.avisos ?? [];
+const porId = async (fam: string, id: string) => (await h.leerEventos(fam)).find((e) => e.id === id);
+/** Dos vueltas quietas: la pared igual a Google y la segunda sin escribir nada. */
+async function quieto(nombre: string, fam: string, con: ReturnType<typeof h.conexionGoogle>) {
+  await h.sync(fam, con);
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  const dif = await h.comparar(fam, con);
+  ok(`${nombre}: después, una vuelta quieta no escribe y la pared coincide con Google`, r.ok && sim.contadores.escrituras === 0 && !dif.length, {
+    r,
+    porTipo: sim.contadores.porTipo,
+    dif: dif.slice(0, 4),
+    avisos: await avisosDe(fam, con),
+  });
+}
+
+/** Todas las repeticiones que escribe el panel. */
+function corpus(): Evento[] {
+  return [
+    ev("r01", { titulo: "Dentista", lugar: "Clínica", nota: "Llevar la ficha\nY el carnet" }),
+    ev("r02", { titulo: "Natación", repeticion: "diaria", fecha: "2026-11-10", repetirHasta: "2026-11-30", excepciones: ["2026-11-22"] }),
+    ev("r03", { titulo: "Fútbol", miembros: ["tomi"], repeticion: "semanal", fecha: "2026-11-09", diasSemana: [0, 2, 4], horaInicio: "17:00", horaFin: "18:30" }),
+    ev("r04", { titulo: "Piano", repeticion: "semanal", intervalo: 2, fecha: "2026-11-11" }),
+    ev("r05", { titulo: "Arriendo", miembros: ["mama"], repeticion: "mensual", fecha: "2026-11-30", horaInicio: "09:00", horaFin: "09:30" }),
+    ev("r06", { titulo: "Cierre de mes", miembros: ["mama"], repeticion: "mensual", fecha: "2026-12-31", todoElDia: true, horaInicio: undefined, horaFin: undefined }),
+    ev("r07", { titulo: "Cumpleaños de Sofía", repeticion: "anual", fecha: "2028-02-29", todoElDia: true, horaInicio: undefined, horaFin: undefined }),
+    ev("r08", { titulo: "Vacaciones", miembros: ["sofi", "tomi"], fecha: "2026-12-20", fechaFin: "2026-12-27", todoElDia: true, horaInicio: undefined, horaFin: undefined }),
+    ev("r09", { titulo: "Feriado", miembros: ["sofi", "tomi", "mama"], fecha: "2026-12-08", todoElDia: true, horaInicio: undefined, horaFin: undefined }),
+    ev("r10", { titulo: "Remedio", horaFin: undefined, horaInicio: "08:00", repeticion: "diaria", fecha: "2026-11-15", repetirHasta: "2026-11-25" }),
+    ev("r11", { titulo: "Inglés", repeticion: "semanal", fecha: "2026-11-12", diasSemana: [3], excepciones: ["2026-11-19", "2026-12-03"], repetirHasta: "2027-01-28" }),
+    ev("r12", { titulo: "Viaje", fecha: "2026-11-25", fechaFin: "2026-11-26", horaInicio: "10:00", horaFin: "12:00" }),
+    ev("r13", { titulo: "Control", repeticion: "mensual", intervalo: 3, fecha: "2026-11-16", repetirHasta: "2027-11-30" }),
+    ev("r14", { titulo: "Aniversario", miembros: ["mama"], repeticion: "anual", fecha: "2026-11-28", horaInicio: "20:00", horaFin: "23:00" }),
+    ev("r15", { titulo: "Riego", miembros: ["tomi"], repeticion: "diaria", intervalo: 2, fecha: "2026-11-10", repetirHasta: "2026-12-10" }),
+    ev("r16", { titulo: "Medianoche", fecha: "2026-11-21", horaInicio: "23:00", horaFin: "23:59" }),
+  ];
+}
+
+// =====================================================================================
+seccion("1. Ida y vuelta con todas las repeticiones del panel");
+const cal1 = h.nuevoCalendario();
+const con1 = h.conexionGoogle(cal1);
+const fam1 = await h.familia(corpus());
+await caso("ida y vuelta", async () => {
+  sim.reiniciarContadores();
+  const r1 = await h.sync(fam1, con1);
+  const vivos = h.vivos(cal1);
+  ok("vuelta 1: sube las 16 series", r1.ok && vivos.length === 16 && sim.contadores.porTipo["events.insert"] === 16, {
+    r1,
+    n: vivos.length,
+    porTipo: sim.contadores.porTipo,
+    avisos: await avisosDe(fam1, con1),
+  });
+  const l1 = await h.leerEventos(fam1);
+  ok("vuelta 1: todos quedan vinculados a la conexión", l1.every((e) => e.externo?.conexion === con1.id && e.externo.uid === h.uidPanel(e.id)), l1.map((e) => [e.id, e.externo]));
+  const titulo = (id: string) => sim.evento(cal1, gid(id))?.summary;
+  ok(
+    "en Google los títulos llevan el emoji de las personas (y sin emoji si es para todos)",
+    titulo("r01") === "🦄 Dentista" && titulo("r03") === "⚽ Fútbol" && /🦄/.test(titulo("r08") ?? "") && /⚽/.test(titulo("r08") ?? "") && titulo("r09") === "Feriado",
+    [titulo("r01"), titulo("r03"), titulo("r08"), titulo("r09")],
+  );
+  ok(
+    "las piezas que escribió el panel llevan la marca cfh",
+    vivos.every((e) => typeof e.extendedProperties?.private?.cfh === "string"),
+    vivos.filter((e) => !e.extendedProperties?.private?.cfh).map((e) => e.id),
+  );
+  const antes = JSON.stringify(await h.leerEventos(fam1));
+  sim.reiniciarContadores();
+  const r2 = await h.sync(fam1, con1);
+  ok("vuelta 2: 0 escrituras y la pared no cambia", r2.ok && sim.contadores.escrituras === 0 && JSON.stringify(await h.leerEventos(fam1)) === antes, {
+    r2,
+    porTipo: sim.contadores.porTipo,
+    avisos: await avisosDe(fam1, con1),
+  });
+  sim.reiniciarContadores();
+  const r3 = await h.sync(fam1, con1);
+  ok("vuelta 3: atajo (1 listado, 0 escrituras)", r3.ok && sim.contadores.api === 1 && sim.contadores.porTipo["events.list"] === 1 && sim.contadores.escrituras === 0, {
+    r3,
+    porTipo: sim.contadores.porTipo,
+  });
+  const dif = await h.comparar(fam1, con1);
+  ok("la pared coincide con lo que Google tiene (misma huella por serie)", !dif.length, dif.slice(0, 5));
+  const est = await h.estado(fam1, con1);
+  ok("sin error ni avisos", !est?.error && !est?.avisos?.length, est);
+});
+
+// =====================================================================================
+seccion("2. Cambios en la pared (uno por vuelta)");
+await caso("cambios en la pared", async () => {
+  const cambio = async (nombre: string, fn: () => Promise<void>, esperado: Record<string, number>, verificar: () => boolean | Promise<boolean>) => {
+    await fn();
+    sim.reiniciarContadores();
+    const r = await h.sync(fam1, con1);
+    const pt = sim.contadores.porTipo;
+    const escrituras = Object.entries(pt).filter(([t]) => !/\.(list|get|instances)$/.test(t));
+    const calza = escrituras.length === Object.keys(esperado).length && Object.entries(esperado).every(([t, n]) => pt[t] === n);
+    ok(`${nombre} → ${Object.entries(esperado).map(([t, n]) => `${n} ${t}`).join(" + ")}`, r.ok && calza && (await verificar()), {
+      r,
+      porTipo: pt,
+      avisos: await avisosDe(fam1, con1),
+    });
+    sim.reiniciarContadores();
+    const r2 = await h.sync(fam1, con1);
+    const dif = await h.comparar(fam1, con1);
+    ok(`${nombre}: la vuelta siguiente queda estable`, r2.ok && sim.contadores.escrituras === 0 && !dif.length, { porTipo: sim.contadores.porTipo, dif: dif.slice(0, 3) });
+  };
+  await cambio(
+    "título",
+    () => h.cambiarEvento(fam1, "r01", { titulo: "Dentista Dr. Pérez" }),
+    { "events.patch": 1 },
+    () => sim.evento(cal1, gid("r01"))?.summary === "🦄 Dentista Dr. Pérez",
+  );
+  await cambio(
+    "hora",
+    () => h.cambiarEvento(fam1, "r03", { horaInicio: "16:00", horaFin: "17:30" }),
+    { "events.patch": 1 },
+    () => /T16:00:00/.test(sim.evento(cal1, gid("r03"))?.start?.dateTime ?? ""),
+  );
+  await cambio(
+    "«hasta»",
+    () => h.cambiarEvento(fam1, "r02", { repetirHasta: "2026-12-15" }),
+    { "events.patch": 1 },
+    () => (sim.evento(cal1, gid("r02"))?.recurrence ?? []).some((l: string) => /UNTIL=202612/.test(l)),
+  );
+  await cambio(
+    "borrar sólo este día",
+    () => h.cambiarEvento(fam1, "r03", (e) => ({ ...e, excepciones: [...(e.excepciones ?? []), "2026-11-18"], actualizado: ahoraIso() })),
+    { "events.patch": 1 },
+    () => (sim.evento(cal1, gid("r03"))?.recurrence ?? []).some((l: string) => /^EXDATE.*20261118/.test(l)),
+  );
+  await cambio(
+    "borrar la serie",
+    () => h.guardarEventos(fam1, (l) => l.filter((e) => e.id !== "r04")).then(() => {}),
+    { "events.delete": 1 },
+    () => sim.evento(cal1, gid("r04"))?.status === "cancelled",
+  );
+  await cambio(
+    "nota y lugar",
+    () => h.cambiarEvento(fam1, "r14", { nota: "Reservar", lugar: "Restorán" }),
+    { "events.patch": 1 },
+    () => sim.evento(cal1, gid("r14"))?.location === "Restorán" && sim.evento(cal1, gid("r14"))?.description === "Reservar",
+  );
+  await cambio(
+    "evento nuevo en la pared",
+    () => h.guardarEventos(fam1, (l) => [...l, ev("r17", { titulo: "Reunión de apoderados", miembros: ["mama"], fecha: "2026-11-27", horaInicio: "19:00", horaFin: "20:30" })]).then(() => {}),
+    { "events.insert": 1 },
+    () => sim.evento(cal1, gid("r17"))?.summary === "🌸 Reunión de apoderados",
+  );
+});
+
+await caso("borrar en la pared justo después de subir", async () => {
+  // Después de crear o cambiar, la vuelta guarda el etag que tendrá la serie (no null): si la pared la
+  // borra antes de que otra vuelta la relea, se borra en Google (antes volvía a aparecer).
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("w1", { titulo: "Se queda" })]);
+  await h.sync(fam, con);
+  const diaCompleto = { todoElDia: true, horaInicio: undefined, horaFin: undefined };
+  await h.guardarEventos(fam, (l) => [
+    ...l,
+    ev("w2", { titulo: "Con error de tipeo" }),
+    ev("w3", { titulo: "Serie", repeticion: "semanal", fecha: "2026-11-16" }),
+    ev("w4", { titulo: "Paseo", ...diaCompleto }),
+    ev("w5", { titulo: "Cumple", repeticion: "anual", fecha: "2026-12-03", ...diaCompleto }),
+  ]);
+  await h.sync(fam, con);
+  const est = await h.estado(fam, con);
+  ok("después de crear, el estado ya tiene el etag de cada serie", Object.values(est!.recursos).every((x) => x.etag !== null), est?.recursos);
+  await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== "w2"));
+  const r1 = await h.sync(fam, con);
+  ok("creado y borrado enseguida en la pared → se borra en Google (no vuelve)", r1.ok && !(await porId(fam, "w2")) && sim.evento(cal, gid("w2"))?.status === "cancelled", { r1, l: (await h.leerEventos(fam)).map(h.resumen) });
+  await h.cambiarEvento(fam, "w3", { titulo: "Serie (cambiada)", excepciones: ["2026-11-23"] });
+  await h.sync(fam, con);
+  await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== "w3"));
+  const r2 = await h.sync(fam, con);
+  ok("cambiado y borrado enseguida en la pared → se borra en Google (no vuelve)", r2.ok && !(await porId(fam, "w3")) && sim.evento(cal, gid("w3"))?.status === "cancelled", { r2, l: (await h.leerEventos(fam)).map(h.resumen) });
+  await h.cambiarEvento(fam, "w5", { titulo: "Cumple de la Sofi" });
+  await h.sync(fam, con);
+  await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== "w4" && e.id !== "w5"));
+  const r3 = await h.sync(fam, con);
+  ok(
+    "de día completo (la zona sale del calendario): también se borran en Google",
+    r3.ok && sim.evento(cal, gid("w4"))?.status === "cancelled" && sim.evento(cal, gid("w5"))?.status === "cancelled",
+    { r3, l: (await h.leerEventos(fam)).map(h.resumen) },
+  );
+  await quieto("borrar justo después de subir", fam, con);
+});
+
+// =====================================================================================
+seccion("3. Cambios en Google (web, iPhone): la pared converge");
+await caso("cambios en Google", async () => {
+  const web = sim.actor("web", cal1);
+  const iphone = sim.actor("iPhone", cal1);
+  const desde = async (nombre: string, fn: () => void, verificar: (l: Evento[]) => boolean, detalle?: (l: Evento[]) => unknown) => {
+    fn();
+    const r = await h.sync(fam1, con1);
+    const l = await h.leerEventos(fam1);
+    ok(nombre, r.ok && verificar(l), { r, ev: detalle ? detalle(l) : undefined, avisos: await avisosDe(fam1, con1) });
+    await quieto(nombre, fam1, con1);
+  };
+  const de = (l: Evento[], id: string) => l.find((e) => e.id === id);
+  await desde(
+    "título cambiado en la web",
+    () => web.editarTitulo(gid("r01"), "🦄 Dentista (control)"),
+    (l) => de(l, "r01")?.titulo === "Dentista (control)" && de(l, "r01")?.miembros.join() === "sofi",
+    (l) => de(l, "r01"),
+  );
+  await desde(
+    "día borrado en la web (excepción cancelada)",
+    () => web.borrarDia(gid("r02"), "2026-11-12"),
+    (l) => !!de(l, "r02")?.excepciones?.includes("2026-11-12") && !!de(l, "r02")?.excepciones?.includes("2026-11-22"),
+    (l) => de(l, "r02"),
+  );
+  await desde(
+    "día borrado en el iPhone (EXDATE;TZID)",
+    () => iphone.borrarDia(gid("r03"), "2026-11-20"),
+    (l) => !!de(l, "r03")?.excepciones?.includes("2026-11-20") && !!de(l, "r03")?.excepciones?.includes("2026-11-18"),
+    (l) => de(l, "r03"),
+  );
+  await desde(
+    "día movido en la web → día cambiado en la pared",
+    () =>
+      web.moverDia(gid("r11"), "2026-11-26", { dateTime: "2026-11-27T18:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-27T19:00:00-03:00", timeZone: "America/Santiago" }),
+    (l) => {
+      const hijo = l.find((e) => e.externo?.uid === h.uidPanel("r11") && e.externo.recurrencia);
+      return !!hijo && hijo.fecha === "2026-11-27" && hijo.horaInicio === "18:00" && !!de(l, "r11")?.excepciones?.includes("2026-11-26");
+    },
+    (l) => l.filter((e) => e.externo?.uid === h.uidPanel("r11")),
+  );
+  await desde(
+    "nota con formato (HTML) escrita en la web → texto en la pared",
+    () => web.editar(gid("r14"), { description: "Reservar mesa\nPara 2 & postre" }),
+    (l) => de(l, "r14")?.nota === "Reservar mesa\nPara 2 & postre",
+    (l) => [de(l, "r14")?.nota, sim.evento(cal1, gid("r14"))?.description],
+  );
+  await desde(
+    "«este y los siguientes» en la web → dos series en la pared",
+    () => web.esteYLosSiguientes(gid("r15"), "2026-11-20", { summary: "⚽ Riego (tarde)", start: { dateTime: "2026-11-20T18:00:00-03:00", timeZone: "America/Santiago" }, end: { dateTime: "2026-11-20T19:00:00-03:00", timeZone: "America/Santiago" } }),
+    (l) => {
+      const viejo = de(l, "r15");
+      const nuevo = l.find((e) => e.titulo === "Riego (tarde)");
+      return !!viejo && !!viejo.repetirHasta && viejo.repetirHasta < "2026-11-20" && !!nuevo && nuevo.fecha === "2026-11-20" && nuevo.horaInicio === "18:00" && nuevo.repeticion === "diaria";
+    },
+    (l) => l.filter((e) => /Riego/.test(e.titulo)).map(h.resumen),
+  );
+  await desde(
+    "serie nueva del iPhone con regla ajena («segundo martes») → fechas sueltas de la serie",
+    () =>
+      void iphone.crear({
+        summary: "⚽ Taller",
+        start: { dateTime: "2026-11-10T15:00:00-03:00", timeZone: "America/Santiago" },
+        end: { dateTime: "2026-11-10T16:00:00-03:00", timeZone: "America/Santiago" },
+        recurrence: ["RRULE:FREQ=MONTHLY;BYDAY=2TU;COUNT=6"],
+      }),
+    (l) => {
+      const t = l.find((e) => e.titulo === "Taller");
+      return !!t && t.miembros.join() === "tomi" && !!t.fechas?.length && t.fechas.includes("2026-12-08") && !t.externo?.uid.endsWith("@calendario-familiar");
+    },
+    (l) => l.filter((e) => e.titulo === "Taller").map(h.resumen),
+  );
+  await desde(
+    "evento suelto en otra zona (Madrid) → la hora correcta en Santiago",
+    () =>
+      void web.crear({
+        summary: "🌸 Llamada a la abuela",
+        start: { dateTime: "2026-11-23T20:00:00+01:00", timeZone: "Europe/Madrid" },
+        end: { dateTime: "2026-11-23T21:00:00+01:00", timeZone: "Europe/Madrid" },
+      }),
+    (l) => {
+      const t = l.find((e) => e.titulo === "Llamada a la abuela");
+      return !!t && t.fecha === "2026-11-23" && t.horaInicio === "16:00" && t.miembros.join() === "mama";
+    },
+    (l) => l.filter((e) => /abuela/.test(e.titulo)).map(h.resumen),
+  );
+  await desde(
+    "borrado en la web → borrado en la pared",
+    () => web.borrar(gid("r16")),
+    (l) => !de(l, "r16"),
+  );
+});
+
+// =====================================================================================
+seccion("4. Conflictos y escrituras a medias");
+await caso("gana el más reciente", async () => {
+  // Google primero (hace 2 minutos), la pared después → gana la pared (todo su grupo).
+  sim.reloj.fijar(Date.now() - 120_000);
+  sim.actor("web", cal1).editarTitulo(gid("r05"), "🌸 Arriendo (web)");
+  sim.reloj.real();
+  await h.cambiarEvento(fam1, "r05", { lugar: "Banco" });
+  const r1 = await h.sync(fam1, con1);
+  const g1 = sim.evento(cal1, gid("r05"));
+  ok("cambió en los dos lados, la pared después → gana la pared", r1.ok && g1?.location === "Banco" && g1?.summary === "🌸 Arriendo", [g1?.summary, g1?.location, await porId(fam1, "r05")]);
+  await quieto("gana la pared", fam1, con1);
+  // La pared primero (hace 2 minutos), Google después → gana Google.
+  await h.cambiarEvento(fam1, "r13", { lugar: "Consultorio", actualizado: new Date(Date.now() - 120_000).toISOString() });
+  sim.actor("web", cal1).editarTitulo(gid("r13"), "🦄 Control (web)");
+  const r2 = await h.sync(fam1, con1);
+  const p2 = await porId(fam1, "r13");
+  ok(
+    "cambió en los dos lados, Google después → gana Google",
+    r2.ok && p2?.titulo === "Control (web)" && !p2?.lugar && !sim.evento(cal1, gid("r13"))?.location,
+    [p2, sim.evento(cal1, gid("r13"))?.summary],
+  );
+  await quieto("gana Google", fam1, con1);
+});
+
+await caso("escritura a medias (TIEMPO entre el principal y un día cambiado)", async () => {
+  // Una serie con un día cambiado hecho en la web; en la pared se cambian la serie y ese día a la vez:
+  // son 2 PATCH. El segundo no alcanza (TIEMPO). La marca cfh hace que lo ya escrito por el panel no le
+  // gane a la pared: la vuelta siguiente termina el cambio en vez de revertirlo.
+  const prepara = async () => {
+    const cal = h.nuevoCalendario();
+    const con = h.conexionGoogle(cal);
+    const fam = await h.familia([ev("m1", { titulo: "Inglés", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-01-28" })]);
+    await h.sync(fam, con);
+    sim.reloj.fijar(Date.now() - 300_000);
+    const hijo = sim
+      .actor("web", cal)
+      .moverDia(gid("m1"), "2026-11-26", { dateTime: "2026-11-27T18:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-27T19:00:00-03:00", timeZone: "America/Santiago" });
+    sim.reloj.real();
+    await h.sync(fam, con);
+    const l = await h.leerEventos(fam);
+    const dia = l.find((e) => e.externo?.recurrencia);
+    if (!dia) throw new Error("no llegó el día cambiado");
+    // La pared cambia hace 1 minuto (después del día cambiado de la web, antes de que el panel escriba):
+    // sin la marca, lo que el panel alcance a escribir quedaría "más reciente" que la pared.
+    const hace1min = new Date(Date.now() - 60_000).toISOString();
+    await h.guardarEventos(fam, (x) =>
+      x.map((e) => (e.id === "m1" ? { ...e, titulo: "Inglés avanzado", actualizado: hace1min } : e.id === dia.id ? { ...e, lugar: "Sala 2", actualizado: hace1min } : e)),
+    );
+    return { cal, con, fam, hijo, dia };
+  };
+
+  const a = await prepara();
+  const freno = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === a.hijo.id, respuestas.demora(15_000));
+  sim.reiniciarContadores();
+  const r1 = await h.sync(a.fam, a.con, 5000);
+  freno.quitar();
+  const principal = sim.evento(a.cal, gid("m1"));
+  const l1 = await h.leerEventos(a.fam);
+  ok(
+    "vuelta cortada: el principal quedó escrito, el día no; sin error y pendiente",
+    r1.ok && r1.pendiente === true && principal?.summary === "🦄 Inglés avanzado" && !sim.evento(a.cal, a.hijo.id)?.location && freno.disparos === 1,
+    { r1, porTipo: sim.contadores.porTipo, principal: principal?.summary },
+  );
+  ok("…y la pared no se revirtió", l1.find((e) => e.id === "m1")?.titulo === "Inglés avanzado" && l1.find((e) => e.id === a.dia.id)?.lugar === "Sala 2", l1.map(h.resumen));
+  const r2 = await h.sync(a.fam, a.con);
+  const l2 = await h.leerEventos(a.fam);
+  ok(
+    "la vuelta siguiente retoma: Google termina con los dos cambios y la pared no se revierte (marca cfh)",
+    r2.ok && sim.evento(a.cal, a.hijo.id)?.location === "Sala 2" && sim.evento(a.cal, gid("m1"))?.summary === "🦄 Inglés avanzado" && l2.find((e) => e.id === a.dia.id)?.lugar === "Sala 2",
+    { r2, hijo: sim.evento(a.cal, a.hijo.id), avisos: await avisosDe(a.fam, a.con) },
+  );
+  await quieto("escritura a medias retomada", a.fam, a.con);
+
+  // Lo mismo, pero un iPhone vuelve a guardar la serie y borra las extendedProperties (la marca): el
+  // principal pasa a ser "ajeno" y más reciente que la pared → gana Google y se pierde lo que no alcanzó.
+  const b = await prepara();
+  const freno2 = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === b.hijo.id, respuestas.demora(15_000));
+  await h.sync(b.fam, b.con, 5000);
+  freno2.quitar();
+  sim.interruptores.extendedPropsSeConservan = false;
+  sim.actor("iPhone", b.cal).editar(gid("m1"), {});
+  sim.interruptores.extendedPropsSeConservan = true;
+  await h.sync(b.fam, b.con);
+  const l3 = await h.leerEventos(b.fam);
+  ok(
+    "sin la marca (un iPhone borró las extendedProperties) gana Google: el día cambiado vuelve a lo de Google (documentado en RIESGOS)",
+    l3.find((e) => e.id === "m1")?.titulo === "Inglés avanzado" && !l3.find((e) => e.id === b.dia.id)?.lugar && !sim.evento(b.cal, b.hijo.id)?.location,
+    l3.map(h.resumen),
+  );
+  await quieto("sin marca", b.fam, b.con);
+});
+
+await caso("recrear una serie con días cambiados y TIEMPO entre pasos", async () => {
+  // Borrada en Google y cambiada en la pared → se vuelve a crear (gen1) y después se escribe el día
+  // cambiado (PATCH de su instancia). Si eso no alcanza, el día queda como un día normal, con aviso.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("m2", { titulo: "Yoga", repeticion: "semanal", fecha: "2026-11-13", repetirHasta: "2027-01-29" })]);
+  await h.sync(fam, con);
+  sim.reloj.fijar(Date.now() - 300_000);
+  sim
+    .actor("web", cal)
+    .moverDia(gid("m2"), "2026-11-27", { dateTime: "2026-11-28T09:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-28T10:00:00-03:00", timeZone: "America/Santiago" });
+  sim.actor("web", cal).borrar(gid("m2"));
+  sim.reloj.real();
+  // (la pared se entera del día cambiado antes de que se borre: se lee en una vuelta intermedia)
+  sim.actor("web", cal).restaurar(gid("m2"));
+  await h.sync(fam, con);
+  sim.actor("web", cal).borrar(gid("m2"));
+  await h.cambiarEvento(fam, "m2", { titulo: "Yoga suave" });
+  const freno = sim.inyectar(es.tipo("events.instances"), respuestas.demora(15_000));
+  const r = await h.sync(fam, con, 5000);
+  freno.quitar();
+  const nuevo = sim.evento(cal, gid("m2", 1));
+  const avisos = await avisosDe(fam, con);
+  ok(
+    "se recreó con gen1 y el día cambiado que no alcanzó queda con aviso «quedó como un día normal»",
+    r.ok && nuevo?.status === "confirmed" && nuevo.summary === "🦄 Yoga suave" && avisos.some((a) => /el día 27-11-2026 .*quedó como un día normal/.test(a)),
+    { r, nuevo: nuevo?.summary, avisos, disparos: freno.disparos },
+  );
+  await quieto("recrear con días cambiados", fam, con);
+  const l = await h.leerEventos(fam);
+  ok("la pared quedó como Google: la serie sin el día cambiado (sin duplicados)", l.length === 1 && l[0].titulo === "Yoga suave" && !l[0].excepciones?.includes("2026-11-27"), l.map(h.resumen));
+});
+
+// =====================================================================================
+seccion("5. Borrados masivos y permisos");
+const diez = () => Array.from({ length: 10 }, (_, i) => ev(`b${i}`, { titulo: `Clase ${i}`, fecha: `2026-12-${String(i + 1).padStart(2, "0")}` }));
+await caso("borrar 6 de 10 en Google", async () => {
+  for (const resolver of ["borrar", "recuperar"] as const) {
+    const cal = h.nuevoCalendario();
+    const con = h.conexionGoogle(cal);
+    const fam = await h.familia(diez());
+    await h.sync(fam, con);
+    for (let i = 0; i < 6; i++) sim.actor("web", cal).borrar(gid(`b${i}`));
+    const r = await h.sync(fam, con);
+    ok(
+      `[${resolver}] pregunta antes de borrar del panel, con el nombre del proveedor`,
+      !r.ok && r.error?.codigo === "MUCHOS_BORRADOS_ICLOUD" && r.error.mensaje === "Desaparecieron de Google Calendar 6 eventos. ¿Se borran también del panel?" && (await h.leerEventos(fam)).length === 10,
+      r,
+    );
+    const r2 = await h.sync(fam, con, 6500, resolver);
+    const l = await h.leerEventos(fam);
+    if (resolver === "borrar") ok("«borrar»: quedan 4 en la pared y en Google", r2.ok && l.length === 4 && h.vivos(cal).length === 4, { r2, n: l.length, g: h.vivos(cal).length });
+    else {
+      await h.sync(fam, con);
+      ok(
+        "«recuperar»: los 6 vuelven a Google (gen1) y la pared sigue con 10, sin duplicados",
+        r2.ok && (await h.leerEventos(fam)).length === 10 && h.vivos(cal).length === 10 && sim.evento(cal, gid("b0", 1))?.status === "confirmed",
+        { r2, n: (await h.leerEventos(fam)).length, g: h.vivos(cal).map((e) => e.summary), avisos: await avisosDe(fam, con) },
+      );
+    }
+    await quieto(`borrados en Google (${resolver})`, fam, con);
+  }
+});
+
+await caso("borrar 6 de 10 en la pared", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia(diez());
+  await h.sync(fam, con);
+  await h.guardarEventos(fam, (l) => l.slice(6));
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  ok(
+    "pregunta antes de borrar de Google, con el nombre del proveedor",
+    !r.ok && r.error?.codigo === "MUCHOS_BORRADOS_PANEL" && r.error.mensaje === "Se borraron del panel 6 eventos que están en Google Calendar. ¿Se borran también de los iPhone?" && h.vivos(cal).length === 10 && sim.contadores.escrituras === 0,
+    r,
+  );
+  const r2 = await h.sync(fam, con, 6500, "borrar");
+  ok("«borrar»: 6 DELETE y quedan 4 en Google", r2.ok && h.vivos(cal).length === 4 && sim.contadores.porTipo["events.delete"] === 6, { r2, porTipo: sim.contadores.porTipo });
+  await quieto("borrados en la pared", fam, con);
+});
+
+await caso("rol que no alcanza o calendario que se dejó de compartir", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia(diez());
+  await h.sync(fam, con);
+  const antes = JSON.stringify(await h.leerEventos(fam));
+  for (const [rol, codigo, texto] of [
+    ["reader", "PERMISO", /compartido solo para ver/],
+    ["freeBusyReader", "PERMISO", /compartido solo para ver/],
+    ["writerWithoutPrivateAccess", "PERMISO", /disponible\/ocupado/],
+    ["none", "NO_ENCONTRADO", /No encontramos el calendario/],
+  ] as const) {
+    sim.compartir(cal, h.SA, rol);
+    sim.reiniciarContadores();
+    const r = await h.sync(fam, con);
+    ok(
+      `rol ${rol} → ${codigo} visible, sin borrar nada de la pared ni escribir en Google`,
+      !r.ok && r.error?.codigo === codigo && texto.test(r.error.mensaje) && JSON.stringify(await h.leerEventos(fam)) === antes && sim.contadores.escrituras === 0,
+      r,
+    );
+  }
+  sim.compartir(cal, h.SA, "owner");
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  ok("al volver a compartir: sin error y sin escribir nada", r.ok && !r.error && sim.contadores.escrituras === 0 && JSON.stringify(await h.leerEventos(fam)) === antes, { r, porTipo: sim.contadores.porTipo });
+});
+
+// =====================================================================================
+seccion("6. Lápidas");
+await caso("borrado en Google y cambiado en la pared → se vuelve a crear", async () => {
+  for (const lapidaOcupaId of [true, false]) {
+    sim.interruptores.lapidaOcupaId = lapidaOcupaId;
+    const cal = h.nuevoCalendario();
+    const con = h.conexionGoogle(cal);
+    const fam = await h.familia([ev("l1", { titulo: "Teatro" }), ev("l2", { titulo: "Cine" })]);
+    await h.sync(fam, con);
+    sim.actor("web", cal).borrar(gid("l1"));
+    await h.cambiarEvento(fam, "l1", { titulo: "Teatro (función 2)" });
+    const r = await h.sync(fam, con);
+    const g = lapidaOcupaId ? sim.evento(cal, gid("l1", 1)) : sim.evento(cal, gid("l1"));
+    const l = await h.leerEventos(fam);
+    const avisos = await avisosDe(fam, con);
+    ok(
+      `lapidaOcupaId=${lapidaOcupaId}: ${lapidaOcupaId ? "gen1" : "el mismo id"}, vinculado al mismo UID y sin «se movió a otro calendario»`,
+      r.ok &&
+        g?.status === "confirmed" &&
+        g.summary === "🦄 Teatro (función 2)" &&
+        l.filter((e) => /Teatro/.test(e.titulo)).length === 1 &&
+        l.find((e) => e.id === "l1")?.externo?.uid === h.uidPanel("l1") &&
+        !avisos.some((a) => /se movió/.test(a)) &&
+        h.vivos(cal).length === 2,
+      { r, g: g && { id: g.id, status: g.status, summary: g.summary }, l: l.map(h.resumen), avisos },
+    );
+    await quieto(`lápida (lapidaOcupaId=${lapidaOcupaId})`, fam, con);
+  }
+  sim.interruptores.lapidaOcupaId = true;
+});
+
+// =====================================================================================
+seccion("7. Idempotencia y reconexión");
+await caso("desconectar y volver a conectar", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia(corpus().slice(0, 8));
+  await h.sync(fam, con);
+  sim.actor("iPhone", cal).crear({ summary: "⚽ Partido", start: { dateTime: "2026-11-29T11:00:00-03:00", timeZone: "America/Santiago" }, end: { dateTime: "2026-11-29T12:30:00-03:00", timeZone: "America/Santiago" } });
+  sim.actor("web", cal).crear({ summary: "🌸 Peluquería", start: { date: "2026-11-30" }, end: { date: "2026-12-01" } });
+  await h.sync(fam, con);
+  const nPared = (await h.leerEventos(fam)).length;
+  const nGoogle = h.vivos(cal).length;
+  await h.desconectar(fam, con);
+  ok("desconectado: los eventos quedan en la pared sin vínculo", (await h.leerEventos(fam)).every((e) => !e.externo), (await h.leerEventos(fam)).map((e) => e.externo));
+  const con2 = h.conexionGoogle(cal, "con2");
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con2);
+  const l = await h.leerEventos(fam);
+  ok(
+    "al volver a conectar: 0 duplicados (tampoco los creados en el iPhone o la web) y todo vinculado a la conexión nueva",
+    r.ok && l.length === nPared && h.vivos(cal).length === nGoogle && sim.contadores.porTipo["events.insert"] === undefined && l.every((e) => e.externo?.conexion === "con2"),
+    { r, nPared, n: l.length, nGoogle, g: h.vivos(cal).length, porTipo: sim.contadores.porTipo, l: l.map((e) => [e.id, e.externo]) },
+  );
+  await quieto("reconectar", fam, con2);
+});
+
+await caso("conectar sin subir lo que ya está", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia(corpus().slice(0, 5));
+  sim.actor("web", cal).crear({ summary: "🦄 Ya estaba en Google", start: { date: "2026-12-02" }, end: { date: "2026-12-03" } });
+  await h.conectarSinSubir(fam, con);
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  const l = await h.leerEventos(fam);
+  ok(
+    "los de la pared quedan «sólo en la pared» y lo de Google llega a la pared",
+    r.ok && sim.contadores.porTipo["events.insert"] === undefined && l.filter((e) => e.soloPanel).length === 5 && l.some((e) => e.titulo === "Ya estaba en Google" && e.externo) && h.vivos(cal).length === 1,
+    { r, porTipo: sim.contadores.porTipo, l: l.map(h.resumen) },
+  );
+  await quieto("conectar sin subir", fam, con);
+});
+
+await caso("evento de fechas sueltas sin vínculo", async () => {
+  // La serie «segundo martes» de la sección 3 está en la pared como fechas sueltas. Se desconecta, se borra
+  // en Google y se vuelve a conectar sin su par: la API la deja «sólo en la pared» (plan §3, soloPanelInicial).
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([]);
+  const t = sim.actor("iPhone", cal).crear({
+    summary: "⚽ Taller",
+    start: { dateTime: "2026-11-10T15:00:00-03:00", timeZone: "America/Santiago" },
+    end: { dateTime: "2026-11-10T16:00:00-03:00", timeZone: "America/Santiago" },
+    recurrence: ["RRULE:FREQ=MONTHLY;BYDAY=2TU;COUNT=6"],
+  });
+  await h.sync(fam, con);
+  await h.desconectar(fam, con);
+  sim.actor("web", cal).borrar(t.id);
+  const conSueltas = (await h.leerEventos(fam)).filter((e) => e.fechas?.length).map((e) => e.id);
+  const con2 = h.conexionGoogle(cal, "con2");
+  await S_guardarSoloPanel(fam, con2, conSueltas);
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con2);
+  const l = await h.leerEventos(fam);
+  ok(
+    "queda sólo en la pared (no se aplana como evento nuevo en Google)",
+    r.ok && conSueltas.length === 1 && l.length === 1 && l[0].soloPanel === true && !l[0].externo && h.vivos(cal).length === 0 && sim.contadores.escrituras === 0,
+    { r, conSueltas, l: l.map(h.resumen), porTipo: sim.contadores.porTipo },
+  );
+});
+async function S_guardarSoloPanel(fam: string, con: ReturnType<typeof h.conexionGoogle>, ids: string[]) {
+  await h.S.guardarEstado(fam, con.id, { recursos: {}, soloPanelInicial: ids });
+  await h.registrarConexion(fam, con);
+}
+
+// =====================================================================================
+seccion("8. Plazos");
+await caso("latencia de 300 ms y 40 series cambiadas", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia(Array.from({ length: 40 }, (_, i) => ev(`p${i}`, { titulo: `Cita ${i}`, fecha: `2027-01-${String((i % 28) + 1).padStart(2, "0")}` })));
+  await h.sync(fam, con, 24_000);
+  await h.guardarEventos(fam, (l) => l.map((e) => ({ ...e, titulo: e.titulo + " (cambiada)", actualizado: ahoraIso() })));
+  sim.latenciaMs = 300;
+  sim.reiniciarContadores();
+  const t0 = Date.now();
+  const r1 = await h.sync(fam, con, 6500);
+  const ms = Date.now() - t0;
+  const enGoogle = h.vivos(cal).filter((e) => /\(cambiada\)/.test(e.summary)).length;
+  const l1 = await h.leerEventos(fam);
+  ok(
+    "función normal (6,5 s): sube una parte, queda pendiente, sin error y la pared no se revierte",
+    r1.ok && r1.pendiente === true && !r1.error && enGoogle > 0 && enGoogle < 40 && l1.every((e) => /\(cambiada\)/.test(e.titulo)) && ms < 6500,
+    { r1, ms, enGoogle, porTipo: sim.contadores.porTipo },
+  );
+  const r2 = await h.sync(fam, con, 24_000);
+  sim.latenciaMs = 0;
+  ok("la programada (24 s) termina: las 40 en Google", r2.ok && !r2.pendiente && h.vivos(cal).filter((e) => /\(cambiada\)/.test(e.summary)).length === 40, { r2, enGoogle: h.vivos(cal).filter((e) => /\(cambiada\)/.test(e.summary)).length });
+  await quieto("plazos", fam, con);
+});
+
+await caso("cambio de año: se relee todo una vez, sin pedidos extra a Google", async () => {
+  const est = await h.estado(fam1, con1);
+  await h.S.guardarEstado(fam1, con1.id, { ...est!, ventana: JSON.stringify({ desde: "2024-01-01", hasta: "2027-12-31" }) });
+  sim.reiniciarContadores();
+  const r = await h.sync(fam1, con1);
+  const despues = await h.estado(fam1, con1);
+  ok(
+    "1 listado, 0 escrituras y la ventana nueva anotada",
+    r.ok && sim.contadores.porTipo["events.list"] === 1 && sim.contadores.api === 1 && sim.contadores.escrituras === 0 && despues?.ventana === est?.ventana && Object.values(despues!.recursos).every((x) => x.etag !== null),
+    { r, porTipo: sim.contadores.porTipo },
+  );
+  sim.reiniciarContadores();
+  await h.sync(fam1, con1);
+  ok("…y la vuelta siguiente es el atajo", sim.contadores.api === 1 && sim.contadores.escrituras === 0, sim.contadores.porTipo);
+});
+
+// =====================================================================================
+seccion("9. Errores transitorios y de clave");
+await caso("límite de uso en un PATCH", async () => {
+  for (const tipo of ["rateLimitExceeded", "userRateLimitExceeded", "rateLimit429", "backendError"]) {
+    await h.cambiarEvento(fam1, "r09", { titulo: `Feriado ${tipo}` });
+    const inj = sim.inyectar(es.tipo("events.patch"), respuestas.error(tipo));
+    const r = await h.sync(fam1, con1);
+    inj.quitar();
+    const p = await porId(fam1, "r09");
+    ok(
+      `${tipo}: el cambio de la pared se conserva, se muestra el error (SERVIDOR, nunca PERMISO)`,
+      !r.ok && r.error?.codigo === "SERVIDOR" && p?.titulo === `Feriado ${tipo}` && inj.disparos === 1,
+      { r, p: p && h.resumen(p) },
+    );
+    const r2 = await h.sync(fam1, con1);
+    ok(`${tipo}: la vuelta siguiente lo sube`, r2.ok && !r2.error && sim.evento(cal1, gid("r09"))?.summary === `Feriado ${tipo}`, { r2, g: sim.evento(cal1, gid("r09"))?.summary });
+  }
+  await quieto("errores transitorios", fam1, con1);
+});
+
+await caso("límite de uso o caída al listar", async () => {
+  const antes = JSON.stringify(await h.leerEventos(fam1));
+  for (const tipo of ["quotaExceeded", "rateLimit429", "unavailable"]) {
+    await h.guardarEventos(fam1, (l) => l); // (sin cambios: fuerza a no tomar el atajo sólo si cambió la versión)
+    const inj = sim.inyectar(es.tipo("events.list"), respuestas.error(tipo), 50);
+    const r = await h.sync(fam1, con1);
+    inj.quitar();
+    ok(`${tipo} al listar → SERVIDOR y nada se borra`, !r.ok && r.error?.codigo === "SERVIDOR" && JSON.stringify(await h.leerEventos(fam1)) === antes, r);
+  }
+  const r = await h.sync(fam1, con1);
+  ok("…después, sin error", r.ok && !r.error, r);
+});
+
+await caso("API deshabilitada, clave rechazada y sin clave", async () => {
+  const antes = JSON.stringify(await h.leerEventos(fam1));
+  const inj = sim.inyectar(es.tipo("events.list"), respuestas.error("accessNotConfigured"), 50);
+  await h.cambiarEvento(fam1, "r09", { lugar: "Casa" });
+  const r1 = await h.sync(fam1, con1);
+  inj.quitar();
+  ok("accessNotConfigured → CONFIGURACION", !r1.ok && r1.error?.codigo === "CONFIGURACION" && /Google Calendar API/.test(r1.error.mensaje), r1);
+  sim.token.opciones.deshabilitadas = new Set([h.SA]);
+  sim.revocarTokens();
+  const { olvidarTokens } = await import("../../servidor/google/cuenta.ts");
+  olvidarTokens();
+  const r2 = await h.sync(fam1, con1);
+  sim.token.opciones.deshabilitadas = new Set();
+  ok("cuenta de servicio deshabilitada → CLAVE, sin tocar la pared", !r2.ok && r2.error?.codigo === "CLAVE", r2);
+  const guardada = process.env.GOOGLE_CUENTA_SERVICIO;
+  delete process.env.GOOGLE_CUENTA_SERVICIO;
+  const r3 = await h.sync(fam1, con1);
+  process.env.GOOGLE_CUENTA_SERVICIO = guardada;
+  ok(
+    "sin GOOGLE_CUENTA_SERVICIO → SIN_CUENTA con el texto de Google",
+    !r3.ok && r3.error?.codigo === "SIN_CUENTA" && r3.error.mensaje === "Falta configurar la cuenta de servicio de Google en el servidor (GOOGLE_CUENTA_SERVICIO).",
+    r3,
+  );
+  const r4 = await h.sync(fam1, con1);
+  ok("con la clave de vuelta: sube el cambio pendiente y sin error", r4.ok && sim.evento(cal1, gid("r09"))?.location === "Casa", { r4, l: sim.evento(cal1, gid("r09"))?.location });
+  ok("la pared nunca perdió nada", (await h.leerEventos(fam1)).length === JSON.parse(antes).length);
+});
+
+// =====================================================================================
+seccion("10. Eventos que no se pueden cambiar desde la pared");
+await caso("invitaciones, cumpleaños y rechazos de Google", async () => {
+  const inv = sim.actor("invitación", cal1).crear({
+    summary: "Reunión de trabajo",
+    start: { dateTime: "2026-11-25T19:00:00-03:00", timeZone: "America/Santiago" },
+    end: { dateTime: "2026-11-25T20:00:00-03:00", timeZone: "America/Santiago" },
+  });
+  sim.actor("cumpleaños", cal1).crear({ summary: "Cumpleaños de Pedro", fecha: "2026-12-12" });
+  await h.sync(fam1, con1);
+  const l = await h.leerEventos(fam1);
+  const pared = l.find((e) => e.titulo === "Reunión de trabajo");
+  ok("la invitación se ve en la pared; el cumpleaños de Gmail (eventType) nunca", !!pared && !l.some((e) => /Pedro/.test(e.titulo)), l.map((e) => e.titulo));
+  await h.cambiarEvento(fam1, pared!.id, { titulo: "Reunión (desde la pared)" });
+  sim.reiniciarContadores();
+  const r = await h.sync(fam1, con1);
+  const l2 = await h.leerEventos(fam1);
+  const avisos = await avisosDe(fam1, con1);
+  ok(
+    "invitación editada en la pared → vuelve atrás, con el aviso «…es una invitación…» y sin escribir en Google",
+    r.ok && l2.some((e) => e.titulo === "Reunión de trabajo") && !l2.some((e) => /desde la pared/.test(e.titulo)) && avisos.some((a) => /es una invitación/.test(a)) && sim.contadores.escrituras === 0 && sim.evento(cal1, inv.id)?.summary === "Reunión de trabajo",
+    { r, avisos, l: l2.filter((e) => /Reunión/.test(e.titulo)).map(h.resumen) },
+  );
+  await quieto("invitación editada", fam1, con1);
+  // Borrarla en la pared: no se puede borrar allá → vuelve (sin escribir en Google). El aviso «…solo se
+  // puede borrar en Google Calendar» se anota en esa vuelta, pero la vuelta siguiente del mismo pedido (la
+  // que la trae de vuelta) lo pisa: igual que el aviso de PERMISO de iCloud en borrarAlla (pendiente del motor).
+  await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
+  sim.reiniciarContadores();
+  const r2 = await h.sync(fam1, con1);
+  ok(
+    "invitación borrada en la pared → vuelve, sin escribir en Google",
+    r2.ok && (await h.leerEventos(fam1)).some((e) => e.titulo === "Reunión de trabajo") && sim.evento(cal1, inv.id)?.status === "confirmed" && !sim.contadores.porTipo["events.delete"],
+    { r2, porTipo: sim.contadores.porTipo },
+  );
+  // Con una sola vuelta (sin tiempo para la segunda) el aviso sí queda a la vista.
+  await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
+  const r2b = await h.sync(fam1, con1, 3900);
+  const avisos2 = await avisosDe(fam1, con1);
+  ok(
+    "…y en esa vuelta queda el aviso «…solo se puede borrar en Google Calendar»",
+    r2b.ok && r2b.pendiente === true && avisos2.some((a) => /"Reunión de trabajo" solo se puede borrar en Google Calendar/.test(a)),
+    { r2b, avisos2 },
+  );
+  await quieto("invitación borrada", fam1, con1);
+  // Google rechaza la repetición de un evento nuevo (400): queda sólo en la pared, con aviso.
+  sim.interruptores.reglasRechazadas = [/INTERVAL=7/];
+  await h.guardarEventos(fam1, (x) => [...x, ev("r18", { titulo: "Cada 7 semanas", repeticion: "semanal", intervalo: 7, fecha: "2026-11-30" })]);
+  const r3 = await h.sync(fam1, con1);
+  const avisos3 = await avisosDe(fam1, con1);
+  const nuevo = await porId(fam1, "r18");
+  ok(
+    "Google rechaza un evento nuevo → queda «sólo en la pared», con aviso (sin error ni reintentos)",
+    r3.ok && nuevo?.soloPanel === true && !nuevo.externo && avisos3.some((a) => /Cada 7 semanas/.test(a)) && !sim.evento(cal1, gid("r18")),
+    { r3, nuevo, avisos3 },
+  );
+  // …y rechaza cambiar la repetición de una serie que ya está: la pared vuelve a lo de Google, con aviso.
+  await h.cambiarEvento(fam1, "r13", { intervalo: 7, repeticion: "semanal" });
+  const r4 = await h.sync(fam1, con1);
+  const avisos4 = await avisosDe(fam1, con1);
+  const p4 = await porId(fam1, "r13");
+  sim.interruptores.reglasRechazadas = [];
+  ok(
+    "Google rechaza un cambio (400) → la pared vuelve a lo de Google, con aviso",
+    r4.ok && p4?.repeticion === "mensual" && avisos4.some((a) => /no aceptó/.test(a)),
+    { r4, p4: p4 && h.resumen(p4), avisos4 },
+  );
+  await quieto("rechazos de Google", fam1, con1);
+});
+
+await caso("Google no aplica todo lo que se le mandó → la pared relee lo que quedó", async () => {
+  // a) La serie se dividió en la web («este y los siguientes») y Google ignora un cambio de repetición
+  //    (interruptor untilIgnoradoTrasDivision): 200, pero recurrence igual → aviso y la pared vuelve a lo de Google.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("d1", { titulo: "Remedio", repeticion: "diaria", fecha: "2026-11-15", repetirHasta: "2026-11-30" })]);
+  await h.sync(fam, con);
+  sim.actor("web", cal).esteYLosSiguientes(gid("d1"), "2026-11-22", { summary: "🦄 Remedio (dosis nueva)" });
+  await h.sync(fam, con);
+  sim.interruptores.untilIgnoradoTrasDivision = true;
+  await h.cambiarEvento(fam, "d1", { repetirHasta: "2026-11-18" });
+  const r1 = await h.sync(fam, con);
+  const avisos1 = await avisosDe(fam, con);
+  sim.interruptores.untilIgnoradoTrasDivision = false;
+  await h.sync(fam, con);
+  const d1 = await porId(fam, "d1");
+  ok(
+    "repetición ignorada por Google → aviso «no aceptó cambiar la repetición» y la pared queda como Google («hasta» del 21)",
+    r1.ok && avisos1.some((a) => /no aceptó cambiar la repetición/.test(a)) && d1?.repetirHasta === "2026-11-21",
+    { r1, avisos1, d1: d1 && h.resumen(d1) },
+  );
+  await quieto("repetición ignorada", fam, con);
+
+  // b) Dos PATCH (la serie y un día cambiado): el segundo da 400 → aviso «no aceptó parte del cambio» y la
+  //    pared relee: queda lo que Google sí guardó.
+  const fam2 = await h.familia([ev("d2", { titulo: "Teatro", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-01-28" })]);
+  const cal2 = h.nuevoCalendario();
+  const con2 = h.conexionGoogle(cal2);
+  await h.sync(fam2, con2);
+  const hijo = sim
+    .actor("web", cal2)
+    .moverDia(gid("d2"), "2026-11-26", { dateTime: "2026-11-27T18:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-27T19:00:00-03:00", timeZone: "America/Santiago" });
+  await h.sync(fam2, con2);
+  const dia = (await h.leerEventos(fam2)).find((e) => e.externo?.recurrencia)!;
+  await h.guardarEventos(fam2, (x) => x.map((e) => (e.id === "d2" ? { ...e, titulo: "Teatro infantil", actualizado: ahoraIso() } : e.id === dia.id ? { ...e, lugar: "Sala 3", actualizado: ahoraIso() } : e)));
+  const inj = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === hijo.id, respuestas.error("timeRangeEmpty"));
+  const r2 = await h.sync(fam2, con2);
+  inj.quitar();
+  const avisos2 = await avisosDe(fam2, con2);
+  await h.sync(fam2, con2);
+  const l2 = await h.leerEventos(fam2);
+  ok(
+    "el segundo PATCH rechazado → aviso «no aceptó parte del cambio» y la pared queda como Google (la serie cambiada, el día no)",
+    r2.ok &&
+      inj.disparos === 1 &&
+      avisos2.some((a) => /no aceptó parte del cambio/.test(a)) &&
+      l2.find((e) => e.id === "d2")?.titulo === "Teatro infantil" &&
+      !l2.find((e) => e.externo?.recurrencia)?.lugar &&
+      sim.evento(cal2, gid("d2"))?.summary === "🦄 Teatro infantil",
+    { r2, avisos2, l2: l2.map(h.resumen) },
+  );
+  await quieto("parte del cambio rechazada", fam2, con2);
+});
+
+// =====================================================================================
+seccion("11. UID repetidos (lápida restaurada desde la papelera con gen1 viva)");
+await caso("lápida restaurada", async () => {
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("u1", { titulo: "Ballet" }), ev("u2", { titulo: "Judo" })]);
+  await h.sync(fam, con);
+  sim.actor("web", cal).borrar(gid("u1"));
+  await h.cambiarEvento(fam, "u1", { titulo: "Ballet (nuevo horario)", horaInicio: "15:00", horaFin: "16:00" });
+  await h.sync(fam, con);
+  ok("se recreó con gen1", sim.evento(cal, gid("u1", 1))?.status === "confirmed");
+  sim.actor("web", cal).restaurar(gid("u1"));
+  for (let i = 0; i < 3; i++) await h.sync(fam, con);
+  const l = await h.leerEventos(fam);
+  const est = await h.estado(fam, con);
+  const hrefs = Object.values(est!.recursos).map((x) => x.href);
+  const ballet = l.filter((e) => /Ballet/.test(e.titulo));
+  ok(
+    "no se pisan en estado.recursos: cada serie viva de Google tiene su recurso, y la pared muestra las dos (duplicado visible, como en Google)",
+    ballet.length === 2 && new Set(hrefs).size === hrefs.length && hrefs.length === h.vivos(cal).length && h.vivos(cal).length === 3,
+    { l: l.map(h.resumen), recursos: est?.recursos },
+  );
+  await quieto("UID repetidos", fam, con);
+});
+
+seccion("Al final");
+ok("ningún pedido salió de esta máquina", h.urlsVistas.length > 0 && h.urlsVistas.every((u) => u.startsWith("http://127.0.0.1:")), h.urlsVistas.filter((u) => !u.startsWith("http://127.0.0.1:")).slice(0, 5));
+
+await h.terminar();

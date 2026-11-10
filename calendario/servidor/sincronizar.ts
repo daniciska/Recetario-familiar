@@ -1,5 +1,6 @@
-// Sincronización en ambos sentidos entre la colección "eventos" de una familia y un calendario de
-// iCloud (CalDAV).
+// Sincronización en ambos sentidos entre la colección "eventos" de una familia y un calendario
+// conectado: iCloud (CalDAV) o Google Calendar. El motor sólo conoce el contrato `Transporte` de
+// servidor/proveedores.ts (recursos .ics con su etag y escrituras condicionales).
 //
 // Para cada recurso (serie) se guarda en Blobs su ETag y la "huella" de cómo quedó la última vez
 // que el panel y el calendario coincidieron. Así se sabe qué lado cambió:
@@ -10,7 +11,8 @@
 // Eventos nuevos del panel se crean con UID `<id>@calendario-familiar` (If-None-Match: *), así un
 // reintento nunca duplica. Si de una vez se borraría mucho, se detiene y pregunta (ver `resolver`).
 
-import { CalDAV, ErrorCalDAV, URL_ICLOUD } from "./caldav";
+import { ErrorCalDAV } from "./caldav";
+import { nombreProveedor, textoSinCuenta, transporteDe, type Transporte } from "./proveedores";
 import {
   NoSePuedeEscribir,
   SUFIJO_UID,
@@ -107,14 +109,8 @@ export interface Resultado {
 
 // ---------- Credenciales y almacenamiento ----------
 
-/** Apple ID y contraseña de app del panel (variables de entorno del sitio, nunca en el repositorio). */
-export function credencialesICloud(): { usuario: string; clave: string; base: string } | null {
-  const usuario = process.env.ICLOUD_USUARIO?.trim();
-  const clave = process.env.ICLOUD_CLAVE_APP?.replace(/\s+/g, "");
-  if (!usuario || !clave) return null;
-  // ICLOUD_CALDAV_URL sólo sirve para probar con un servidor CalDAV local.
-  return { usuario, clave, base: process.env.ICLOUD_CALDAV_URL?.trim() || URL_ICLOUD };
-}
+/** Apple ID y contraseña de app del panel (ahora vive en proveedores.ts; se re-exporta para las funciones). */
+export { credencialesICloud } from "./proveedores";
 
 export const usuarioOculto = (u: string) =>
   u.includes("@") ? u.replace(/^(.{1,2}).*(@.*)$/, "$1…$2") : u.length > 4 ? `${u.slice(0, 2)}…${u.slice(-2)}` : "…";
@@ -314,11 +310,12 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     return { ok: false, error: estado.error, respuesta };
   };
 
-  const cred = credencialesICloud();
-  if (!cred) return fallar("Falta configurar la cuenta de iCloud en el servidor (ICLOUD_USUARIO e ICLOUD_CLAVE_APP).", "SIN_CUENTA");
   const hasta = op.limite - MARGEN_BLOBS;
   const queda = () => hasta - Date.now();
-  const cal = new CalDAV(cred.usuario, cred.clave, cred.base, 8000, hasta);
+  const cal = transporteDe(conexion, 8000, hasta);
+  if (!cal) return fallar(textoSinCuenta(conexion.proveedor), "SIN_CUENTA");
+  /** "iCloud" o "Google Calendar", para los textos (los códigos no cambian). */
+  const nombreProv = nombreProveedor(conexion.proveedor);
 
   try {
     const [colEventos, colMiembros, acceso] = await Promise.all([
@@ -492,14 +489,14 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     const sinAceptar = (l: string[]) => l.filter((u) => !aceptados.has(u)).length;
     if (muchos(sinAceptar(borrarAlla)))
       return fallar(
-        `Se borraron del panel ${borrarAlla.length} eventos que están en iCloud. ¿Se borran también de los iPhone?`,
+        `Se borraron del panel ${borrarAlla.length} eventos que están en ${nombreProv}. ¿Se borran también de los iPhone?`,
         "MUCHOS_BORRADOS_PANEL",
         borrarAlla.length,
         [...borrarAlla],
       );
     if (muchos(sinAceptar(borrarAqui)))
       return fallar(
-        `Desaparecieron de iCloud ${borrarAqui.length} eventos. ¿Se borran también del panel?`,
+        `Desaparecieron de ${nombreProv} ${borrarAqui.length} eventos. ¿Se borran también del panel?`,
         "MUCHOS_BORRADOS_ICLOUD",
         borrarAqui.length,
         [...borrarAqui],
@@ -556,7 +553,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
           return;
         }
         console.error("no se pudo escribir", uid, e);
-        avisos.push(`"${local[0]?.titulo ?? ""}" no se pudo pasar a iCloud.`);
+        avisos.push(`"${local[0]?.titulo ?? ""}" no se pudo pasar a ${nombreProv}.`);
         return;
       }
       try {
@@ -570,7 +567,13 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
           resumen.subidos++;
         }
       } catch (e) {
-        if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
+        if (e instanceof NoSePuedeEscribir) {
+          // El calendario no acepta ese cambio (p. ej. una invitación de Google): manda lo de allá, con aviso.
+          // (CalDAV nunca lo lanza.)
+          ponerGrupo(uid, remoto, local.map((x) => x.id));
+          parches.set(uid, { href, etag, huella: huellaGrupo(remoto, miembros), ids: idsDe(remoto) });
+          avisos.push(e.message);
+        } else if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
           // Calendario de sólo lectura: manda lo de iCloud.
           ponerGrupo(uid, remoto, local.map((x) => x.id));
           parches.set(uid, { href, etag, huella: huellaGrupo(remoto, miembros), ids: idsDe(remoto) });
@@ -590,7 +593,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       if (!previo) {
         // Nada del panel se borra por un .ics que no se entiende: queda como estaba, con un aviso.
         if (conocido && !conocido.startsWith("~") && grupos.get(conocido)?.length) {
-          avisos.push(`"${grupos.get(conocido)![0].titulo}": iCloud lo devolvió de una forma que no se pudo leer; quedó como estaba.`);
+          avisos.push(`"${grupos.get(conocido)![0].titulo}": ${nombreProv} lo devolvió de una forma que no se pudo leer; quedó como estaba.`);
           parches.set(conocido, { ...estado.recursos[conocido], etag });
           grupos.delete(conocido);
           return;
@@ -649,7 +652,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     leer: for (let i = 0; i < hrefsPorLeer.length; i += 40) {
       const tanda = hrefsPorLeer.slice(i, i + 40);
       const t0 = Date.now();
-      let t: Awaited<ReturnType<CalDAV["traer"]>>;
+      let t: Awaited<ReturnType<Transporte["traer"]>>;
       try {
         t = await cal.traer(conexion.url, tanda, 2500 + duracionTanda);
       } catch (e) {
@@ -694,7 +697,13 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
         if (grupos.get(uid)?.length) ops.push({ tipo: "desvincular", uid, soloPanel: true });
         resumen.borradosAlla++;
       } catch (e) {
-        if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
+        if (e instanceof NoSePuedeEscribir) {
+          // Ese evento no se puede borrar desde el panel (p. ej. una invitación de Google): se vuelve a
+          // traer, con aviso. (CalDAV nunca lo lanza.)
+          rec.etag = null;
+          pendiente = true;
+          avisos.push(e.message);
+        } else if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
           // Calendario de sólo lectura: no se puede borrar allá, así que se vuelve a traer desde iCloud.
           rec.etag = null;
           pendiente = true;
@@ -719,10 +728,23 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
         if (!puedeEscribir()) return;
         const conExterno = vincular ? [{ ...vincular, externo: { conexion: conexion.id, uid } }] : local;
         if (!enCalendario(conExterno).length) return; // nunca un recurso vacío
-        let r: Awaited<ReturnType<CalDAV["crear"]>>;
+        let r: Awaited<ReturnType<Transporte["crear"]>>;
+        // (Fuera del try: un error al armar el .ics se trata como antes, no como un rechazo del calendario.)
+        const ics = escribirRecurso(conExterno, ctx, uid, null);
         try {
-          r = await cal.crear(conexion.url, nombre, escribirRecurso(conExterno, ctx, uid, null));
+          r = await cal.crear(conexion.url, nombre, ics);
         } catch (e) {
+          if (e instanceof NoSePuedeEscribir) {
+            // El calendario no acepta ese evento (p. ej. Google rechaza la repetición): queda sólo en el
+            // panel, con aviso, como con un calendario de sólo lectura. (CalDAV nunca lo lanza.)
+            if (vincular) ops.push({ tipo: "soloPanel", id: vincular.id });
+            else {
+              ops.push({ tipo: "desvincular", uid, soloPanel: true });
+              parches.set(uid, null);
+            }
+            avisos.push(e.message);
+            return;
+          }
           if (e instanceof ErrorCalDAV && e.codigo === "PERMISO") {
             // Calendario de sólo lectura: lo nuevo queda sólo en el panel (si no, se reintentaría siempre).
             if (vincular) ops.push({ tipo: "soloPanel", id: vincular.id });
@@ -834,6 +856,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     const fallo = falla as ErrorCalDAV | null; // (se asigna dentro de alFallar)
     estado.error = fallo ? { mensaje: fallo.message, codigo: fallo.codigo, cuando: ahora } : null;
     estado.resumen = resumen;
+    avisos.push(...(cal.avisos?.() ?? [])); // los del transporte (Google), después de los del motor
     estado.avisos = avisos.length ? avisos.slice(0, 5) : undefined;
     await guardarEstado(familiaId, conexion.id, estado);
     if (rechazo) throw rechazo.reason;
@@ -848,6 +871,6 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     }
     if (e instanceof ErrorCalDAV) return fallar(e.message, e.codigo);
     console.error("sincronizar", e);
-    return fallar("Algo falló al sincronizar con iCloud: " + (e as Error).message, "INTERNO");
+    return fallar(`Algo falló al sincronizar con ${nombreProv}: ` + (e as Error).message, "INTERNO");
   }
 }

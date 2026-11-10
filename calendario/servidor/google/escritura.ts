@@ -218,8 +218,38 @@ function ocurrenTodos(principalB: ICAL.Component, originales: (HoraG | undefined
   const claves = originales.map(claveHora);
   if (claves.some((k) => !k)) return false;
   if (!claves.length) return true;
+  const elegido = filtroSetpos(principalB);
+  if (elegido === "desconocido") return false; // no se puede verificar: lo seguro es decir que no
   const hay = instancias(principalB, new Set(claves.map((k) => fechaDeClave(k!))));
-  return claves.every((k) => (hay.get(fechaDeClave(k!)) ?? []).some((i) => claveValor(i.t, i.tzid) === k));
+  return claves.every((k) => (hay.get(fechaDeClave(k!)) ?? []).some((i) => (!elegido || elegido(i.t)) && claveValor(i.t, i.tzid) === k));
+}
+
+const diasDelMes = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+/**
+ * ical.js no aplica BYSETPOS: con BYMONTHDAY=28,29,30;BYSETPOS=-1 da el 28, el 29 y el 30 de marzo
+ * (Google, como RFC 5545, sólo el 30). Para las reglas que escribe el panel ("el día 29/30 o el último",
+ * "29 de febrero": BYSETPOS=-1 con BYMONTHDAY de 28 en adelante) se elige a mano el día que sí es
+ * (el mayor que exista en ese mes). null: la regla no tiene BYSETPOS; "desconocido": otra con BYSETPOS.
+ */
+function filtroSetpos(v: ICAL.Component): ((t: ICAL.Time) => boolean) | null | "desconocido" {
+  const reglas = v.getAllProperties("rrule").map((p) => p.getFirstValue());
+  const conSetpos = reglas.filter((r): r is ICAL.Recur => r instanceof ICAL.Recur && "BYSETPOS" in (r.parts ?? {}));
+  if (!conSetpos.length) return null;
+  if (reglas.length !== 1) return "desconocido";
+  const r = conSetpos[0];
+  const p = r.parts as Record<string, unknown[]>;
+  const dias = (p.BYMONTHDAY ?? []).map(Number);
+  const otras = Object.keys(p).filter((k) => !["BYSETPOS", "BYMONTHDAY", "BYMONTH"].includes(k));
+  const valido =
+    (r.freq === "MONTHLY" || (r.freq === "YEARLY" && (p.BYMONTH ?? []).length === 1)) &&
+    !otras.length &&
+    JSON.stringify((p.BYSETPOS ?? []).map(Number)) === "[-1]" &&
+    dias.length > 0 &&
+    dias.every((d) => Number.isInteger(d) && d >= 28 && d <= 31);
+  if (!valido) return "desconocido";
+  const mayor = Math.max(...dias);
+  return (t) => t.day === Math.min(mayor, diasDelMes(t.year, t.month));
 }
 
 const DIAS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
@@ -419,7 +449,10 @@ export function planear(serie: Serie, icsB: string): Plan {
   // el "hasta" o cambiar la hora de término mientras la regla nueva siga generando esos días.
   const mismasReglas = reglasEquivalentes(vA, vB, pA, pB);
   const cambioHorario = pA.start !== pB.start || pA.end !== pB.end;
-  if ((cambioHorario || !mismasReglas) && !ocurrenTodos(vB, [...serie.vivas, ...serie.fantasmas].map((x) => x.originalStartTime))) {
+  // Con el mismo inicio y la misma regla las ocurrencias son las mismas (cambiar sólo la hora de término
+  // no mueve ningún día): no hace falta revisar.
+  const mismasOcurrencias = pA.start === pB.start && mismasReglas;
+  if (!mismasOcurrencias && !ocurrenTodos(vB, [...serie.vivas, ...serie.fantasmas].map((x) => x.originalStartTime))) {
     throw new NoSePuedeEscribir(`"${T}" tiene días cambiados uno por uno: cambia la hora o la repetición de toda la serie en el iPhone o en Google Calendar.`);
   }
 

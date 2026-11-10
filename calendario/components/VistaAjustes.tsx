@@ -8,6 +8,7 @@ import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
 import { descargarRespaldo } from "@/lib/respaldo";
 import { SeccionNube } from "./Nube";
+import { SeccionGoogle } from "./CalendarioGoogle";
 import { SeccionICloud } from "./CalendarioICloud";
 import { useModoPared } from "@/lib/hooks";
 import { Avatar, Boton, Campo, Entrada, Modal, Segmentos, Selector, SelectorHora, cx } from "./ui";
@@ -164,6 +165,8 @@ export default function VistaAjustes() {
         </div>
 
         <SeccionNube />
+
+        <SeccionGoogle />
 
         <SeccionICloud />
 

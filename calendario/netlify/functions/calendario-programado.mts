@@ -1,17 +1,34 @@
-// Cada 5 minutos: sincroniza el calendario de iCloud de la familia (lo que se cambió en los iPhone
-// llega al panel aunque nadie toque la pantalla). Las funciones programadas tienen 30 s.
+// Cada 5 minutos: sincroniza el calendario conectado de la familia (iCloud o Google Calendar): lo que se
+// cambió en los iPhone llega al panel aunque nadie toque la pantalla. Las funciones programadas tienen 30 s.
+// Cada cuenta del sitio (la de iCloud y la cuenta de servicio de Google) es de una sola familia: se
+// recorren las familias dueñas de las cuentas que están configuradas, sin repetir, con un solo plazo.
 import type { Config } from "@netlify/functions";
 import { almacen, leerAcceso } from "../../servidor/comun";
-import { CLAVE_DUENO_ICLOUD, credencialesICloud, sincronizar } from "../../servidor/sincronizar";
+import { CLAVE_DUENO_GOOGLE, proveedorConfigurado } from "../../servidor/proveedores";
+import { CLAVE_DUENO_ICLOUD, sincronizar } from "../../servidor/sincronizar";
 
 export default async () => {
-  if (!credencialesICloud()) return new Response("sin cuenta de iCloud");
-  const dueno = (await almacen().get(CLAVE_DUENO_ICLOUD, { type: "json" })) as { familiaId: string } | null;
-  if (!dueno) return new Response("sin familia conectada");
-  const acceso = await leerAcceso(dueno.familiaId);
+  const claves = [proveedorConfigurado("icloud") ? CLAVE_DUENO_ICLOUD : null, proveedorConfigurado("google") ? CLAVE_DUENO_GOOGLE : null].filter(
+    (k): k is string => !!k,
+  );
+  if (!claves.length) return new Response("sin cuentas de calendario");
+  const store = almacen();
+  const familias: string[] = [];
+  for (const k of claves) {
+    const dueno = (await store.get(k, { type: "json" })) as { familiaId?: unknown } | null;
+    if (typeof dueno?.familiaId === "string" && !familias.includes(dueno.familiaId)) familias.push(dueno.familiaId);
+  }
+  if (!familias.length) return new Response("sin familia conectada");
   const limite = Date.now() + 24_000;
   const resultados = [];
-  for (const c of acceso?.calendarios ?? []) resultados.push(await sincronizar(dueno.familiaId, c, { limite }));
+  for (const familiaId of familias) {
+    const acceso = await leerAcceso(familiaId);
+    for (const c of acceso?.calendarios ?? []) {
+      // Las conexiones guardadas antes de Google no traen otro proveedor que "icloud".
+      if (!proveedorConfigurado(c.proveedor === "google" ? "google" : "icloud")) continue;
+      resultados.push({ conexion: c.id, ...(await sincronizar(familiaId, c, { limite })) });
+    }
+  }
   console.log("calendario-programado", JSON.stringify(resultados));
   return new Response(JSON.stringify(resultados), { headers: { "content-type": "application/json" } });
 };

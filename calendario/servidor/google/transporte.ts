@@ -10,6 +10,10 @@
 //   Exige accessRole owner o writer.
 // - Escrituras condicionales: PATCH y DELETE con If-Match (412 = "conflicto"); crear usa un id que sale
 //   del UID (ids.ts), así un reintento da 409 en vez de un duplicado.
+// - Después de escribir, crear y actualizar devuelven el etag que tendrá la serie en el próximo listado
+//   (calculado con los etag que devolvió Google, igual que el ETag de iCloud), o null si algo no salió
+//   como se planeó (entonces el motor la relee). Con null siempre, un borrado en la pared justo después de
+//   subir se tomaba como "cambió en los dos lados" y el evento volvía a aparecer.
 // - Tabla de errores por motivo: un límite de uso (403 usageLimits o 429) es SERVIDOR (se reintenta),
 //   NUNCA PERMISO (PERMISO revierte la pared). Un 403 desconocido es SERVIDOR.
 // - El token sólo va a la base aceptada (Google o, para pruebas, http://127.0.0.1 / localhost) y no se
@@ -39,7 +43,7 @@ import { NoSePuedeEscribir } from "../ics";
 import { ZONA } from "../../lib/fechas";
 import type { Transporte } from "../proveedores";
 import { descartarToken, localhost, tokenDeAcceso, type CuentaServicio } from "./cuenta";
-import { finIgualInicio, planear, planearCreacion, sinHoraDeTermino, type Cuerpo } from "./escritura";
+import { finIgualInicio, fusionar, planear, planearCreacion, sinHoraDeTermino, type Cuerpo } from "./escritura";
 import { agrupar, hrefSerie, normRec, serieAIcs, type EvG, type Serie } from "./serie";
 
 export const URL_API_GOOGLE = "https://www.googleapis.com/calendar/v3/";
@@ -436,19 +440,21 @@ export class GoogleCalendar implements Transporte {
     cuerpo: Cuerpo,
     T: string,
     primero: boolean,
-  ): Promise<{ json: Record<string, unknown> } | "conflicto" | "noExiste" | "rechazado"> {
+  ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo } | "conflicto" | "noExiste" | "rechazado"> {
     const ruta = `${rutaCalendario(calId)}/events/${encodeURIComponent(pieza.id)}`;
     const pedir = (c: Cuerpo) => this.pedirJSON("PATCH", ruta, { query: { fields: CAMPOS_PATCH }, cuerpo: c, ...(pieza.etag ? { ifMatch: pieza.etag } : {}) });
-    let r = await pedir(cuerpo);
+    let enviado = cuerpo;
+    let r = await pedir(enviado);
     let sinFin = false;
     if (r.status === 400 && finIgualInicio(cuerpo)) {
-      // Google no aceptó fin = inicio: el mismo cambio "sin hora de término".
+      // Google no aceptó fin = inicio: el mismo cambio "sin hora de término". `end: null`, porque PATCH
+      // mezcla: sin él quedaría el fin que ya estaba guardado (y el iPhone lo mostraría).
       sinFin = true;
-      r = await pedir(sinHoraDeTermino(cuerpo, pieza));
+      r = await pedir((enviado = { ...sinHoraDeTermino(cuerpo, pieza), end: null }));
     }
     if (r.status === 200) {
       if (!r.json) throw this.raro("el cambio");
-      return { json: r.json };
+      return { json: r.json, enviado };
     }
     if (r.status === 412 || r.status === 409) return "conflicto";
     if (r.status === 404 || r.status === 410) return primero ? "noExiste" : "conflicto";
@@ -475,15 +481,27 @@ export class GoogleCalendar implements Transporte {
     if (this.queda() < 400 + 700 * n) throw errorTiempo();
     const T = plan.avisoTitulo;
     let escritos = 0;
+    // Cómo queda cada pieza según lo que respondió Google (para el etag del próximo listado).
+    let principal = serie.principal!;
+    const piezas = new Map([...serie.vivas, ...serie.fantasmas, ...serie.canceladas].map((x) => [x.id, x]));
+    let previsible = true;
+    const despues = (pieza: EvG, r: { json: Record<string, unknown>; enviado: Cuerpo }): EvG => {
+      const etag = texto(r.json.etag);
+      if (!etag) previsible = false;
+      return { ...fusionar(pieza, r.enviado), etag };
+    };
     if (plan.maestro) {
       const r = await this.parche(url, serie.principal!, plan.maestro, T, true);
       if (r === "conflicto" || r === "noExiste") return r;
-      if (r !== "rechazado") {
+      if (r === "rechazado") previsible = false;
+      else {
         escritos++;
+        principal = despues(principal, r);
         if ("recurrence" in plan.maestro) {
           const enviada = Array.isArray(plan.maestro.recurrence) ? (plan.maestro.recurrence as string[]) : [];
           const recibida = Array.isArray(r.json.recurrence) ? (r.json.recurrence as unknown[]).filter((x): x is string => typeof x === "string") : [];
           if (JSON.stringify(normRec(recibida)) !== JSON.stringify(normRec(enviada))) {
+            previsible = false;
             this.avisar(`Google Calendar no aceptó cambiar la repetición de "${T}"; quedó como está allá.`);
           }
         }
@@ -493,10 +511,27 @@ export class GoogleCalendar implements Transporte {
       const r = await this.parche(url, op.pieza, op.cuerpo, T, escritos === 0);
       if (r === "noExiste") return "noExiste"; // (sólo si es el primer pedido)
       if (r === "conflicto") return "conflicto";
-      if (r !== "rechazado") escritos++;
+      if (r === "rechazado") previsible = false;
+      else {
+        escritos++;
+        piezas.set(op.pieza.id, despues(op.pieza, r));
+      }
     }
-    // La vuelta siguiente relee (gratis, del listado): la pared queda igual a lo que Google guardó.
-    return { etag: null };
+    // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
+    // queda igual a lo que Google guardó.
+    return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid) : null };
+  }
+
+  /**
+   * El etag que tendrá la serie (estas piezas) en el próximo listado, con las mismas cuentas que agrupar
+   * y la zona del calendario de este listado; null si no se puede saber. Si Google cambió algo más (o
+   * alguien la tocó entre medio), el listado trae otro etag y el motor la relee: nunca es peor que null.
+   */
+  private async etagPrevisto(calId: string, piezas: EvG[], uid: string): Promise<string | null> {
+    const l = await this.listados.get(calId)?.catch(() => null);
+    if (!l || !piezas.length) return null;
+    const s = agrupar(piezas, calId, l.zona).get(hrefSerie(calId, piezas[0].id));
+    return s && s.uid === uid ? s.etag : null;
   }
 
   /** Crea la serie (el UID sale del .ics; `nombre` sólo sirve para existe()). */
@@ -508,6 +543,7 @@ export class GoogleCalendar implements Transporte {
     const T = c.titulo;
     let sinFin = false;
     let id: string | null = null;
+    let creado: EvG | null = null; // lo que quedó guardado, según lo que se mandó y el etag de la respuesta
     for (let gen = 0; gen <= 3 && !id; gen++) {
       let cuerpo = c.cuerpo(gen);
       if (sinFin) cuerpo = sinHoraDeTermino(cuerpo);
@@ -519,6 +555,8 @@ export class GoogleCalendar implements Transporte {
       }
       if (r.status === 200) {
         id = texto(r.json?.id) || String(cuerpo.id);
+        const etag = texto(r.json?.etag);
+        if (etag) creado = { ...(cuerpo as unknown as EvG), id, etag };
         break;
       }
       if (r.status === 409) {
@@ -537,6 +575,9 @@ export class GoogleCalendar implements Transporte {
     }
     if (!id) throw new NoSePuedeEscribir(`"${T}" no se pudo volver a crear en Google Calendar: quedó solo en la pared.`);
 
+    // Sin días cambiados, el etag del próximo listado ya se sabe (con ellos, null: el motor relee).
+    if (!c.dias.length) return { href: hrefSerie(url, id), etag: creado ? await this.etagPrevisto(url, [creado], c.uid) : null };
+
     // Días cambiados (sólo al recrear una serie que los tenía): cada uno es un PATCH de su instancia.
     // La serie la acabamos de crear nosotros, así que va sin If-Match. Lo que falle queda como día normal.
     for (let i = 0; i < c.dias.length; i++) {
@@ -553,9 +594,9 @@ export class GoogleCalendar implements Transporte {
           continue;
         }
         const pedir = (x: Cuerpo) => this.pedirJSON("PATCH", `${ruta}/${encodeURIComponent(inst.id)}`, { query: { fields: "id,etag" }, cuerpo: x });
-        let cuerpo = d.cuerpo(inst);
+        const cuerpo = d.cuerpo(inst);
         let p = await pedir(cuerpo);
-        if (p.status === 400 && finIgualInicio(cuerpo)) p = await pedir((cuerpo = sinHoraDeTermino(cuerpo, inst)));
+        if (p.status === 400 && finIgualInicio(cuerpo)) p = await pedir({ ...sinHoraDeTermino(cuerpo, inst), end: null });
         if (p.status !== 200) avisoDia();
       } catch (e) {
         if (!(e instanceof ErrorCalDAV) && !(e instanceof NoSePuedeEscribir)) throw e;
