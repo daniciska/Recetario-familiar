@@ -9,6 +9,7 @@
 //
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/fuzz.test.ts
 //   FUZZ_SEMILLAS=3,7 FUZZ_PASOS=80 …   (por omisión: 6 semillas, 40 pasos; menos de ~1 min por semilla)
+//   FUZZ_CONFIG=2 FUZZ_VER=1 …          (una combinación fija de interruptores; con VER, la bitácora y las piezas de Google que difieren)
 import * as h from "../h.ts";
 import { respuestas, es, type Interruptores, type Paginacion } from "./mock-google.mts";
 import { uidDesdeId } from "../../servidor/google/ids.ts";
@@ -17,6 +18,8 @@ import type { Evento } from "../../lib/datos/tipos.ts";
 const { ok, seccion } = h;
 const SEMILLAS = (process.env.FUZZ_SEMILLAS ?? "1,2,3,4,5,6").split(",").map(Number).filter(Number.isFinite);
 const PASOS = Number(process.env.FUZZ_PASOS ?? 40);
+/** FUZZ_CONFIG=n: la misma combinación de interruptores para todas las semillas (para repetir un MAL). */
+const CONFIG = process.env.FUZZ_CONFIG ? Number(process.env.FUZZ_CONFIG) : null;
 
 /** Combinaciones de lo no documentado (una por semilla, en orden). */
 const CONFIGS: { nombre: string; interruptores: Partial<Interruptores>; paginacion?: Partial<Paginacion> }[] = [
@@ -320,6 +323,12 @@ async function correr(semilla: number, config: (typeof CONFIGS)[number]) {
   ];
 
   const bitacora: string[] = [];
+  // Con FUZZ_VER, cada escritura (lo que se mandó) también queda en la bitácora.
+  if (process.env.FUZZ_VER)
+    sim.inyectar((p) => {
+      if (p.metodo !== "GET") bitacora.push(`   ${p.tipo} ${p.eventoId ?? ""} ${JSON.stringify(p.cuerpo ?? null).slice(0, 400)}`);
+      return false;
+    }, respuestas.status(500));
   for (let paso = 0; paso < PASOS; paso++) {
     const k = 1 + entero(3);
     for (let i = 0; i < k; i++) {
@@ -362,13 +371,24 @@ async function correr(semilla: number, config: (typeof CONFIGS)[number]) {
   ok(`${etiqueta}: nunca PERMISO/INTERNO por errores transitorios ni borrados masivos sin preguntar`, !fallas.length, fallas.slice(0, 5));
   const s = Math.round((Date.now() - t0) / 1000);
   ok(`${etiqueta}: dura menos de 3 minutos (${s} s, ${PASOS} pasos, ${h.vivos(cal).length} eventos vivos en Google)`, s < 180, s);
-  if (process.env.FUZZ_VER) console.log(bitacora.join("\n"));
+  if (process.env.FUZZ_VER) {
+    console.log(bitacora.join("\n"));
+    for (const d of dif) {
+      const uid = d.slice(0, d.indexOf(": "));
+      console.log(`\n## ${uid}`);
+      for (const e of sim.eventos(cal)) {
+        const u = uidDesdeId(e.id.replace(/_[0-9TZ]+$/, ""))?.uid ?? `${e.id.replace(/_[0-9TZ]+$/, "")}@google.com`;
+        if (u === uid || e.recurringEventId && (uidDesdeId(e.recurringEventId)?.uid ?? `${e.recurringEventId}@google.com`) === uid) console.log(JSON.stringify(e));
+      }
+      console.log("pared:", JSON.stringify((await h.leerEventos(fam)).filter((e) => e.externo?.uid === uid)));
+    }
+  }
 }
 
 seccion(`Fuzz: ${SEMILLAS.length} semillas × ${PASOS} pasos`);
 for (const [i, semilla] of SEMILLAS.entries()) {
   try {
-    await correr(semilla, CONFIGS[i % CONFIGS.length]);
+    await correr(semilla, CONFIGS[CONFIG ?? i % CONFIGS.length]);
   } catch (e) {
     ok(`semilla ${semilla} (lanzó)`, false, `${(e as Error)?.name}: ${(e as Error)?.message}\n${(e as Error)?.stack?.split("\n").slice(1, 5).join("\n")}`);
   }

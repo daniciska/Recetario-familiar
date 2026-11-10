@@ -210,15 +210,25 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
     const sinInvitar =
       "El panel no puede invitar (se compartió sin «administrar el uso compartido»): las invitaciones se hacen a mano en Google Calendar.";
     if (info.rol === "owner") {
-      const a = await pedir("GET", `${rutaCalendario(calId)}/acl`, { query: { maxResults: "1", fields: "items(id)" } });
-      cap.puedeInvitar = a.status === 200;
-      if (a.status === 200) {
-        paso(
-          "compartir",
-          "ok",
-          "El panel puede invitar a otras personas. (Con este permiso, quien tuviera la clave del panel podría cambiar con quién se comparte el calendario: por eso la clave va solo en Netlify, como secreta.)",
-        );
-      } else paso("compartir", "aviso", a.status === 403 ? sinInvitar : `${sinInvitar} (${g.errorDe(a).message})`);
+      // Es informativo: si Google no deja revisarlo ahora (límite de uso, falla pasajera), se avisa y la
+      // prueba sigue con la escritura.
+      let a: RespuestaGoogle | null = null;
+      try {
+        a = await pedir("GET", `${rutaCalendario(calId)}/acl`, { query: { maxResults: "1", fields: "items(id)" } });
+      } catch (e) {
+        if (e instanceof Corte || !(e instanceof ErrorCalDAV) || e.codigo === "TIEMPO") throw e;
+        paso("compartir", "aviso", `No se pudo revisar si el panel puede invitar a otras personas: ${e.message}`);
+      }
+      if (a) {
+        cap.puedeInvitar = a.status === 200;
+        if (a.status === 200) {
+          paso(
+            "compartir",
+            "ok",
+            "El panel puede invitar a otras personas. (Con este permiso, quien tuviera la clave del panel podría cambiar con quién se comparte el calendario: por eso la clave va solo en Netlify, como secreta.)",
+          );
+        } else paso("compartir", "aviso", a.status === 403 ? sinInvitar : `${sinInvitar} (${g.errorDe(a).message})`);
+      }
     } else {
       cap.puedeInvitar = false;
       paso("compartir", "aviso", sinInvitar);

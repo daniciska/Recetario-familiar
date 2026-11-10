@@ -8,12 +8,12 @@ Next.js + TypeScript + Tailwind. Todo en español de Chile: 24 h, zona `America/
 
 | Pestaña | Qué hace |
 |---|---|
-| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos de uno o **varios días** (vacaciones, viajes), con lugar, repetición diaria / semanal / mensual / anual (cumpleaños) **cada N** (p. ej. “cada 2 semanas”) y, en la semanal, **varios días** (lu y mi), fecha de término opcional, y borrar “sólo este día”. **Conectado al Calendario de los iPhone** (iCloud, en ambos sentidos: ver más abajo). **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y la comida al pie de cada columna. |
-| 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena (la colación trae atajos propios: fruta, yogur, sándwich…). Se asigna una receta (con porciones por día) o un texto libre (“Sobras”, “Comemos fuera”). “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
+| 📅 Calendario | Semana (por defecto), mes y día. Cada persona tiene su color; los eventos compartidos se ven con franjas de varios colores. Filtro por persona. Eventos de uno o **varios días** (vacaciones, viajes), con lugar, repetición diaria / semanal / mensual / anual (cumpleaños) **cada N** (p. ej. “cada 2 semanas”) y, en la semanal, **varios días** (lu y mi), fecha de término opcional, y borrar “sólo este día”. **Conectado al Calendario de los iPhone** (Google Calendar en ambos sentidos; también sirve iCloud: ver más abajo). **Cuenta regresiva**: un evento marcado así se ve arriba, bajo la fecha (“⏳ En 5 días · Cumple de la Tía Ana”). Clima de cada día y la comida al pie de cada columna. |
+| 🍽️ Menú | Grilla lunes–domingo × desayuno / colación / almuerzo / once / cena. **Cada comida tiene espacios** (como los pidió la familia): desayuno 4 libres, colación 3 libres (p. ej. 2 frutas y 1 carbohidrato), almuerzo *proteína, carbohidrato, verduras y postre*, cena *proteína, carbohidrato y verduras*, once 1 (se cambian en `ESPACIOS_COMIDA`, `lib/comidas.ts`). Cada espacio lleva una receta o un texto libre, con atajos (arroz, ensalada, fruta…); las porciones son por comida. Un plato que lo trae todo (“Cazuela”) va en el primero y los demás pueden quedar vacíos; “Comemos fuera” o “Sin colación” son para la comida entera. “Repetir semana” copia la anterior. **Generar lista de compras** junta los ingredientes de las recetas de todos los espacios de la semana, escala por porciones, suma iguales (g+kg, ml+l), y los manda a Compras agrupados por categoría. |
 | 📖 Recetas | CRUD completo: nombre, foto (se reduce sola) o ícono, porciones, minutos, ingredientes (cantidad + unidad + ingrediente + categoría, que se adivina por el nombre) y pasos. Vista de cocina con porciones ajustables y pasos que se tachan al tocarlos. |
 | 🛒 Compras | Agrupada por categoría (Verduras y frutas, Carnes y pescados, Lácteos y huevos…). Agregar a mano (“2 kg papas” entiende la cantidad). Marcar comprado, sacar comprados. Regenerar la lista de la semana reemplaza sólo lo que vino del menú y aún no se compra. |
 | ✅ Tareas | Quehaceres de hoy: en el tablet, una columna por persona. Pueden ser de una vez, de todos los días o de algunos días, con momento (mañana / tarde / noche). Cada uno puede dar **estrellas** ⭐ a quien lo hace (si es “Quien pueda”, se elige quién lo hizo); con las estrellas se **canjean premios** (🏆 Premios). |
-| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, **PIN para hacer cambios**, respaldo (descargar / cargar) y volver a los datos de ejemplo. |
+| ⚙️ Familia | Integrantes (nombre, color, emoji), nombre de la familia, ciudad del clima, tema claro / noche / automático por horario, **“Este equipo: pantalla de la pared / teléfono”**, **PIN para hacer cambios**, respaldo (descargar / cargar), volver a los datos de ejemplo y **📅 Calendario del iPhone** (conectar Google Calendar o iCloud; con Google, quién es el dueño del calendario y a quién se invita). |
 
 Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al día y la semana nuevos), modo noche automático (por defecto 20:30–07:00, sin destello al recargar de noche), la pantalla se mantiene encendida (Wake Lock) y se recarga sola cada madrugada a las 03:30 para tomar versiones nuevas. La recarga sólo ocurre si hay internet, nadie tocó la pantalla en los últimos 2 minutos y no hay ninguna ventana abierta (una receta mientras se cocina, un formulario); si no, lo reintenta cada 5 minutos. La única excepción: una ventana que quedó abierta de madrugada sin que nadie la toque en una hora se da por olvidada y se cierra con la recarga.
 
@@ -21,7 +21,7 @@ Para la pared: reloj en vivo, día de hoy resaltado (a medianoche pasa solo al d
 
 **PIN:** con un PIN definido (Familia → PIN), la pantalla de la pared lo pide para crear o cambiar eventos, el menú y las recetas, administrar quehaceres y premios (también *Limpiar hechas*), canjear premios y entrar a Familia. Mirar todo, marcar quehaceres y agregar a Compras no lo piden. Queda abierto 5 minutos; quitarlo o dejar de pedirlo exige ponerlo otra vez. El teléfono no lo pide (se puede cambiar por equipo). Con la familia en la nube el PIN es el mismo en todos los equipos. Si se olvida: en el teclado, *¿Olvidaste el PIN?* muestra un número; en otro equipo, *Familia → PIN → Destrabar otro equipo* con ese número da un código que lo quita. Un respaldo cargado no cambia el PIN. Es un candado para la casa, no seguridad.
 
-Lo que falta (correo dedicado, recetas por audio con Gemini, fotos en la pared, Google Calendar) está en [`PLAN.md`](PLAN.md).
+Lo que falta (correo dedicado, recetas por audio con Gemini, fotos en la pared) está en [`PLAN.md`](PLAN.md), junto con los pasos que tiene que hacer la familia para configurar Google Calendar.
 
 ## Correrlo
 
@@ -36,7 +36,7 @@ npm run build      # versión de producción en out/ (archivos estáticos)
 
 **Publicado en Netlify:** https://calendario-familiar-pared.netlify.app (proyecto `calendario-familiar-pared`, sitio aparte del recetario, oculto para buscadores).
 
-La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`); lo compartido entre equipos y el calendario de iCloud usan Netlify Functions y Netlify Blobs (ver *Datos* y *Calendario de iCloud*).
+La app se exporta como archivos estáticos (`output: "export"` en `next.config.ts`, carpeta `out/`); lo compartido entre equipos y el calendario conectado (Google o iCloud) usan Netlify Functions y Netlify Blobs (ver *Datos*, *Calendario de Google* y *Calendario de iCloud*).
 
 Para que cada cambio se publique solo: en Netlify, *Project configuration → Build & deploy → Continuous deployment → Link repository*, este repositorio, rama `claude/recetario-familiar`, **Base directory** = `calendario` (el `netlify.toml` de esta carpeta ya trae el comando y la carpeta `out`). Desde ahí, cada push que toque `calendario/` se publica solo; los cambios del recetario no lo gatillan.
 
@@ -63,13 +63,25 @@ lib/datos/repositorioLocal.ts implementación con localStorage
 lib/datos/repositorioNube.ts  implementación con la nube (versiones, sondeo, copia local)
 lib/datos/nube.ts             sesión del equipo, llamadas a /api, fotos
 components/Nube.tsx           crear familia, invitar (QR), unirse, equipos
+components/CalendarioComun.tsx   lo común a los dos calendarios: estado, avisos, sincronizar, desconectar
+components/CalendarioGoogle.tsx  conectar Google Calendar: dueño, Probar, «Quiénes lo ven» e invitaciones
 components/CalendarioICloud.tsx  conectar el calendario de iCloud y ver cómo va
 netlify/functions/            API (Netlify Functions) y calendario-programado (cada 5 min)
 servidor/comun.ts             Blobs: colecciones con versión, acceso por equipo, invitaciones
 servidor/caldav.ts            cliente CalDAV (iCloud)
 servidor/ics.ts               .ics del iPhone ↔ eventos del panel
-servidor/sincronizar.ts       sincronización en ambos sentidos con iCloud
+servidor/sincronizar.ts       sincronización en ambos sentidos (el mismo motor para Google e iCloud)
+servidor/proveedores.ts       contrato `Transporte` y qué proveedor usa cada conexión
+servidor/google/cuenta.ts     clave de la cuenta de servicio (GOOGLE_CUENTA_SERVICIO) y tokens (JWT)
+servidor/google/ids.ts        id de Google reversible a partir del UID del panel
+servidor/google/serie.ts      listado de Google → series → .ics (lo que lee el motor)
+servidor/google/escritura.ts  .ics del motor → pedidos a la API (y lo que Google no deja hacer)
+servidor/google/transporte.ts Calendar API v3 con el mismo contrato que CalDAV
+servidor/google/compartir.ts  con quién se comparte «Familia» (ACL): invitar, permiso, quitar
+servidor/google/prueba.ts     autoprueba «Probar»
+pruebas/                      pruebas del servidor y simulador de Google (ver pruebas/README.md)
 lib/datos/normalizar.ts       revisa y repara datos guardados o respaldos
+lib/comidas.ts                espacios de cada comida (ESPACIOS_COMIDA) y sus ítems
 lib/compras.ts                categorías, unidades, suma de ingredientes
 lib/fechas.ts                 fechas en America/Santiago, semana lunes–domingo
 lib/eventos.ts                repeticiones
@@ -77,7 +89,60 @@ lib/ejemplo.ts                familia de 4, eventos y 6 recetas chilenas de ejem
 components/                   las vistas
 ```
 
+## Calendario de Google
+
+**Qué hace:** el panel y el Calendario de los iPhone comparten el calendario **«Familia»** de Google Calendar. Es un calendario secundario del **Gmail de uno de los adultos** (el *dueño*: madre, padre u otro adulto). Un evento creado o cambiado en la pared aparece en los iPhone; uno creado o cambiado en el iPhone (o en calendar.google.com) aparece en la pared. Borrar en un lado borra en el otro. Desde el panel se **invita a los demás** (el otro adulto, los abuelos…) como **Editor** (ven y cambian los eventos desde su iPhone) o **Solo lectura** (sólo los ven), y Google les manda la invitación por correo. El panel entra con una **cuenta de servicio** de Google Cloud (Google no acepta contraseñas de app para el calendario), a la que el dueño le comparte «Familia»; nadie tiene que volver a iniciar sesión.
+
+**Prepararlo (una vez; el detalle paso a paso está en [`PLAN.md`](PLAN.md)):**
+1. En el panel: *Familia → 📅 Calendario del iPhone (Google Calendar)* → **¿De quién es el calendario?** (un integrante o un nombre, su Gmail y si es Madre, Padre u Otro adulto). Los pasos que siguen se muestran para esa persona.
+2. Con el Gmail del dueño, en calendar.google.com (en un computador): *Otros calendarios → + → Crear calendario* → **Familia**, zona **(GMT-03:00) Santiago**. No usar el calendario principal (trae los cumpleaños de los contactos).
+3. Con el mismo Gmail, en console.cloud.google.com: un proyecto, *APIs y servicios → Biblioteca →* habilitar **Google Calendar API**, una **cuenta de servicio** sin roles y su **clave JSON** (se descarga una sola vez). No hace falta facturación.
+4. En Netlify (proyecto `calendario-familiar-pared`) → *Project configuration → Environment variables*: **`GOOGLE_CUENTA_SERVICIO`** con el JSON tal cual o en base64, marcada como secreta (con las Functions en su alcance), y volver a publicar. Nunca en el repositorio ni en el chat; después, borrar el archivo descargado o guardarlo en un gestor de contraseñas.
+5. De vuelta en el panel aparece el correo de la cuenta de servicio (…@….iam.gserviceaccount.com, botón *📋 Copiar*). En calendar.google.com → «Familia» → ⋮ → *Configuración y uso compartido → Compartir con personas específicas → Agregar personas y grupos* → ese correo con **«Realizar cambios y administrar el uso compartido»** (así el panel puede invitar al resto). Con «Realizar cambios y ver los detalles del evento» la sincronización funciona igual, pero las invitaciones se hacen a mano en Google Calendar (el panel muestra los pasos).
+6. En esa misma página, *Integrar el calendario → ID de calendario* (`c_…@group.calendar.google.com`): pegarlo en el panel → **🔎 Probar** → **🔗 Conectar**, eligiendo si los eventos que ya están en la pared se suben o quedan sólo en la pared.
+7. **👥 Quiénes lo ven → Invitar a otro adulto**: nombre (o integrante), Gmail, rol y permiso → *✉️ Enviar invitación*. La persona abre el correo de Google y toca el enlace; después agrega su cuenta de Google en el iPhone (*Configuración → Apps → Calendario → Cuentas de Calendario → Agregar cuenta → Google*).
+
+**«Probar»** revisa con la cuenta y el calendario reales que la clave funciona, el permiso con que se compartió, la zona horaria, si el panel puede invitar, y lo que la documentación de Google no asegura (eventos sin hora de término, repeticiones como «el último día del mes», que un cambio sobre una versión vieja se rechace). Usa un evento de prueba del 01-01-2001 que la pared nunca muestra y que borra al terminar (si se corta, lo borra la prueba siguiente). La sincronización no depende de ella.
+
+**👥 Quiénes lo ven:** el dueño (*Cambiar* corrige su nombre, Gmail o rol sólo en el panel; el panel avisa si ese Gmail no aparece como dueño en Google, y nunca le quita ni le cambia el acceso) y cada persona invitada con su permiso (*Editor* / *Solo lectura*, se cambia ahí mismo) y *Quitar* (con confirmación). Se mezcla lo guardado en el panel con lo que dice Google: alguien a quien se le quitó el acceso en Google Calendar aparece como «ya no tiene acceso» (con *Invitar de nuevo*), y alguien a quien se compartió directamente en Google aparece como «compartido en Google Calendar». Si el panel no tiene permiso para compartir, la persona queda «falta compartirlo a mano», con los pasos para el dueño. Hasta 20 personas.
+
+**Reglas** (las mismas de iCloud: cada 5 minutos y al guardar, gana el cambio más reciente, aviso antes de un borrado masivo, reparto por emoji o nombre, «sólo en la pared», desconectar sin perder nada… más las propias de Google):
+- **Demoras:** los iPhone no reciben avisos al instante desde Google; con *Obtener datos → Cada 15 minutos* los cambios de la pared llegan al iPhone en hasta 15 minutos, y los del iPhone llegan a la pared en hasta 5 (o enseguida si alguien guarda un evento en el panel).
+- **Avisos de cada persona:** los configura cada uno en Google Calendar → Familia → *Notificaciones de eventos* (y en el iPhone, *Alertas de eventos* activado para Familia). El panel no pone avisos.
+- **Solo lectura:** quien tiene «Solo lectura» ve los eventos en su iPhone pero no los puede cambiar.
+- **Si «Familia» no aparece en el iPhone** de una persona invitada: calendar.google.com/calendar/syncselect con su cuenta, en un computador → marcar Familia → Guardar. Al dueño le aparece solo.
+- **Invitaciones de otras personas** (un evento en que otro es el organizador) se ven en la pared, pero se cambian en Google Calendar.
+- **Series con días cambiados uno por uno:** en la pared se puede cambiar el título, la nota o el lugar, o borrar un día; la hora o la repetición de toda la serie se cambian en el iPhone o en Google Calendar. Un día borrado en Google no se recupera desde la pared, y un día cambiado no se vuelve a la normalidad desde la pared (todo con aviso).
+- **Notas con formato** (negritas, listas o enlaces hechos en calendar.google.com) se ven como texto en la pared; si la nota se edita en la pared, se pierde el formato. Los recordatorios, el enlace de Meet y los adjuntos se conservan (el panel nunca los manda).
+- **Cumpleaños, «fuera de la oficina» y eventos de Gmail** no se muestran en la pared (por eso «Familia» es un calendario aparte y no el principal).
+- **Un solo calendario conectado a la vez** (Google o iCloud), y la cuenta de servicio sirve a una sola familia del sitio.
+- Un calendario muy grande (más de unos 10.000 eventos) se sincroniza sólo con la función programada, que tiene más tiempo.
+
+**Cómo funciona:** [Calendar API v3](https://developers.google.com/workspace/calendar/api/v3/reference) con la cuenta de servicio (`servidor/google/`): el panel firma un JWT con la clave y lo cambia por un token en `oauth2.googleapis.com` (alcances `calendar.events` y `calendar.acls`), que vive sólo en la memoria de la función. El transporte cumple el mismo contrato que el cliente CalDAV de iCloud (`servidor/proveedores.ts`), así que el motor (`servidor/sincronizar.ts` y `servidor/ics.ts`) es el mismo: cada vuelta pide el listado completo (`singleEvents=false`; completo o error, nunca una parte, y sólo con permiso de editar), arma cada serie con sus días cambiados o borrados como un .ics, y traduce cada cambio de la pared a pedidos de la API (casi siempre un solo PATCH). Además:
+- El id de cada evento de la pared sale de su UID (`cf` + base32hex), así crear es idempotente (un reintento da 409 en vez de un duplicado) y al volver a conectar se reconocen; si el id quedó ocupado por un evento borrado, se usa la «generación» siguiente.
+- PATCH y DELETE van siempre con `If-Match` (412 = otro lo cambió antes: nunca se pisa un cambio a ciegas).
+- Cada escritura del panel deja una marca propia (`extendedProperties.private.cfh`), así una escritura del panel que quedó a medias no le gana a la pared en «gana el más reciente».
+- Errores por motivo: un límite de uso (429, o 403 de cuota) se reintenta y nunca se toma como falta de permiso (eso revertiría la pared); un 403 desconocido también se reintenta.
+- Las invitaciones son reglas de la ACL de «Familia» (`writer` = Editor, `reader` = Solo lectura) con `sendNotifications=true`, y se lee la regla antes de escribirla.
+
+**Seguridad:**
+- La clave vive sólo en la variable secreta `GOOGLE_CUENTA_SERVICIO` de Netlify: nunca en Blobs, en registros, en mensajes de error ni en el repositorio. Si se sube a GitHub, Google la deshabilita.
+- Con «Realizar cambios y administrar el uso compartido», **quien tuviera la clave podría cambiar con quién se comparte «Familia»** (además de ver y cambiar sus eventos); por eso «Probar» lo recuerda. El panel nunca toca la regla del dueño ni la propia, nunca da el permiso de administrar (sólo Editor o Solo lectura) y no toca reglas que ya administran el calendario. La cuenta de servicio sólo ve los calendarios que se le compartieron.
+- Para cortar el acceso de inmediato: deshabilitar la cuenta de servicio en Google Cloud (borrar la clave no invalida los tokens ya entregados, que duran hasta 1 hora) o dejar de compartirle «Familia».
+
+**Probar en local** sin tocar Google: `pruebas/google/simulador-local.ts` levanta el simulador de la Calendar API (el mismo de las pruebas) en 127.0.0.1 con una clave de prueba recién generada (nunca una real) y un calendario «Familia» compartido con el panel, y corre el comando que va después de `--` con `GOOGLE_API_URL`, `GOOGLE_TOKEN_URL` y `GOOGLE_CUENTA_SERVICIO` apuntando a él:
+
+```bash
+npm run build
+node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/simulador-local.ts \
+  -- npx netlify-cli dev --offline --dir out --functions netlify/functions
+```
+
+En el panel, el ID es `c_familia@group.calendar.google.com`. `SIM_ROL=writer` lo comparte sin «administrar el uso compartido» (invitaciones a mano) y `SIM_VER=1` muestra cada pedido a la API. `GOOGLE_API_URL` y `GOOGLE_TOKEN_URL` son sólo para pruebas: el código las ignora si no son `http://127.0.0.1` o `http://localhost`. Las pruebas automáticas (simulador fiel de Google, cuenta de servicio, transporte, motor de punta a punta con el simulador, API, invitaciones) se corren con `bash pruebas/correr.sh` (o `bash pruebas/correr.sh google`); ver [`pruebas/README.md`](pruebas/README.md).
+
 ## Calendario de iCloud
+
+**Alternativa a Google Calendar** (hay un solo calendario conectado a la vez). En *Familia* sólo aparece si el servidor tiene `ICLOUD_USUARIO` e `ICLOUD_CLAVE_APP` (o si ya estaba conectado).
 
 **Qué hace:** el panel y el Calendario de los iPhone comparten un calendario de iCloud (“Familia”). Un evento creado o cambiado en la pared aparece en los iPhone (y avisa con las alertas de cada teléfono); uno creado o cambiado en el iPhone aparece en la pared. Borrar en un lado borra en el otro.
 
@@ -106,8 +171,6 @@ components/                   las vistas
 **Cómo funciona:** CalDAV contra `caldav.icloud.com` con el Apple ID y la contraseña de app (`servidor/caldav.ts`). Para cada evento (serie) se guarda en Blobs su ETag y una huella de cómo quedó la última vez que los dos lados coincidieron; así se sabe qué lado cambió. Se escribe siempre con `If-Match` / `If-None-Match` (nunca se pisa un cambio a ciegas) y los eventos nuevos usan UID `<id>@calendario-familiar`, así un reintento no duplica. Una sola sincronización a la vez por familia.
 
 **Probar en local** sin tocar iCloud: un servidor CalDAV de prueba (p. ej. [Radicale](https://radicale.org)) y `ICLOUD_CALDAV_URL=http://127.0.0.1:5232/ ICLOUD_USUARIO=… ICLOUD_CLAVE_APP=… NODE_OPTIONS= npx netlify-cli dev --offline --dir out --functions netlify/functions`. `ICLOUD_CALDAV_URL` es sólo para pruebas.
-
-**Google Calendar** (todavía no): se puede con una *cuenta de servicio* de Google Cloud con la que se comparte el calendario (Google no acepta contraseñas de app para el calendario). Ver `PLAN.md`.
 
 ## Modo kiosko en el tablet
 

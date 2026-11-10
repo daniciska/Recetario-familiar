@@ -170,6 +170,16 @@ await caso("probar: lo no documentado (interruptores)", async () => {
   ok("owner pero la ACL no se deja leer → compartir ⚠️", pasos(r).compartir === "aviso" && r.datos.capacidades?.puedeInvitar === false, r.datos.pasos);
 
   restaurarInterruptores();
+  sim.inyectar(es.tipo("acl.list"), respuestas.error("rateLimit429"), 1);
+  cal = a.calendario(nuevoId());
+  r = await pedir(fam, "POST", "probar", { calendarioId: cal });
+  ok(
+    "límite de uso al revisar la ACL → compartir ⚠️ «no se pudo revisar» y la escritura se prueba igual",
+    pasos(r).compartir === "aviso" && /No se pudo revisar si el panel puede invitar/.test(textos(r)) && pasos(r).escritura === "ok" && r.datos.terminado === true && r.datos.capacidades?.puedeInvitar === null && vivos(cal).length === 0,
+    [r.datos.pasos, r.datos.capacidades],
+  );
+
+  restaurarInterruptores();
   // Un Google que ignora If-Match: el PATCH con la versión vieja responde 200 con el evento tal como está.
   const tal = respuestas.status(200, {});
   sim.inyectar(

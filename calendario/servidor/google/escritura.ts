@@ -14,6 +14,7 @@
 //   vista(ics): Record<clave, VistaPieza>          clave "" = principal; si no, claveValor(RECURRENCE-ID)
 //   ocurre(principalB, original): boolean          ¿la regla de B (sin EXDATE) genera ese inicio?
 //   planear(serie, icsB): Plan                     { maestro?, ops, avisoTitulo } o NoSePuedeEscribir
+//   seVeIgual(serie, ics): boolean                 ¿la serie proyectada se ve igual que ese .ics? (sin nada que mandar)
 //   cuerposDeHora(vevent, conRecurrencia)          { start, end } con date/dateTime/timeZone (null = borrar)
 //   recurrenciaDe(vevent): string[]                RRULE/EXRULE/RDATE + un EXDATE por valor
 //   cuerpoInsert(veventB, uid, gen): Cuerpo        cuerpo de events.insert (con id y marca)
@@ -88,6 +89,12 @@ export interface Plan {
   ops: Op[];
   /** SUMMARY de B (para los avisos). */
   avisoTitulo: string;
+  /**
+   * Lo que quedará en Google no se lee igual que la pared, aunque Google acepte todo: el motor tiene que
+   * releer la serie (el transporte no prevé el etag). Pasa cuando un EXDATE que estaba fuera de la regla
+   * (la pared nunca lo vio como día borrado) vuelve a ocultar un día con la regla nueva.
+   */
+  releer?: boolean;
 }
 
 // ---------- Lectura de un .ics ----------
@@ -212,6 +219,9 @@ export function vista(ics: string): Record<string, VistaPieza> {
 export function ocurre(principalB: ICAL.Component, original: HoraG): boolean {
   return ocurrenTodos(principalB, [original]);
 }
+
+/** La hora de la API que corresponde a una clave ("D:AAAA-MM-DD" o "T:<ms>"). */
+const horaDeClave = (k: string): HoraG => (k.startsWith("D:") ? { date: k.slice(2) } : { dateTime: new Date(Number(k.slice(2))).toISOString() });
 
 /** ¿La regla de B genera todos esos inicios? (recorre la serie una sola vez) */
 function ocurrenTodos(principalB: ICAL.Component, originales: (HoraG | undefined)[]): boolean {
@@ -418,6 +428,20 @@ const igualesVistas = (a: Record<string, VistaPieza>, b: Record<string, VistaPie
   return JSON.stringify(ka) === JSON.stringify(kb) && ka.every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
 };
 
+/**
+ * ¿La serie, como la proyecta serie.ts, se ve igual que ese .ics (lo primero que compara planear)? El
+ * transporte lo usa para prever el etag después de escribir: sólo si lo que quedó en Google se lee igual
+ * que lo que mandó el motor; si no (Google no propaga un cambio a sus excepciones, una cancelada quedó
+ * a otra hora…), el motor tiene que releerla.
+ */
+export function seVeIgual(serie: Serie, ics: string): boolean {
+  try {
+    return igualesVistas(leer(proyectar(serie).ics).vistas, leer(ics).vistas);
+  } catch {
+    return false;
+  }
+}
+
 function op(tipo: Op["tipo"], pieza: EvG, clave: string, cuerpo: Cuerpo): Op {
   return { tipo, id: pieza.id, etag: pieza.etag, cuerpo: marcar(pieza, cuerpo), clave, fecha: fechaDeClave(clave), pieza };
 }
@@ -537,7 +561,11 @@ export function planear(serie: Serie, icsB: string): Plan {
   if (cambiaRec) m.recurrence = recurrenceB.length ? recurrenceB : null;
 
   ops.sort((a, b) => (a.tipo !== b.tipo ? (a.tipo === "cambiar" ? -1 : 1) : a.clave < b.clave ? -1 : a.clave > b.clave ? 1 : 0));
-  return { maestro: Object.keys(m).length ? marcar(principal, m) : undefined, ops, avisoTitulo: T };
+  // Un EXDATE que A tenía fuera de su regla (p. ej. más allá del "hasta", después de dividir la serie en
+  // la web) no es una excepción en la pared; ics.ts lo conserva al escribir B y, si la regla de B vuelve a
+  // generar ese día, Google lo oculta. La pared no lo sabe: que relea (y quede como Google).
+  const releer = cambiaRec && EB.some((v) => EA.has(v) && ocurre(vB, horaDeClave(v)) && !ocurre(vA, horaDeClave(v)));
+  return { maestro: Object.keys(m).length ? marcar(principal, m) : undefined, ops, avisoTitulo: T, ...(releer ? { releer } : {}) };
 }
 
 // ---------- Crear ----------

@@ -4,7 +4,8 @@
 //
 // Una serie es un evento principal (suelto o con repetición) con sus excepciones (los días que se
 // cambiaron o se borraron sólo esa vez), agrupadas por recurringEventId:
-// - canceladas → EXDATE en el principal (y se recuerda cuál vino de cuál: `p2`);
+// - canceladas → EXDATE en el principal (y se recuerda cuál vino de cuál: `p2`), salvo las huérfanas
+//   (la serie se movió de hora y ya no calzan con ninguna ocurrencia: en Google no ocultan nada);
 // - vivas      → un VEVENT con RECURRENCE-ID;
 // - fantasmas  → excepciones idénticas a la serie (Google a veces las materializa): no se muestran.
 //
@@ -25,7 +26,7 @@
 import ICAL from "ical.js";
 import { createHash } from "node:crypto";
 import { ZONA } from "../../lib/fechas";
-import { instanteLocal } from "../ics";
+import { instancias, instanteLocal } from "../ics";
 import { SUFIJO_GOOGLE, esIdDePrueba, uidDesdeId } from "./ids";
 
 export const PRODID_GOOGLE = "-//Calendario familiar//Google//ES";
@@ -480,6 +481,38 @@ function modificado(piezas: EvG[]): number | null {
   return max === null ? null : Math.floor(max / 1000) * 1000;
 }
 
+/**
+ * Claves de las canceladas huérfanas: las que caen en un día en que la regla de ahora sí tiene una
+ * ocurrencia, pero a otra hora (la serie se movió de hora después de que se borró ese día). Google sólo
+ * oculta la ocurrencia cuyo inicio original calza con la cancelada, así que ésas no ocultan nada (si el
+ * día sigue borrado es por un EXDATE en recurrence, como lo escribe planear). Proyectadas como EXDATE, ese
+ * día no calzaría con la regla y ics.ts leería la serie como fechas sueltas. Si ese día no tiene ninguna
+ * ocurrencia, o no se alcanzó a revisar, la cancelada se proyecta igual que siempre (un EXDATE en un día
+ * sin ocurrencia no cambia lo que se ve).
+ */
+function canceladasHuerfanas(p: EvG, reglas: ICAL.Property[], canceladas: EvG[], z: string): Set<string> {
+  const r = new Set<string>();
+  const generan = reglas.filter((x) => x.name === "rrule" || x.name === "rdate");
+  // (Por horas o minutos ics.ts ya la lee como fechas sueltas, y la cuenta podría cortarse a mitad de un día.)
+  const porHoras = generan.some((x) => x.name === "rrule" && ["SECONDLY", "MINUTELY", "HOURLY"].includes((x.getFirstValue() as ICAL.Recur).freq));
+  const ini = canceladas.length && generan.length && !porHoras && p.start ? horaIcs("DTSTART", p.start, z) : null;
+  if (!ini) return r;
+  const claves = canceladas.map((c) => claveHora(c.originalStartTime)).filter((k): k is string => !!k);
+  try {
+    const v = new ICAL.Component("vevent");
+    v.addProperty(ICAL.Property.fromString(ini));
+    for (const x of generan) v.addProperty(ICAL.Property.fromString(x.toICALString()));
+    const hay = instancias(v, new Set(claves.map(fechaDeClave)));
+    for (const k of claves) {
+      const ese = hay.get(fechaDeClave(k)) ?? [];
+      if (ese.length && !ese.some((i) => claveValor(i.t, i.tzid) === k)) r.add(k);
+    }
+  } catch {
+    // (una regla que ical.js no entiende: se proyecta como siempre)
+  }
+  return r;
+}
+
 function armar(serie: Serie): Proyeccion {
   const z = serie.zona;
   const p2 = new Map<string, EvG>();
@@ -531,11 +564,12 @@ function armar(serie: Serie): Proyeccion {
         for (const x of prop.getValues()) if (x instanceof ICAL.Time) yaExcluidas.add(claveValor(x, tzid));
       }
     }
+    const huerfanas = canceladasHuerfanas(p, extra, serie.canceladas, z);
     for (const c of serie.canceladas) {
       const k = claveHora(c.originalStartTime);
       if (!k || p2.has(k)) continue;
       p2.set(k, c);
-      if (yaExcluidas.has(k)) continue;
+      if (yaExcluidas.has(k) || huerfanas.has(k)) continue;
       const linea = horaIcs("EXDATE", c.originalStartTime!, z, true);
       if (!linea) continue;
       yaExcluidas.add(k);

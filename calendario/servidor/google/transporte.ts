@@ -43,7 +43,7 @@ import { NoSePuedeEscribir } from "../ics";
 import { ZONA } from "../../lib/fechas";
 import type { Transporte } from "../proveedores";
 import { descartarToken, localhost, tokenDeAcceso, type CuentaServicio } from "./cuenta";
-import { finIgualInicio, fusionar, planear, planearCreacion, sinHoraDeTermino, type Cuerpo } from "./escritura";
+import { finIgualInicio, fusionar, planear, planearCreacion, seVeIgual, sinHoraDeTermino, type Cuerpo } from "./escritura";
 import { agrupar, hrefSerie, normRec, serieAIcs, type EvG, type Serie } from "./serie";
 
 export const URL_API_GOOGLE = "https://www.googleapis.com/calendar/v3/";
@@ -440,7 +440,7 @@ export class GoogleCalendar implements Transporte {
     cuerpo: Cuerpo,
     T: string,
     primero: boolean,
-  ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo } | "conflicto" | "noExiste" | "rechazado"> {
+  ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } | "conflicto" | "noExiste" | "rechazado"> {
     const ruta = `${rutaCalendario(calId)}/events/${encodeURIComponent(pieza.id)}`;
     const pedir = (c: Cuerpo) => this.pedirJSON("PATCH", ruta, { query: { fields: CAMPOS_PATCH }, cuerpo: c, ...(pieza.etag ? { ifMatch: pieza.etag } : {}) });
     let enviado = cuerpo;
@@ -454,7 +454,7 @@ export class GoogleCalendar implements Transporte {
     }
     if (r.status === 200) {
       if (!r.json) throw this.raro("el cambio");
-      return { json: r.json, enviado };
+      return { json: r.json, enviado, sinFin };
     }
     if (r.status === 412 || r.status === 409) return "conflicto";
     if (r.status === 404 || r.status === 410) return primero ? "noExiste" : "conflicto";
@@ -484,10 +484,12 @@ export class GoogleCalendar implements Transporte {
     // Cómo queda cada pieza según lo que respondió Google (para el etag del próximo listado).
     let principal = serie.principal!;
     const piezas = new Map([...serie.vivas, ...serie.fantasmas, ...serie.canceladas].map((x) => [x.id, x]));
-    let previsible = true;
-    const despues = (pieza: EvG, r: { json: Record<string, unknown>; enviado: Cuerpo }): EvG => {
+    let previsible = !plan.releer; // (planear ya sabe que lo que quede no se leerá igual que la pared)
+    const despues = (pieza: EvG, r: { json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean }): EvG => {
       const etag = texto(r.json.etag);
-      if (!etag) previsible = false;
+      // Borrar `end` con un PATCH (el respaldo "sin hora de término") no está documentado: lo que quedó se
+      // relee en vez de suponerlo.
+      if (!etag || r.sinFin) previsible = false;
       return { ...fusionar(pieza, r.enviado), etag };
     };
     if (plan.maestro) {
@@ -519,19 +521,23 @@ export class GoogleCalendar implements Transporte {
     }
     // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
     // queda igual a lo que Google guardó.
-    return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid) : null };
+    return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null };
   }
 
   /**
    * El etag que tendrá la serie (estas piezas) en el próximo listado, con las mismas cuentas que agrupar
    * y la zona del calendario de este listado; null si no se puede saber. Si Google cambió algo más (o
    * alguien la tocó entre medio), el listado trae otro etag y el motor la relee: nunca es peor que null.
+   * Además, lo que quedó tiene que verse igual que lo que mandó el motor (`ics`): si un cambio del
+   * principal hace que una excepción que no se tocó se vea distinta (una "fantasma" con el título viejo,
+   * una cancelada que quedó a otra hora), el etag sería el mismo del listado pero la pared no mostraría lo
+   * que hay en Google; con null, la vuelta siguiente lo relee.
    */
-  private async etagPrevisto(calId: string, piezas: EvG[], uid: string): Promise<string | null> {
+  private async etagPrevisto(calId: string, piezas: EvG[], uid: string, ics: string): Promise<string | null> {
     const l = await this.listados.get(calId)?.catch(() => null);
     if (!l || !piezas.length) return null;
     const s = agrupar(piezas, calId, l.zona).get(hrefSerie(calId, piezas[0].id));
-    return s && s.uid === uid ? s.etag : null;
+    return s && s.uid === uid && seVeIgual(s, ics) ? s.etag : null;
   }
 
   /** Crea la serie (el UID sale del .ics; `nombre` sólo sirve para existe()). */
@@ -576,7 +582,7 @@ export class GoogleCalendar implements Transporte {
     if (!id) throw new NoSePuedeEscribir(`"${T}" no se pudo volver a crear en Google Calendar: quedó solo en la pared.`);
 
     // Sin días cambiados, el etag del próximo listado ya se sabe (con ellos, null: el motor relee).
-    if (!c.dias.length) return { href: hrefSerie(url, id), etag: creado ? await this.etagPrevisto(url, [creado], c.uid) : null };
+    if (!c.dias.length) return { href: hrefSerie(url, id), etag: creado ? await this.etagPrevisto(url, [creado], c.uid, ics) : null };
 
     // Días cambiados (sólo al recrear una serie que los tenía): cada uno es un PATCH de su instancia.
     // La serie la acabamos de crear nosotros, así que va sin If-Match. Lo que falle queda como día normal.

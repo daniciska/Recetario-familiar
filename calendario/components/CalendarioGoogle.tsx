@@ -208,9 +208,12 @@ function Preparar({ g }: { g: InfoGoogle }) {
       <Paso n={1} titulo="¿De quién es el calendario?">
         {!editandoDueno && completo ? (
           <div className="flex flex-wrap items-center gap-3">
-            <p className="flex-1 text-lg">
-              Del Gmail de <strong>{dueno.nombre}</strong> · {ROL_TEXTO[dueno.rol]} · <span className="break-all">{dueno.correo}</span>
-            </p>
+            <div className="min-w-56 flex-1">
+              <p className="text-lg">
+                Del Gmail de <strong>{dueno.nombre}</strong> · {ROL_TEXTO[dueno.rol]}
+              </p>
+              <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{dueno.correo}</p>
+            </div>
             <Boton onClick={() => setEditandoDueno(true)}>Cambiar</Boton>
           </div>
         ) : (
@@ -325,8 +328,9 @@ function Preparar({ g }: { g: InfoGoogle }) {
           }
         >
           <p className="text-lg">
-            Calendario de <strong>{dueno.nombre}</strong> ({ROL_TEXTO[dueno.rol]}) · <span className="break-all">{dueno.correo}</span>
+            Calendario de <strong>{dueno.nombre}</strong> ({ROL_TEXTO[dueno.rol]})
           </p>
+          <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{dueno.correo}</p>
         </Modal>
       )}
     </div>
@@ -595,8 +599,9 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     const { correo, permiso } = r.datos.persona;
     await cargar();
     setMsg(
+      // Los pasos para hacerlo a mano quedan en la fila de esa persona (aquí arriba): no se repiten.
       r.datos.modo === "manual"
-        ? textoManual(dueno, correo, "agregar", permiso)
+        ? `El panel no tiene permiso para compartir: ${correo} quedó en la lista, pero falta compartirlo a mano (los pasos están en su fila, aquí arriba).`
         : r.datos.igual
           ? `${correo} ya tenía ese permiso en Google Calendar.`
           : textoListo(correo, permiso),
@@ -607,9 +612,10 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
   const cambiarPermiso = async (p: PersonaVista, permiso: Permiso) => {
     const r = await pedir<{ modo: "panel" | "manual" }>("/api/calendario/permiso", { correo: p.correo, permiso });
     if (!r) return;
-    if (r.status !== 200) setMsg(r.datos.error ?? "No se pudo cambiar el permiso.");
+    // Primero se recarga la lista (eso borra el mensaje) y después se dice cómo resultó.
     await cargar();
-    if (r.status === 200) {
+    if (r.status !== 200) setMsg(r.datos.error ?? "No se pudo cambiar el permiso.");
+    else {
       setMsg(
         r.datos.modo === "manual"
           ? textoManual(dueno, p.correo, "cambiar", permiso)
@@ -624,11 +630,9 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     const r = await pedir<{ modo: "panel" | "manual"; yaNoEstaba?: boolean }>("/api/calendario/quitar", { correo: p.correo });
     setQuitando(null);
     if (!r) return;
-    if (r.status !== 200) setMsg(r.datos.error ?? "No se pudo quitar.");
     await cargar();
-    if (r.status === 200) {
-      setMsg(r.datos.modo === "manual" ? textoManual(dueno, p.correo, "quitar") : `${p.nombre ?? p.correo} ya no ve el calendario.`);
-    }
+    if (r.status !== 200) setMsg(r.datos.error ?? "No se pudo quitar.");
+    else setMsg(r.datos.modo === "manual" ? textoManual(dueno, p.correo, "quitar") : `${p.nombre ?? p.correo} ya no ve el calendario.`);
   };
 
   const guardarDueno = async (a: Adulto) => {
@@ -647,9 +651,12 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
       {dueno && (
         <div className="mb-2 flex flex-wrap items-center gap-3 rounded-2xl bg-superficie px-3 py-2">
           {miembro(dueno.miembroId) ? <Avatar miembro={miembro(dueno.miembroId)!} /> : <span className="text-2xl" aria-hidden>👑</span>}
-          <p className="min-w-0 flex-1 text-lg">
-            <strong>{dueno.nombre}</strong> · {ROL_TEXTO[dueno.rol]} · {duenoA(dueno.rol)} · <span className="break-all text-tinta-suave">{dueno.correo}</span>
-          </p>
+          <div className="min-w-48 flex-1">
+            <p className="text-lg">
+              <strong>{dueno.nombre}</strong> · {ROL_TEXTO[dueno.rol]} · {duenoA(dueno.rol)}
+            </p>
+            <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{dueno.correo}</p>
+          </div>
           <Boton variante="fantasma" disabled={ocupado} onClick={() => setEditandoDueno({ ...dueno })}>
             Cambiar
           </Boton>
@@ -847,21 +854,23 @@ function FilaPersona({
     <li className="rounded-2xl bg-superficie px-3 py-2">
       <div className="flex flex-wrap items-center gap-3">
         {miembro ? <Avatar miembro={miembro} /> : <span className="text-2xl" aria-hidden>👤</span>}
-        <p className="min-w-0 flex-1 text-lg">
-          <strong>{p.nombre ?? p.correo}</strong>
-          {p.rol && <> · {ROL_TEXTO[p.rol]}</>}
-          {p.nombre && <> · <span className="break-all text-tinta-suave">{p.correo}</span></>}
-          {etiqueta && (
-            <span
-              className={cx(
-                "ml-2 inline-block rounded-full px-2.5 py-0.5 text-sm font-bold",
-                p.estado === "sinAcceso" || p.estado === "pendiente" ? "bg-red-600/15 text-red-800 noche:text-red-200" : "bg-superficie-2",
-              )}
-            >
-              {etiqueta}
-            </span>
-          )}
-        </p>
+        <div className="min-w-48 flex-1">
+          <p className="text-lg [overflow-wrap:anywhere]">
+            <strong>{p.nombre ?? p.correo}</strong>
+            {p.rol && <> · {ROL_TEXTO[p.rol]}</>}
+            {etiqueta && (
+              <span
+                className={cx(
+                  "ml-2 inline-block rounded-full px-2.5 py-0.5 text-sm font-bold",
+                  p.estado === "sinAcceso" || p.estado === "pendiente" ? "bg-red-600/15 text-red-800 noche:text-red-200" : "bg-superficie-2",
+                )}
+              >
+                {etiqueta}
+              </span>
+            )}
+          </p>
+          {p.nombre && <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{p.correo}</p>}
+        </div>
         {!administra && p.estado !== "sinAcceso" && p.estado !== "pendiente" && p.permiso && (
           <Segmentos
             opciones={[

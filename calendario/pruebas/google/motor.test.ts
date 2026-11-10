@@ -826,6 +826,132 @@ await caso("Google no aplica todo lo que se le mandó → la pared relee lo que 
   await quieto("parte del cambio rechazada", fam2, con2);
 });
 
+await caso("sin hora de término con fin = inicio rechazado (respaldo con end: null)", async () => {
+  // Si Google no acepta fin = inicio, el transporte reintenta "sin hora de término". Al crear, eso es un
+  // campo documentado (endTimeUnspecified) y el etag se puede prever. Al cambiar, el respaldo borra `end`
+  // con un PATCH (no documentado): el transporte devuelve etag null y la vuelta siguiente relee lo que quedó.
+  sim.interruptores.finIgualInicio = "400";
+  try {
+    const cal = h.nuevoCalendario();
+    const con = h.conexionGoogle(cal);
+    const fam = await h.familia([ev("s1", { titulo: "Remedio", horaInicio: "08:00", horaFin: undefined }), ev("s2", { titulo: "Cita", horaInicio: "10:00", horaFin: "11:00" })]);
+    const r0 = await h.sync(fam, con);
+    const est0 = await h.estado(fam, con);
+    const uid = h.uidPanel("s2");
+    ok(
+      "crear (respaldo endTimeUnspecified): en Google sin hora de término y el estado con etag",
+      r0.ok && sim.evento(cal, gid("s1"))?.endTimeUnspecified === true && !!est0?.recursos[h.uidPanel("s1")]?.etag,
+      { r0, g: sim.evento(cal, gid("s1")), rec: est0?.recursos[h.uidPanel("s1")] },
+    );
+    await h.cambiarEvento(fam, "s2", { horaInicio: "09:30", horaFin: undefined });
+    sim.reiniciarContadores();
+    const r1 = await h.sync(fam, con, 6500);
+    const est1 = await h.estado(fam, con);
+    const g = sim.evento(cal, gid("s2"));
+    ok(
+      "quitar la hora de término: 2 PATCH (el segundo con end: null) y el estado queda sin etag (se relee lo que quedó)",
+      r1.ok && sim.contadores.porTipo["events.patch"] === 2 && g?.endTimeUnspecified === true && /T09:30/.test(g?.start?.dateTime ?? "") && est1?.recursos[uid]?.etag === null,
+      { r1, porTipo: sim.contadores.porTipo, g: g && { start: g.start, end: g.end, u: g.endTimeUnspecified }, rec: est1?.recursos[uid] },
+    );
+    await quieto("sin hora de término con end: null", fam, con);
+    const p = await porId(fam, "s2");
+    ok("…y la pared sigue a las 09:30, sin hora de término", p?.horaInicio === "09:30" && p.horaFin === undefined, p && h.resumen(p));
+  } finally {
+    sim.interruptores.finIgualInicio = "ok";
+  }
+});
+
+await caso("lo que quedó en Google se ve distinto de lo que se mandó", async () => {
+  // a) Una «fantasma» (un día que Google materializó idéntico a la serie). Cambiar el lugar de la serie es
+  //    1 PATCH del principal y a la fantasma no se le manda nada: si Google no propaga el cambio, ese día
+  //    queda con el lugar anterior (se ve como un día cambiado, también en los iPhone). El transporte no
+  //    puede prever el etag (la serie ya no se ve como lo que mandó el motor): la pared lo relee.
+  const cal = h.nuevoCalendario();
+  const con = h.conexionGoogle(cal);
+  const fam = await h.familia([ev("f1", { titulo: "Teatro", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-01-28", lugar: "Sala 1" })]);
+  await h.sync(fam, con);
+  sim.interruptores.fantasmasAlLeer = true;
+  sim.interruptores.probFantasma = 1;
+  await h.sync(fam, con);
+  sim.interruptores.fantasmasAlLeer = false;
+  sim.interruptores.probFantasma = 0.3;
+  const fantasmas = h.vivos(cal).filter((e) => e.recurringEventId);
+  ok("hay una fantasma y la pared no la muestra", fantasmas.length === 1 && (await h.leerEventos(fam)).length === 1, fantasmas.map((e) => e.id));
+  await h.cambiarEvento(fam, "f1", { lugar: "Sala 2" });
+  sim.reiniciarContadores();
+  const r = await h.sync(fam, con);
+  const porTipo = { ...sim.contadores.porTipo };
+  const rec = (await h.estado(fam, con))?.recursos[h.uidPanel("f1")];
+  const r1 = await h.sync(fam, con);
+  const l = await h.leerEventos(fam);
+  const dia = l.find((e) => e.externo?.recurrencia);
+  ok(
+    "1 PATCH del principal, sin etag previsto; la vuelta siguiente muestra el día de la fantasma con el lugar anterior (como Google)",
+    r.ok && r1.ok && porTipo["events.patch"] === 1 && rec?.etag === null && sim.evento(cal, gid("f1"))?.location === "Sala 2" && l.find((e) => e.id === "f1")?.lugar === "Sala 2" && dia?.lugar === "Sala 1",
+    { r, r1, porTipo, rec, l: l.map(h.resumen) },
+  );
+  await quieto("fantasma que quedó distinta", fam, con);
+
+  // b) Un día borrado en la web (excepción cancelada) y después la pared cambia la hora de la serie: la
+  //    cancelada queda «huérfana» (a la hora vieja) y planear borra ese día con un EXDATE a la hora nueva.
+  //    Al releer (aquí, porque la web cambia el título) la serie sigue siendo semanal con ese día borrado,
+  //    no fechas sueltas.
+  const cal2 = h.nuevoCalendario();
+  const con2 = h.conexionGoogle(cal2);
+  const fam2 = await h.familia([ev("o1", { titulo: "Piano", repeticion: "semanal", fecha: "2026-11-16", horaInicio: "10:00", horaFin: "11:00" })]);
+  await h.sync(fam2, con2);
+  sim.actor("web", cal2).borrarDia(gid("o1"), "2026-11-30");
+  await h.sync(fam2, con2);
+  ok("el día borrado en la web llegó a la pared", !!(await porId(fam2, "o1"))?.excepciones?.includes("2026-11-30"), (await porId(fam2, "o1")) && h.resumen((await porId(fam2, "o1"))!));
+  await h.cambiarEvento(fam2, "o1", { horaInicio: "12:00", horaFin: "13:00" });
+  sim.reiniciarContadores();
+  const r2 = await h.sync(fam2, con2);
+  const g2 = sim.evento(cal2, gid("o1"));
+  ok(
+    "mover la hora: 1 PATCH con un EXDATE a la hora nueva",
+    r2.ok && sim.contadores.porTipo["events.patch"] === 1 && /T12:00/.test(g2?.start?.dateTime ?? "") && (g2?.recurrence ?? []).some((x: string) => /^EXDATE.*20261130T120000/.test(x)),
+    { r2, porTipo: sim.contadores.porTipo, rec: g2?.recurrence },
+  );
+  sim.actor("web", cal2).editarTitulo(gid("o1"), "🦄 Piano (web)");
+  const r3 = await h.sync(fam2, con2);
+  const p3 = await porId(fam2, "o1");
+  ok(
+    "al releer: sigue semanal a las 12:00 con ese día borrado (la cancelada huérfana no la vuelve fechas sueltas)",
+    r3.ok && p3?.titulo === "Piano (web)" && p3.repeticion === "semanal" && !p3.fechas?.length && p3.horaInicio === "12:00" && !!p3.excepciones?.includes("2026-11-30"),
+    { r3, p3: p3 && h.resumen(p3) },
+  );
+  await quieto("cancelada huérfana", fam2, con2);
+
+  // c) Un día borrado en el iPhone (EXDATE), después la web divide la serie («este y los siguientes»)
+  //    antes de ese día: el EXDATE queda más allá del «hasta» y la pared ya no lo muestra como día borrado.
+  //    Si la pared alarga el «hasta», ese EXDATE vuelve a ocultar el día en Google: la pared lo relee y lo
+  //    muestra borrado (como en Google), en vez de quedar con ese día a la vista.
+  const cal3 = h.nuevoCalendario();
+  const con3 = h.conexionGoogle(cal3);
+  const fam3 = await h.familia([]);
+  const x = sim.actor("web", cal3).crear({ summary: "⚽ Control", start: { date: "2026-11-13" }, end: { date: "2026-11-14" }, recurrence: ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;UNTIL=20270105"] });
+  await h.sync(fam3, con3);
+  sim.actor("iPhone", cal3).borrarDia(x.id, "2026-12-11");
+  await h.sync(fam3, con3);
+  sim.actor("web", cal3).esteYLosSiguientes(x.id, "2026-11-27", { summary: "⚽ Control (nuevo)" });
+  await h.sync(fam3, con3);
+  const orig = (await h.leerEventos(fam3)).find((e) => e.titulo === "Control")!;
+  await h.cambiarEvento(fam3, orig.id, { repetirHasta: "2027-02-15" });
+  sim.reiniciarContadores();
+  const r4 = await h.sync(fam3, con3);
+  const est4 = await h.estado(fam3, con3);
+  const p4 = await porId(fam3, orig.id);
+  const rec4 = est4?.recursos[orig.externo!.uid];
+  await h.sync(fam3, con3);
+  const p5 = await porId(fam3, orig.id);
+  ok(
+    "alargar el «hasta» sobre un EXDATE que había quedado fuera: 1 PATCH sin etag previsto, y la pared termina con ese día borrado (como Google)",
+    r4.ok && sim.contadores.porTipo["events.patch"] === 1 && rec4?.etag === null && !p4?.excepciones?.includes("2026-12-11") && p5?.repetirHasta === "2027-02-15" && !!p5?.excepciones?.includes("2026-12-11"),
+    { r4, porTipo: sim.contadores.porTipo, rec4, p4: p4 && h.resumen(p4), p5: p5 && h.resumen(p5), rec: sim.evento(cal3, x.id)?.recurrence },
+  );
+  await quieto("EXDATE fuera del «hasta» que vuelve a valer", fam3, con3);
+});
+
 // =====================================================================================
 seccion("11. UID repetidos (lápida restaurada desde la papelera con gen1 viva)");
 await caso("lápida restaurada", async () => {
