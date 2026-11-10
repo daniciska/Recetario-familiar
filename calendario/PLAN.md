@@ -42,8 +42,9 @@ Sin pegar claves en el chat ni en el repositorio. El calendario es del Gmail de 
 padre u otro adulto); los pasos A–C se hacen con ese Gmail.
 
 **A. Calendario.** En un computador, en calendar.google.com: junto a «Otros calendarios», «+» → «Crear calendario» →
-nombre «Familia» → zona horaria «(GMT-03:00) Santiago» → «Crear calendario». No usar el calendario principal: trae los
-cumpleaños de los contactos y los eventos de Gmail (la pared no los muestra).
+nombre «Familia» → zona horaria Santiago («(GMT-03:00) Santiago» en verano, «(GMT-04:00) Santiago» en invierno) →
+«Crear calendario». No usar el calendario principal: trae los cumpleaños de los contactos y los eventos de Gmail (la
+pared no los muestra).
 
 **B. Google Cloud.** En console.cloud.google.com, con el mismo Gmail. Aceptar los términos; no hace falta facturación.
 1. Crear un proyecto («panel-familia»).
@@ -69,7 +70,7 @@ cumpleaños de los contactos y los eventos de Gmail (la pared no los muestra).
 **D. En el panel: de quién es, y compartir con el panel.** Familia → 📅 Calendario del iPhone (Google Calendar) →
 «¿De quién es el calendario?»: el integrante (o un nombre), su Gmail y su rol (Madre / Padre / Otro adulto). Después,
 «📋 Copiar» el correo de la cuenta de servicio (…@….iam.gserviceaccount.com) y, en calendar.google.com → junto a
-«Familia», ⋮ → Configuración y uso compartido → Compartir con personas específicas → Agregar personas y grupos → pegar
+«Familia», ⋮ → Configuración y uso compartido → Compartido con → Agregar personas y grupos → pegar
 el correo → **«Realizar cambios y administrar el uso compartido»** → Enviar. No hay que aceptar nada. (Con «Realizar
 cambios y ver los detalles del evento» también se sincroniza, pero las invitaciones del paso F se hacen a mano.)
 
@@ -81,7 +82,9 @@ cambiarla en la configuración del calendario) → 🔗 Conectar, eligiendo si s
 rol y permiso: «Editor» (ve y cambia los eventos desde su iPhone) o «Solo lectura» (solo los ve) → ✉️ Enviar
 invitación. Google le manda un correo: abrirlo y tocar el enlace. Si alguien no tiene Gmail: accounts.google.com →
 Crear cuenta → Para mi uso personal → «Usar tu correo electrónico existente»; primero se crea la cuenta y después se
-invita. Si el panel dice que no puede compartir, el dueño sigue los pasos que aparecen en la fila de esa persona.
+invita. Si el panel dice que no puede compartir, el dueño sigue los pasos que aparecen en la fila de esa persona (en
+Google, «Compartido con»; Solo lectura es «Ver los detalles de todos los eventos»), o le da al panel «Realizar cambios
+y administrar el uso compartido» y, en el panel, 🔄 Revisar de nuevo → ✉️ Invitar ahora en esa fila.
 
 **G. Cada iPhone o iPad.**
 - Configuración → Apps → Calendario → Cuentas de Calendario → Agregar cuenta → Google → iniciar sesión → dejar
@@ -161,13 +164,15 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
     en **iCloud** la pared muestra ese día y el iPhone no (en Google ya se relee). Propuesta para `subirGrupo` en
     `servidor/sincronizar.ts`: si `huellaGrupo(leerRecurso(nuevo, ctx).eventos) !== h`, guardar `etag: null`.
     No se cambió para no tocar iCloud sin otra revisión.
-  - Si una misma sincronización da una segunda vuelta, esa vuelta reemplaza los avisos de la primera (pasa también con
-    iCloud; `pruebas/google/motor.test.ts` lo documenta).
   - Una nota escrita en la pared que parezca HTML (p. ej. «<b>») queda tal cual en Google y vuelve a la pared sin las
     marcas. Opción: escaparla en `servidor/google/escritura.ts` (decidir antes qué se ve en el iPhone).
-  - Cambiar el título, lugar o nota de una serie no se le manda a sus días «fantasma» (copias idénticas que Google a
-    veces crea): si Google no los actualiza, esos días se ven en la pared con el valor anterior, igual que en Google.
-    Opción: mandarles el cambio también (más escrituras).
+  - Los días «fantasma» (copias idénticas que Google a veces crea) reciben el cambio de título, nota, lugar u hora de
+    término de su serie (un PATCH cada uno, hasta 10). Si una serie tiene más, o se acaba el plazo, los que faltan
+    quedan como días cambiados con el valor anterior (con aviso). Un cambio con muchos PATCH espera a la
+    sincronización programada, que tiene más tiempo.
+  - Al volver a crear una serie con días cambiados (borrada en Google y cambiada en la pared), un día cuyo cambio no se
+    pudo pasar (Google lo rechazó o falló dos veces) queda como un día normal, con aviso, y no se vuelve a intentar:
+    habría que permitir en `planear` el PATCH de una instancia que todavía no es excepción.
   - Borrar una serie usa el etag del evento principal: un día cambiado por otra persona en los segundos entre la
     lectura y el borrado se borra junto con la serie.
 

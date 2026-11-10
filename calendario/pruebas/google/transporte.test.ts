@@ -28,6 +28,7 @@ import {
   textoSinCuenta,
   transporteDe,
 } from "../../servidor/proveedores";
+import * as transporteGoogle from "../../servidor/google/transporte";
 import { credencialesICloud as credencialesMotor } from "../../servidor/sincronizar";
 import type { Evento } from "../../lib/datos/tipos";
 import type { ConexionCalendario } from "../../servidor/comun";
@@ -568,8 +569,33 @@ await caso("recrear con días cambiados", async () => {
   const t2 = gc();
   const r2 = await t2.crear(cal2, "y.ics", B2);
   const av = t2.avisos();
-  ok("un día que ya no es de la serie → se crea igual, con aviso «quedó como un día normal»", r2 !== "existe" && av.length === 1 && /quedó como un día normal/.test(av[0]) && /19-11-2026/.test(av[0]), [B2.match(/RECURRENCE-ID[^\r\n]*/g), av]);
+  ok(
+    "un día que ya no es de la serie → se crea igual, con aviso «no se encontró ese día en la serie» (no «quedó como un día normal»: ese día no está)",
+    r2 !== "existe" && av.length === 1 && /el cambio del día 19-11-2026 no se pudo pasar a Google Calendar \(no se encontró ese día en la serie\)/.test(av[0]),
+    [B2.match(/RECURRENCE-ID[^\r\n]*/g), av],
+  );
   ok("avisos() vacía la lista", t2.avisos().length === 0);
+  // Una falla pasajera (5xx, límite de uso o corte de red) en el GET de instances o en el PATCH del día se
+  // reintenta una vez: el día queda cambiado.
+  for (const [que, pred, resp] of [
+    ["503 en el GET de instances", es.tipo("events.instances"), respuestas.error("unavailable")],
+    ["límite de uso en el PATCH del día", es.tipo("events.patch"), respuestas.error("rateLimit429")],
+    ["corte de red en el PATCH del día", es.tipo("events.patch"), respuestas.cortar()],
+  ] as const) {
+    const calR = nuevoCal();
+    const baseR = evPanel({ titulo: "Natación", repeticion: "semanal", fecha: "2026-11-04", horaInicio: "09:00", horaFin: "10:00" });
+    const uidR = uidDe(baseR);
+    const diaR = { ...baseR, id: `${baseR.id}-d`, fecha: "2026-11-18", horaInicio: "11:00", horaFin: "12:00", repeticion: "nunca", lugar: "Piscina 2", externo: { conexion: "c1", uid: uidR, recurrencia: "2026-11-18" } } as Evento;
+    const tR = gc();
+    const inj = sim.inyectar(pred, resp, 1);
+    sim.reiniciarContadores();
+    const rR = await intentar(tR.crear(calR, `${baseR.id}.ics`, escribirRecurso([baseR, diaR], ctx, uidR, null)));
+    inj.quitar();
+    const avR = tR.avisos();
+    const gR = (await leer(gc(), calR))[0]?.g;
+    const d = gR?.eventos.find((e) => e.externo?.recurrencia === "2026-11-18");
+    ok(`${que} → se reintenta una vez y el día queda cambiado, sin aviso`, !rR.error && inj.disparos === 1 && d?.horaInicio === "11:00" && d?.lugar === "Piscina 2" && !avR.length, [codigo(rR), mensaje(rR), sim.contadores.porTipo, avR, gR?.eventos.length]);
+  }
 });
 
 await caso("crear: presupuesto, sin principal", async () => {
@@ -695,29 +721,47 @@ await caso("varias piezas: el principal y un día cambiado", async () => {
   // (el título del panel va sin el emoji: escribirRecurso lo pone según las personas)
   const cambio = (titulo: string, lugar: string) => (l: Evento[]) =>
     l.map((e) => (e.externo?.recurrencia ? { ...e, lugar } : { ...e, titulo: titulo.replace(/^🦄 /, "") }));
-  // Todo bien: 2 PATCH.
+  // Todo bien: 2 PATCH, primero el del día cambiado (si Google pasa el título nuevo del principal a las
+  // excepciones, el If-Match del día ya se usó).
   const t = gc();
   sim.reiniciarContadores();
   const { r } = await cambiarEnPanel(t, cal, uid, cambio("🦄 Natación A", "Piscina A"));
-  ok("título del principal + lugar del día cambiado → 2 PATCH (principal primero)", !r.error && contar("events.patch") === 2 && sim.registro.filter((x) => x.tipo === "events.patch")[0].ruta.endsWith(s.id), [codigo(r), mensaje(r), sim.registro.map((x) => x.ruta)]);
+  const orden = sim.registro.filter((x) => x.tipo === "events.patch").map((x) => decodeURIComponent(x.ruta.split("/").pop() ?? ""));
+  ok("título del principal + lugar del día cambiado → 2 PATCH (primero el día, después el principal)", !r.error && contar("events.patch") === 2 && JSON.stringify(orden) === JSON.stringify([dia.id, s.id]), [codigo(r), mensaje(r), orden]);
   ok("…en Google quedan los dos cambios", sim.evento(cal, s.id).summary === "🦄 Natación A" && sim.evento(cal, dia.id).location === "Piscina A");
-  // 412 en la segunda operación → "conflicto", con el principal ya escrito.
+  const delPrincipal = (p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === s.id;
+  const delDia = (p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === dia.id;
+  // 412 en la segunda operación (el principal) → "conflicto", con el día ya escrito.
   const t2 = gc();
-  sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === dia.id, respuestas.error("conditionNotMet"));
+  sim.inyectar(delPrincipal, respuestas.error("conditionNotMet"));
   const { r: r2 } = await cambiarEnPanel(t2, cal, uid, cambio("🦄 Natación B", "Piscina B"));
-  ok("412 en la segunda → \"conflicto\" y el principal ya quedó escrito", r2.valor === "conflicto" && sim.evento(cal, s.id).summary === "🦄 Natación B" && sim.evento(cal, dia.id).location === "Piscina A", [r2.valor, codigo(r2)]);
-  // 404 en la segunda también es "conflicto" (algo cambió allá).
-  sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === dia.id, respuestas.error("notFound"));
+  ok("412 en la segunda → \"conflicto\" y el día ya quedó escrito", r2.valor === "conflicto" && sim.evento(cal, s.id).summary === "🦄 Natación A" && sim.evento(cal, dia.id).location === "Piscina B", [r2.valor, codigo(r2)]);
+  // 404 en la segunda también es "conflicto" (algo cambió allá); y en la primera (el día) también: la
+  // serie sigue ahí, no es "noExiste" (el motor la sacaría del estado).
+  sim.inyectar(delPrincipal, respuestas.error("notFound"));
   const { r: r3 } = await cambiarEnPanel(gc(), cal, uid, cambio("🦄 Natación C", "Piscina C"));
   ok("404 en la segunda → \"conflicto\"", r3.valor === "conflicto", [r3.valor, codigo(r3)]);
+  sim.inyectar(delDia, respuestas.error("notFound"));
+  const { r: r3b } = await cambiarEnPanel(gc(), cal, uid, cambio("🦄 Natación C2", "Piscina C2"));
+  ok("404 en el día cambiado (el primer PATCH) → \"conflicto\", sin tocar el principal", r3b.valor === "conflicto" && sim.evento(cal, s.id).summary === "🦄 Natación A", [r3b.valor, codigo(r3b)]);
   // 400 en la segunda: aviso y {etag:null}.
   const t4 = gc();
-  sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === dia.id, respuestas.error("timeRangeEmpty"));
+  sim.inyectar(delPrincipal, respuestas.error("timeRangeEmpty"));
   const { r: r4 } = await cambiarEnPanel(t4, cal, uid, cambio("🦄 Natación D", "Piscina D"));
   const av = t4.avisos();
   ok("400 en la segunda → aviso «no aceptó parte del cambio» y {etag: null}", JSON.stringify(r4.valor) === JSON.stringify({ etag: null }) && av.length === 1 && /parte del cambio/.test(av[0]), [r4.valor, av]);
+  // 400 en el día (el primero): se sigue con el principal; aviso y {etag:null}.
+  const t4b = gc();
+  sim.inyectar(delDia, respuestas.error("timeRangeEmpty"));
+  const { r: r4b } = await cambiarEnPanel(t4b, cal, uid, cambio("🦄 Natación D2", "Piscina D2"));
+  const av4b = t4b.avisos();
+  ok(
+    "400 en el día cambiado → el principal igual se escribe; aviso «no aceptó parte del cambio» y {etag: null}",
+    JSON.stringify(r4b.valor) === JSON.stringify({ etag: null }) && sim.evento(cal, s.id).summary === "🦄 Natación D2" && sim.evento(cal, dia.id).location === "Piscina D" && av4b.length === 1 && /parte del cambio/.test(av4b[0]),
+    [r4b.valor, codigo(r4b), av4b],
+  );
   // 503 en la segunda: se lanza (el motor deja de escribir y reintenta).
-  sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === dia.id, respuestas.error("unavailable"));
+  sim.inyectar(delPrincipal, respuestas.error("unavailable"));
   const { r: r5 } = await cambiarEnPanel(gc(), cal, uid, cambio("🦄 Natación E", "Piscina E"));
   ok("503 en la segunda → SERVIDOR (se lanza)", codigo(r5) === "SERVIDOR");
   // Borrar el día cambiado → cancelar esa excepción.
@@ -849,6 +893,19 @@ await caso("calendario y pedirJSON", async () => {
   sim.inyectar(es.tipo("acl.list"), respuestas.error("rateLimitExceeded"));
   const lim = await intentar(t.pedirJSON("GET", `${rutaCalendario(cal)}/acl`));
   ok("pedirJSON: límite de uso → SERVIDOR (lanza)", codigo(lim) === "SERVIDOR");
+  // El texto es neutro: invitar, quitar o "Probar" no reintentan (lo de «se reintenta solo» lo agrega el motor).
+  sim.inyectar(es.tipo("acl.insert"), respuestas.error("rateLimit429"));
+  const lim2 = await intentar(t.pedirJSON("POST", `${rutaCalendario(cal)}/acl`, { cuerpo: { role: "reader", scope: { type: "user", value: "abuela@gmail.com" } } }));
+  ok(
+    "pedirJSON: el texto del límite de uso es neutro (sin «se reintenta solo»), en un 403 usageLimits y en un 429",
+    mensaje(lim) === "Google Calendar pidió esperar un momento (límite de uso)." && mensaje(lim2) === mensaje(lim),
+    [mensaje(lim), mensaje(lim2)],
+  );
+  const { LimiteDeUso } = transporteGoogle as Partial<typeof transporteGoogle>;
+  ok(
+    "…y es un LimiteDeUso (ErrorCalDAV SERVIDOR) con su status, para que el motor diga que se reintenta",
+    typeof LimiteDeUso === "function" && lim.error instanceof LimiteDeUso && lim.error.status === 403 && lim2.error instanceof LimiteDeUso && lim2.error.status === 429,
+  );
   const conMatch = await t.pedirJSON("PATCH", `${rutaCalendario(cal)}/events/nada12345`, { cuerpo: { summary: "x" }, ifMatch: '"0"' });
   ok("pedirJSON con ifMatch y cuerpo", conMatch.status === 404);
 });

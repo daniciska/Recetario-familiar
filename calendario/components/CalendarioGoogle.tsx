@@ -50,7 +50,12 @@ interface PersonaVista {
   miembroId?: string;
   permiso: Permiso | null;
   rolGoogle: string | null;
-  estado: "ok" | "sinAcceso" | "pendiente" | "google";
+  /**
+   * ok · sinAcceso: se invitó desde el panel y ya no está en Google · pendiente: le falta el acceso pedido y
+   * el panel no puede invitar (pasos a mano; con rolGoogle, tiene otro permiso) · sinInvitar: le falta el
+   * acceso pedido y el panel YA puede invitar («Invitar ahora») · google: compartido en Google Calendar.
+   */
+  estado: "ok" | "sinAcceso" | "pendiente" | "sinInvitar" | "google";
   guardada: boolean;
   modo?: "panel" | "manual";
 }
@@ -66,8 +71,9 @@ interface Personas {
 /** Cómo se llama cada permiso en la pantalla de Google Calendar (en español). */
 const PERMISO_EN_GOOGLE: Record<Permiso, string> = {
   editor: "Realizar cambios y ver los detalles del evento",
-  lectura: "Ver todos los detalles del evento",
+  lectura: "Ver los detalles de todos los eventos",
 };
+const PERMISO_TEXTO: Record<Permiso, string> = { editor: "Editor", lectura: "Solo lectura" };
 const ADMINISTRAR = "Realizar cambios y administrar el uso compartido";
 const OPCIONES_ROL: { valor: RolAdulto; texto: string }[] = [
   { valor: "madre", texto: "Madre" },
@@ -80,6 +86,8 @@ const duenoA = (rol: RolAdulto) => (rol === "madre" ? "dueña" : rol === "padre"
 function adultoCompleto<T extends Partial<Adulto>>(a: T | null): a is T & Adulto {
   return !!a && !!a.nombre?.trim() && !!a.correo && CORREO.test(a.correo.trim()) && !!a.rol && a.rol in ROL_TEXTO;
 }
+/** Nombre y Gmail listos, pero sin rol (para decir qué falta junto al botón desactivado). */
+const soloFaltaRol = (a: Partial<Adulto> | null) => !!a && !a.rol && adultoCompleto({ ...a, rol: "adulto" });
 
 // Borradores de este equipo (preparar Google toma un rato: que no se pierda lo escrito).
 const CLAVE_DUENO = "calendario-familiar:google:dueno";
@@ -113,7 +121,11 @@ const AYUDA_CONFIGURACION = (
 export function SeccionGoogle() {
   const { nube } = useDatos();
   const sesion = leerSesion();
-  const { info, error } = useInfoCalendario();
+  const { info, error, cargar } = useInfoCalendario();
+  const [reintentando, setReintentando] = useState(false);
+  // Lo que avisó /conectar (p. ej. eventos con fechas sueltas que quedaron solo en la pared): vive aquí y
+  // no en <Preparar>, que se desmonta al pasar a <Conectado>. Sólo para esa conexión.
+  const [aviso, setAviso] = useState<{ conexion: string; texto: string } | null>(null);
 
   const titulo = <h2 className="mb-1 text-xl font-extrabold">📅 Calendario del iPhone (Google Calendar)</h2>;
   if (!nube || !sesion) {
@@ -132,17 +144,38 @@ export function SeccionGoogle() {
     <div className="rounded-3xl bg-superficie p-4">
       {titulo}
       {!info && !error && <p className="text-base text-tinta-suave">Cargando…</p>}
-      {!info && error && <p className="text-lg font-bold">{error}</p>}
-      {info && conexion && <Conectado conexion={conexion} correoPanel={g.correo} />}
+      {!info && error && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="min-w-48 flex-1 text-lg font-bold">{error}</p>
+          <Boton
+            disabled={reintentando}
+            onClick={async () => {
+              setReintentando(true);
+              await cargar();
+              setReintentando(false);
+            }}
+          >
+            {reintentando ? "Reintentando…" : "🔄 Reintentar"}
+          </Boton>
+        </div>
+      )}
+      {info && conexion && (
+        <Conectado
+          conexion={conexion}
+          correoPanel={g.correo}
+          aviso={aviso?.conexion === conexion.id ? aviso.texto : null}
+          alCerrarAviso={() => setAviso(null)}
+        />
+      )}
       {info && otra && <p className="text-lg">Hay otro calendario conectado («{otra.nombre}»): desconéctalo para usar Google Calendar.</p>}
-      {info && !conexion && !otra && <Preparar g={g} />}
+      {info && !conexion && !otra && <Preparar g={g} alAvisar={(conexion, texto) => setAviso({ conexion, texto })} />}
     </div>
   );
 }
 
 // ---------- Antes de conectar ----------
 
-function Preparar({ g }: { g: InfoGoogle }) {
+function Preparar({ g, alAvisar }: { g: InfoGoogle; alAvisar: (conexion: string, texto: string) => void }) {
   const { estado, nube } = useDatos();
   const { ocupado, msg, setMsg, pedir } = usePedido();
   const [dueno, setDueno] = useState<Partial<Adulto> | null>(null);
@@ -162,7 +195,11 @@ function Preparar({ g }: { g: InfoGoogle }) {
   const quien = completo ? dueno.nombre.trim() : null;
   const conGmail = quien ? `Con el Gmail de ${quien}` : "Con el Gmail del adulto dueño del calendario";
   const listo = g.configurado && !g.otraFamilia && !!g.correo;
-  const sinVincular = estado.eventos.filter((x) => !x.externo && !x.soloPanel).length;
+  // Las repeticiones con fechas sueltas (vienen de otro calendario) quedan siempre sólo en la pared con
+  // Google: no se cuentan entre las que se suben.
+  const libres = estado.eventos.filter((x) => !x.externo && !x.soloPanel);
+  const conFechas = libres.filter((x) => !!x.fechas?.length).length;
+  const sinVincular = libres.length - conFechas;
   const cambiarId = (v: string) => {
     setId(v);
     setPrueba(null);
@@ -179,7 +216,11 @@ function Preparar({ g }: { g: InfoGoogle }) {
 
   const conectar = async (subirExistentes: boolean) => {
     if (!completo) return;
-    const r = await pedir<{ resultado?: { ok: boolean; pendiente?: boolean; error?: { mensaje: string } }; avisos?: string[] }>(
+    const r = await pedir<{
+      conexion?: { id: string; nombre: string };
+      resultado?: { ok: boolean; pendiente?: boolean; error?: { mensaje: string } };
+      avisos?: string[];
+    }>(
       "/api/calendario/conectar",
       { proveedor: "google", calendarioId: id, dueno, subirExistentes },
     );
@@ -192,7 +233,9 @@ function Preparar({ g }: { g: InfoGoogle }) {
     if (r.datos.resultado && !r.datos.resultado.ok) setMsg(r.datos.resultado.error?.mensaje ?? "La primera sincronización falló.");
     // Google lento: la conexión quedó, pero la primera sincronización no alcanzó; se sigue de inmediato.
     else if (r.datos.resultado?.pendiente) await pedir("/api/calendario/sincronizar", {});
-    if (avisos.length) setMsg(avisos.join(" "));
+    // Con la conexión, la sección pasa a «Conectado» y este paso se desmonta: el aviso lo guarda la sección.
+    if (avisos.length && r.datos.conexion) alAvisar(r.datos.conexion.id, avisos.join(" "));
+    else if (avisos.length) setMsg(avisos.join(" "));
     await cargarInfoCalendario();
     nube?.revisar();
   };
@@ -233,6 +276,7 @@ function Preparar({ g }: { g: InfoGoogle }) {
             >
               Listo
             </Boton>
+            {soloFaltaRol(dueno) && <p className="text-base font-bold">Elige si es Madre, Padre u Otro adulto.</p>}
           </div>
         )}
       </Paso>
@@ -251,7 +295,8 @@ function Preparar({ g }: { g: InfoGoogle }) {
           <ol className="list-decimal space-y-1.5 pl-6 text-base">
             <li>
               {conGmail}, en <strong>calendar.google.com</strong> (en un computador): junto a «Otros calendarios», toca <strong>+</strong> →
-              Crear calendario → nombre <strong>Familia</strong> y zona horaria <strong>(GMT-03:00) Santiago</strong>.
+              Crear calendario → nombre <strong>Familia</strong> y zona horaria <strong>Santiago</strong> (sale como «(GMT-03:00) Santiago» en
+              verano y «(GMT-04:00) Santiago» en invierno).
             </li>
             <li>
               {conGmail}, en <strong>console.cloud.google.com</strong>: crea un proyecto, habilita «Google Calendar API» y crea una cuenta de
@@ -276,9 +321,9 @@ function Preparar({ g }: { g: InfoGoogle }) {
         <>
           <Paso n={2} titulo="Compartir «Familia» con el panel">
             <p className="mb-2 text-base">
-              {conGmail}, en calendar.google.com → junto a «Familia», <strong>⋮</strong> → Configuración y uso compartido → Compartir con
-              personas específicas → Agregar personas y grupos → pega este correo con el permiso <strong>«{ADMINISTRAR}»</strong> (así el
-              panel puede invitar al resto):
+              {conGmail}, en calendar.google.com → junto a «Familia», <strong>⋮</strong> → Configuración y uso compartido → Compartido con →
+              Agregar personas y grupos → pega este correo con el permiso <strong>«{ADMINISTRAR}»</strong> (así el panel puede invitar al
+              resto):
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <code className="min-w-0 flex-1 break-all rounded-2xl bg-fondo px-4 py-3 text-lg font-bold">{g.correo}</code>
@@ -324,7 +369,13 @@ function Preparar({ g }: { g: InfoGoogle }) {
           alCerrar={() => setConectando(false)}
           ancho="max-w-lg"
           pie={
-            <ConectarPie ocupado={ocupado} alCancelar={() => setConectando(false)} alConectar={conectar} sinVincular={sinVincular} />
+            <ConectarPie
+              ocupado={ocupado}
+              alCancelar={() => setConectando(false)}
+              alConectar={conectar}
+              sinVincular={sinVincular}
+              conFechas={conFechas}
+            />
           }
         >
           <p className="text-lg">
@@ -341,11 +392,14 @@ function Preparar({ g }: { g: InfoGoogle }) {
 function ConectarPie({
   ocupado,
   sinVincular,
+  conFechas,
   alCancelar,
   alConectar,
 }: {
   ocupado: boolean;
   sinVincular: number;
+  /** Repeticiones con fechas sueltas: quedan sólo en la pared igual. */
+  conFechas: number;
   alCancelar: () => void;
   alConectar: (subir: boolean) => void;
 }) {
@@ -353,6 +407,13 @@ function ConectarPie({
   return (
     <div className="flex w-full flex-col gap-3">
       <SubirExistentes n={sinVincular} subir={subir} alCambiar={setSubir} />
+      {conFechas > 0 && (
+        <p className="text-base text-tinta-suave">
+          {conFechas === 1
+            ? "1 evento con fechas sueltas (una repetición que vino de otro calendario) queda solo en la pared."
+            : `${conFechas} eventos con fechas sueltas (repeticiones que vinieron de otro calendario) quedan solo en la pared.`}
+        </p>
+      )}
       <div className="flex flex-wrap justify-end gap-3">
         <Boton variante="fantasma" onClick={alCancelar}>
           Cancelar
@@ -486,7 +547,10 @@ function FormularioAdulto({
       </div>
       <div>
         <span className="mb-1.5 block text-base font-bold text-tinta-suave">Es</span>
-        <Segmentos opciones={OPCIONES_ROL} valor={(valor.rol ?? "") as RolAdulto} alCambiar={(rol) => set({ rol })} />
+        {/* Marco blanco: sobre el fondo del paso (superficie-2) el selector solo no se distingue. */}
+        <div className="inline-block rounded-[1.25rem] border border-borde bg-superficie p-1">
+          <Segmentos opciones={OPCIONES_ROL} valor={(valor.rol ?? "") as RolAdulto} alCambiar={(rol) => set({ rol })} />
+        </div>
       </div>
     </div>
   );
@@ -494,7 +558,18 @@ function FormularioAdulto({
 
 // ---------- Conectado ----------
 
-function Conectado({ conexion, correoPanel }: { conexion: Conexion; correoPanel?: string }) {
+function Conectado({
+  conexion,
+  correoPanel,
+  aviso,
+  alCerrarAviso,
+}: {
+  conexion: Conexion;
+  correoPanel?: string;
+  /** Lo que avisó /conectar (se ve hasta tocar «Entendido»). */
+  aviso: string | null;
+  alCerrarAviso: () => void;
+}) {
   const panel = correoPanel ?? "el correo del panel";
   const d = conexion.dueno;
   return (
@@ -520,6 +595,14 @@ function Conectado({ conexion, correoPanel }: { conexion: Conexion; correoPanel?
               Es del Gmail de {d.nombre} ({ROL_TEXTO[d.rol]}).
             </p>
           )}
+          {aviso && (
+            <div role="status" className="mb-3 flex flex-wrap items-center gap-3 rounded-2xl bg-superficie-2 px-4 py-3">
+              <p className="min-w-48 flex-1 text-lg font-bold">⚠️ {aviso}</p>
+              <Boton variante="fantasma" onClick={alCerrarAviso}>
+                Entendido
+              </Boton>
+            </div>
+          )}
         </>
       }
     >
@@ -543,17 +626,28 @@ function Conectado({ conexion, correoPanel }: { conexion: Conexion; correoPanel?
   );
 }
 
-/** "Pídele a {dueño} que en calendar.google.com…" (cuando el panel no puede compartir). */
-function textoManual(dueno: Adulto | null | undefined, correo: string, accion: "agregar" | "cambiar" | "quitar", permiso?: Permiso) {
+/**
+ * "Pídele a {dueño} que en calendar.google.com…" (cuando el panel no puede compartir). `calendario`: el
+ * nombre del calendario conectado. `despues`: qué tocar en el panel una vez que el panel pueda compartir
+ * (en la fila de una persona que falta: «Invitar ahora»).
+ */
+function textoManual(
+  dueno: Adulto | null | undefined,
+  correo: string,
+  accion: "agregar" | "cambiar" | "quitar",
+  permiso: Permiso | undefined,
+  calendario: string,
+  despues = accion === "quitar" ? "toca «Quitar» en su fila" : "toca «Invitar ahora» en su fila",
+) {
   const quien = dueno?.nombre ?? "quien es dueño del calendario";
-  const donde = "en calendar.google.com → Familia → Configuración y uso compartido → Compartir con personas específicas";
+  const donde = `en calendar.google.com → ${calendario} → Configuración y uso compartido → Compartido con`;
   const que =
     accion === "agregar"
-      ? `agregue ${correo} con «${PERMISO_EN_GOOGLE[permiso ?? "editor"]}»`
+      ? `toque «Agregar personas y grupos» y agregue ${correo} con «${PERMISO_EN_GOOGLE[permiso ?? "editor"]}»`
       : accion === "cambiar"
         ? `le cambie el permiso a ${correo} por «${PERMISO_EN_GOOGLE[permiso ?? "editor"]}»`
         : `quite a ${correo} (con la ✕ junto a su nombre)`;
-  return `El panel no tiene permiso para compartir. Pídele a ${quien} que ${donde} ${que}. O comparte el calendario con el panel con «${ADMINISTRAR}» para que lo haga solo.`;
+  return `El panel no tiene permiso para compartir. Pídele a ${quien} que ${donde}, ${que}. O comparte el calendario con el panel con «${ADMINISTRAR}» y después ${despues}.`;
 }
 
 function textoListo(correo: string, permiso: Permiso) {
@@ -573,13 +667,17 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
   const [quitando, setQuitando] = useState<PersonaVista | null>(null);
   const [editandoDueno, setEditandoDueno] = useState<Partial<Adulto> | null>(null);
 
-  const cargar = async () => {
+  const cargar = async (): Promise<Personas | null> => {
     setCargando(true);
     const r = await pedir<Personas>("/api/calendario/personas", undefined, "GET");
     setCargando(false);
-    if (!r) return;
-    if (r.status !== 200) return setMsg(r.datos.error ?? "No se pudo ver con quién se comparte el calendario.");
+    if (!r) return null;
+    if (r.status !== 200) {
+      setMsg(r.datos.error ?? "No se pudo ver con quién se comparte el calendario.");
+      return null;
+    }
     setDatos(r.datos);
+    return r.datos;
   };
   useEffect(() => {
     void cargar();
@@ -589,24 +687,23 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
   const dueno = datos?.dueno ?? conexion.dueno ?? null;
   const miembro = (id?: string) => estado.miembros.find((m) => m.id === id);
 
-  const invitar = async (p: Partial<Adulto> & { permiso?: Permiso }) => {
+  /** `alGuardar`: se llama apenas quedó guardada (p. ej. cerrar la ventana antes de mostrar el resultado). */
+  const invitar = async (p: Partial<Adulto> & { permiso?: Permiso }, alGuardar?: () => void) => {
     const r = await pedir<{ modo: "panel" | "manual"; igual?: boolean; persona: { correo: string; permiso: Permiso } }>("/api/calendario/invitar", p);
-    if (!r) return false;
-    if (r.status !== 200) {
-      setMsg(r.datos.error ?? "No se pudo invitar.");
-      return false;
-    }
+    if (!r) return;
+    if (r.status !== 200) return setMsg(r.datos.error ?? "No se pudo invitar.");
+    alGuardar?.();
     const { correo, permiso } = r.datos.persona;
-    await cargar();
+    const lista = await cargar();
+    const ya = lista?.personas.find((x) => x.correo === correo)?.estado === "ok";
     setMsg(
       // Los pasos para hacerlo a mano quedan en la fila de esa persona (aquí arriba): no se repiten.
-      r.datos.modo === "manual"
+      r.datos.modo === "manual" && !ya
         ? `El panel no tiene permiso para compartir: ${correo} quedó en la lista, pero falta compartirlo a mano (los pasos están en su fila, aquí arriba).`
-        : r.datos.igual
+        : r.datos.igual || r.datos.modo === "manual"
           ? `${correo} ya tenía ese permiso en Google Calendar.`
           : textoListo(correo, permiso),
     );
-    return true;
   };
 
   const cambiarPermiso = async (p: PersonaVista, permiso: Permiso) => {
@@ -618,7 +715,7 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     else {
       setMsg(
         r.datos.modo === "manual"
-          ? textoManual(dueno, p.correo, "cambiar", permiso)
+          ? textoManual(dueno, p.correo, "cambiar", permiso, conexion.nombre, `vuelve a tocar «${PERMISO_TEXTO[permiso]}» en su fila`)
           : permiso === "lectura"
             ? `${p.nombre ?? p.correo} ahora tiene «Solo lectura»: ve los eventos en su iPhone, pero no los puede cambiar.`
             : `${p.nombre ?? p.correo} ahora es «Editor»: ve y cambia los eventos desde su iPhone.`,
@@ -632,7 +729,7 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     if (!r) return;
     await cargar();
     if (r.status !== 200) setMsg(r.datos.error ?? "No se pudo quitar.");
-    else setMsg(r.datos.modo === "manual" ? textoManual(dueno, p.correo, "quitar") : `${p.nombre ?? p.correo} ya no ve el calendario.`);
+    else setMsg(r.datos.modo === "manual" ? textoManual(dueno, p.correo, "quitar", undefined, conexion.nombre) : `${p.nombre ?? p.correo} ya no ve el calendario.`);
   };
 
   const guardarDueno = async (a: Adulto) => {
@@ -642,6 +739,27 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
     setEditandoDueno(null);
     await Promise.all([cargar(), cargarInfoCalendario()]);
   };
+
+  // Los dos formularios muestran su propio error (detrás de la ventana no se vería): al abrirlos y al
+  // cancelarlos se borra el mensaje anterior. Al guardar bien se cierran sin borrarlo (es el resultado).
+  const abrirInvitar = () => {
+    setMsg(null);
+    setInvitando({ permiso: "editor" });
+  };
+  const cancelarInvitar = () => {
+    setInvitando(null);
+    setMsg(null);
+  };
+  const abrirDueno = (a: Adulto) => {
+    setMsg(null);
+    setEditandoDueno({ ...a });
+  };
+  const cancelarDueno = () => {
+    setEditandoDueno(null);
+    setMsg(null);
+  };
+  const enVentana = !!invitando || !!editandoDueno;
+  const hayPendientes = !!datos?.personas.some((p) => p.estado === "pendiente");
 
   return (
     <section className="mt-4 rounded-2xl bg-superficie-2 px-4 py-3">
@@ -657,7 +775,7 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
             </p>
             <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{dueno.correo}</p>
           </div>
-          <Boton variante="fantasma" disabled={ocupado} onClick={() => setEditandoDueno({ ...dueno })}>
+          <Boton variante="fantasma" disabled={ocupado} onClick={() => abrirDueno(dueno)}>
             Cambiar
           </Boton>
         </div>
@@ -670,10 +788,16 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
 
       {datos?.aviso && <p className="mb-2 text-base font-bold">{datos.aviso}</p>}
       {datos && !datos.puedeInvitar && !datos.aviso && (
-        <p className="mb-2 text-base text-tinta-suave">
-          El panel no puede invitar (se compartió sin «administrar el uso compartido»): las invitaciones se hacen a mano en Google Calendar.
-          Para que el panel lo haga solo, comparte el calendario con {datos.correoPanel} con «{ADMINISTRAR}».
-        </p>
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <p className="min-w-48 flex-1 text-base text-tinta-suave">
+            El panel no puede invitar (se compartió sin «administrar el uso compartido»): las invitaciones se hacen a mano en Google Calendar.
+            Para que el panel pueda invitar, comparte el calendario con {datos.correoPanel} con «{ADMINISTRAR}»
+            {hayPendientes ? ", toca «Revisar de nuevo» y después «Invitar ahora» en la fila de quien falte." : "."}
+          </p>
+          <Boton variante="fantasma" disabled={ocupado} onClick={() => void cargar()}>
+            🔄 Revisar de nuevo
+          </Boton>
+        </div>
       )}
 
       {datos && (
@@ -684,10 +808,11 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
               p={p}
               miembro={miembro(p.miembroId)}
               ocupado={ocupado}
-              textoPendiente={textoManual(dueno, p.correo, "agregar", p.permiso ?? "editor")}
+              // Sin regla en Google: agregarla; con una de otro permiso (rolGoogle): cambiársela.
+              textoPendiente={textoManual(dueno, p.correo, p.rolGoogle ? "cambiar" : "agregar", p.permiso ?? "editor", conexion.nombre)}
               alCambiarPermiso={(v) => cambiarPermiso(p, v)}
               alQuitar={() => setQuitando(p)}
-              alInvitarDeNuevo={() =>
+              alInvitar={() =>
                 void invitar({ nombre: p.nombre ?? p.correo, correo: p.correo, rol: p.rol ?? "adulto", miembroId: p.miembroId, permiso: p.permiso ?? "editor" })
               }
             />
@@ -697,11 +822,11 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Boton variante="primario" disabled={ocupado} onClick={() => setInvitando({ permiso: "editor" })}>
+        <Boton variante="primario" disabled={ocupado} onClick={abrirInvitar}>
           ✉️ Invitar a otro adulto
         </Boton>
       </div>
-      {msg && (
+      {msg && !enVentana && (
         <p className="mt-3 text-lg font-bold" role="status">
           {msg}
         </p>
@@ -710,19 +835,18 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
       {invitando && (
         <Modal
           titulo="Invitar a otro adulto"
-          alCerrar={() => setInvitando(null)}
+          alCerrar={cancelarInvitar}
           ancho="max-w-xl"
           pie={
             <>
-              <Boton variante="fantasma" onClick={() => setInvitando(null)}>
+              <ErrorVentana msg={msg} />
+              <Boton variante="fantasma" onClick={cancelarInvitar}>
                 Cancelar
               </Boton>
               <Boton
                 variante="primario"
                 disabled={ocupado || !adultoCompleto(invitando) || !invitando.permiso}
-                onClick={async () => {
-                  if (await invitar(invitando)) setInvitando(null);
-                }}
+                onClick={() => void invitar(invitando, () => setInvitando(null))}
               >
                 {ocupado ? "Enviando…" : "✉️ Enviar invitación"}
               </Boton>
@@ -793,11 +917,12 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
       {editandoDueno && (
         <Modal
           titulo="¿De quién es el calendario?"
-          alCerrar={() => setEditandoDueno(null)}
+          alCerrar={cancelarDueno}
           ancho="max-w-xl"
           pie={
             <>
-              <Boton variante="fantasma" onClick={() => setEditandoDueno(null)}>
+              <ErrorVentana msg={msg} />
+              <Boton variante="fantasma" onClick={cancelarDueno}>
                 Cancelar
               </Boton>
               <Boton
@@ -822,6 +947,16 @@ function QuienesLoVen({ conexion }: { conexion: Conexion }) {
   );
 }
 
+/** El error de un formulario, dentro de su ventana (en el pie, siempre a la vista). */
+function ErrorVentana({ msg }: { msg: ReactNode }) {
+  if (!msg) return null;
+  return (
+    <p role="alert" className="w-full rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-800 noche:text-red-200">
+      {msg}
+    </p>
+  );
+}
+
 function FilaPersona({
   p,
   miembro,
@@ -829,27 +964,32 @@ function FilaPersona({
   textoPendiente,
   alCambiarPermiso,
   alQuitar,
-  alInvitarDeNuevo,
+  alInvitar,
 }: {
   p: PersonaVista;
   miembro?: Miembro;
   ocupado: boolean;
+  /** Los pasos a mano (sólo en «pendiente»). */
   textoPendiente: string;
   alCambiarPermiso: (v: Permiso) => void;
   alQuitar: () => void;
-  alInvitarDeNuevo: () => void;
+  /** Invitar con lo guardado («Invitar de nuevo» / «Invitar ahora»). */
+  alInvitar: () => void;
 }) {
   const administra = p.rolGoogle === "owner";
+  const falta = p.estado === "sinAcceso" || p.estado === "pendiente" || p.estado === "sinInvitar";
   const etiqueta =
     p.estado === "sinAcceso"
       ? "ya no tiene acceso"
       : p.estado === "pendiente"
         ? "falta compartirlo a mano"
-        : p.estado === "google"
-          ? administra
-            ? "administra el calendario en Google"
-            : "compartido en Google Calendar"
-          : null;
+        : p.estado === "sinInvitar"
+          ? "falta compartirlo"
+          : p.estado === "google"
+            ? administra
+              ? "administra el calendario en Google"
+              : "compartido en Google Calendar"
+            : null;
   return (
     <li className="rounded-2xl bg-superficie px-3 py-2">
       <div className="flex flex-wrap items-center gap-3">
@@ -862,7 +1002,7 @@ function FilaPersona({
               <span
                 className={cx(
                   "ml-2 inline-block rounded-full px-2.5 py-0.5 text-sm font-bold",
-                  p.estado === "sinAcceso" || p.estado === "pendiente" ? "bg-red-600/15 text-red-800 noche:text-red-200" : "bg-superficie-2",
+                  falta ? "bg-red-600/15 text-red-800 noche:text-red-200" : "bg-superficie-2",
                 )}
               >
                 {etiqueta}
@@ -871,7 +1011,7 @@ function FilaPersona({
           </p>
           {p.nombre && <p className="text-base text-tinta-suave [overflow-wrap:anywhere]">{p.correo}</p>}
         </div>
-        {!administra && p.estado !== "sinAcceso" && p.estado !== "pendiente" && p.permiso && (
+        {!administra && !falta && p.permiso && (
           <Segmentos
             opciones={[
               { valor: "editor", texto: "Editor" },
@@ -881,9 +1021,9 @@ function FilaPersona({
             alCambiar={(v) => !ocupado && v !== p.permiso && alCambiarPermiso(v)}
           />
         )}
-        {p.estado === "sinAcceso" && (
-          <Boton disabled={ocupado} onClick={alInvitarDeNuevo}>
-            ✉️ Invitar de nuevo
+        {(p.estado === "sinAcceso" || p.estado === "sinInvitar") && (
+          <Boton variante={p.estado === "sinInvitar" ? "primario" : undefined} disabled={ocupado} onClick={alInvitar}>
+            {p.estado === "sinInvitar" ? "✉️ Invitar ahora" : "✉️ Invitar de nuevo"}
           </Boton>
         )}
         {!administra && (
@@ -893,6 +1033,11 @@ function FilaPersona({
         )}
       </div>
       {p.estado === "pendiente" && <p className="mt-2 text-base">{textoPendiente}</p>}
+      {p.estado === "sinInvitar" && (
+        <p className="mt-2 text-base">
+          El panel ya puede compartir: toca «Invitar ahora» para darle «{PERMISO_TEXTO[p.permiso ?? "editor"]}».
+        </p>
+      )}
     </li>
   );
 }

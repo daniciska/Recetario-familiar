@@ -146,7 +146,7 @@ const todosLosCuerpos: Cuerpo[] = [];
 function guardar(p: Plan | NoSePuedeEscribir) {
   if (p instanceof Error) return;
   if (p.maestro) todosLosCuerpos.push(p.maestro);
-  for (const o of p.ops) todosLosCuerpos.push(o.cuerpo);
+  for (const o of [...p.ops, ...(p.seguir ?? [])]) todosLosCuerpos.push(o.cuerpo);
 }
 const mensaje = (p: Plan | NoSePuedeEscribir) => (p instanceof Error ? p.message : "");
 
@@ -299,6 +299,67 @@ caso("C2: otros casos", () => {
   );
   const orden = plan(natacion(), (l) => l.filter(esPrincipal).map((e) => ({ ...e, excepciones: [...e.excepciones!, "2026-12-02"] })));
   ok("dos cancelar en orden de fecha", !(orden instanceof Error) && orden.ops.map((o) => o.fecha).join() === "2026-11-18,2026-12-02", sinPieza(orden));
+});
+
+caso("C2b: las fantasmas reciben lo mismo que el principal (seguir)", () => {
+  const T = (nombre: string, p: Plan | NoSePuedeEscribir, cond: (p: Plan, seguir: Plan["seguir"]) => boolean) => {
+    guardar(p);
+    ok(nombre, !(p instanceof Error) && cond(p, p.seguir ?? []), sinPieza(p));
+  };
+  const fid = fantasmaNat().id;
+  T(
+    "título de la serie → maestro.summary y la fantasma con el mismo summary (después del principal); ningún otro día",
+    plan(natacion(), enPrincipal((e) => ({ ...e, titulo: "Natación y clavados" }))),
+    (p, seguir) =>
+      claves(p.maestro) === "summary" &&
+      !p.ops.length &&
+      seguir.length === 1 &&
+      seguir[0].id === fid &&
+      seguir[0].etag === '"3"' &&
+      seguir[0].tipo === "cambiar" &&
+      claves(seguir[0].cuerpo) === "summary" &&
+      seguir[0].cuerpo.summary === "🦄 Natación y clavados" &&
+      seguir[0].fecha === "2026-12-02" &&
+      !p.sinSeguir,
+  );
+  T(
+    "nota y lugar de la serie → la fantasma con description y location",
+    plan(natacion(), enPrincipal((e) => ({ ...e, nota: "Llevar gorro", lugar: "Piscina olímpica" }))),
+    (p, seguir) => claves(p.maestro) === "description,location" && seguir.length === 1 && claves(seguir[0].cuerpo) === "description,location" && seguir[0].cuerpo.location === "Piscina olímpica" && seguir[0].cuerpo.description === "Llevar gorro",
+  );
+  T(
+    "hora de término de la serie → la fantasma conserva su inicio y termina con la duración nueva",
+    plan(natacion(), enPrincipal((e) => ({ ...e, horaFin: "10:30" }))),
+    (p, seguir) =>
+      claves(p.maestro) === "end,start" &&
+      seguir.length === 1 &&
+      claves(seguir[0].cuerpo) === "end,start" &&
+      JSON.stringify(seguir[0].cuerpo.start) === JSON.stringify({ date: null, dateTime: "2026-12-02T09:00:00-03:00", timeZone: SCL }) &&
+      JSON.stringify(seguir[0].cuerpo.end) === JSON.stringify({ date: null, dateTime: "2026-12-02T10:30:00-03:00", timeZone: SCL }),
+  );
+  T(
+    "la marca de la fantasma es la huella de cómo queda (igual a la serie nueva)",
+    plan(natacion(), enPrincipal((e) => ({ ...e, titulo: "Natación y clavados" }))),
+    (_p, seguir) => (seguir[0]?.cuerpo.extendedProperties as { private?: { cfh?: string } })?.private?.cfh === huellaPieza(fusionar(fantasmaNat(), { summary: "🦄 Natación y clavados" })),
+  );
+  T(
+    "borrar el día de la fantasma y cambiar el título → se cancela y no se la pone al día",
+    plan(natacion(), enPrincipal((e) => ({ ...e, titulo: "Otro", excepciones: [...e.excepciones!, "2026-12-02"] }))),
+    (p, seguir) => claves(p.maestro) === "summary" && p.ops.length === 1 && p.ops[0].tipo === "cancelar" && p.ops[0].id === fid && !seguir.length,
+  );
+  T("sólo la repetición («hasta») → a la fantasma no se le manda nada", plan(natacion(), enPrincipal((e) => ({ ...e, repetirHasta: "2027-03-31" }))), (p, seguir) => claves(p.maestro) === "recurrence" && !seguir.length);
+  T("sólo un día cambiado → a la fantasma no se le manda nada", plan(natacion(), (l) => l.map((e) => (esPrincipal(e) ? e : { ...e, lugar: "Piscina 2" }))), (p, seguir) => !p.maestro && p.ops.length === 1 && !seguir.length);
+  // Muchas fantasmas: hasta MAX_SEGUIR (por fecha); las demás quedan contadas en sinSeguir.
+  const muchas = Array.from({ length: 12 }, (_, i): EvG => {
+    const d = new Date(Date.UTC(2026, 10, 25 + 7 * i));
+    const f = d.toISOString().slice(0, 10);
+    return { ...fantasmaNat(), id: `${idNat}_${f.replace(/-/g, "")}T120000Z`, etag: `"f${i}"`, originalStartTime: h(`${f}T09:00:00-03:00`), start: h(`${f}T09:00:00-03:00`), end: h(`${f}T10:00:00-03:00`) };
+  });
+  T(
+    "12 fantasmas → se ponen al día las 10 primeras y quedan 2 en sinSeguir",
+    plan([principalNat(), ...muchas], enPrincipal((e) => ({ ...e, titulo: "Natación (todas)" }))),
+    (p, seguir) => seguir.length === 10 && p.sinSeguir === 2 && seguir[0].fecha === "2026-11-25" && seguir[9].fecha === "2027-01-27",
+  );
 });
 
 caso("cuerpos: nunca campos que no son del panel; siempre la marca", () => {

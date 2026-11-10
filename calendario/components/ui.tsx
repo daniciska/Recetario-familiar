@@ -143,6 +143,7 @@ export function Segmentos<T extends string>({
         <button
           key={o.valor}
           type="button"
+          aria-pressed={o.valor === valor}
           onClick={() => alCambiar(o.valor)}
           className={cx(
             "min-h-11 rounded-xl px-4 text-lg font-bold transition",

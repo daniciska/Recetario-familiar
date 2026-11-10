@@ -445,16 +445,15 @@ export class GoogleCalendar implements Transporte {
   }
 
   /**
-   * PATCH de una pieza con If-Match. `primero`: nada se escribió todavía en esta operación (los
-   * errores se pueden informar como NoSePuedeEscribir); si no, un rechazo sólo deja un aviso.
+   * PATCH de una pieza con If-Match. Un rechazo de Google (400, 403 de un evento no editable) vuelve como
+   * NoSePuedeEscribir (sin lanzarlo): quien llama decide si es todo el cambio o sólo una parte.
    */
   private async parche(
     calId: string,
     pieza: EvG,
     cuerpo: Cuerpo,
     T: string,
-    primero: boolean,
-  ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } | "conflicto" | "noExiste" | "rechazado"> {
+  ): Promise<{ json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } | "conflicto" | "noExiste" | NoSePuedeEscribir> {
     const ruta = `${rutaCalendario(calId)}/events/${encodeURIComponent(pieza.id)}`;
     const pedir = (c: Cuerpo) => this.pedirJSON("PATCH", ruta, { query: { fields: CAMPOS_PATCH }, cuerpo: c, ...(pieza.etag ? { ifMatch: pieza.etag } : {}) });
     let enviado = cuerpo;
@@ -471,16 +470,12 @@ export class GoogleCalendar implements Transporte {
       return { json: r.json, enviado, sinFin };
     }
     if (r.status === 412 || r.status === 409) return "conflicto";
-    if (r.status === 404 || r.status === 410) return primero ? "noExiste" : "conflicto";
+    if (r.status === 404 || r.status === 410) return "noExiste";
     const rechazo = r.status === 400 || (r.status === 403 && NO_EDITABLE.has(r.motivo));
     if (!rechazo) throw this.errorDe(r, "cambiar el calendario");
-    if (!primero) {
-      this.avisar(`Google Calendar no aceptó parte del cambio de "${T}".`);
-      return "rechazado";
-    }
-    if (r.status === 403) throw new NoSePuedeEscribir(noEditableTexto(T));
-    if (sinFin) throw new NoSePuedeEscribir(sinHoraDeTerminoTexto(T));
-    throw new NoSePuedeEscribir(`Google Calendar no aceptó "${T}"${r.mensaje ? `: ${r.mensaje}` : ""}.`);
+    if (r.status === 403) return new NoSePuedeEscribir(noEditableTexto(T));
+    if (sinFin) return new NoSePuedeEscribir(sinHoraDeTerminoTexto(T));
+    return new NoSePuedeEscribir(`Google Calendar no aceptó "${T}"${r.mensaje ? `: ${r.mensaje}` : ""}.`);
   }
 
   async actualizar(url: string, href: string, ics: string, etag: string): Promise<{ etag: string | null } | "conflicto" | "noExiste"> {
@@ -508,25 +503,34 @@ export class GoogleCalendar implements Transporte {
       if (!etag || r.sinFin) previsible = false;
       return { ...fusionar(pieza, r.enviado), etag };
     };
+    // Lo que Google rechaza (400, evento no editable) no se reintenta: se sigue con lo demás. Si al final no
+    // se escribió nada, es NoSePuedeEscribir (el motor deja lo de Google, con el aviso de Google); si algo
+    // sí, queda un aviso y la vuelta siguiente relee lo que quedó.
+    let rechazo: NoSePuedeEscribir | null = null;
+    const rechazada = (e: NoSePuedeEscribir) => {
+      rechazo ??= e;
+      previsible = false;
+    };
     // 1. Las excepciones, antes que el principal: si Google pasa a las excepciones un título nuevo del
     //    principal, su If-Match (del listado) ya no serviría y ese cambio del día se perdería. Una excepción
     //    que ya no está o que cambió es "conflicto" (nunca "noExiste": la serie sigue ahí); la vuelta
     //    siguiente la relee.
     for (const op of plan.ops) {
-      const r = await this.parche(url, op.pieza, op.cuerpo, T, escritos === 0);
+      const r = await this.parche(url, op.pieza, op.cuerpo, T);
       if (r === "conflicto" || r === "noExiste") return "conflicto";
-      if (r === "rechazado") previsible = false;
+      if (r instanceof NoSePuedeEscribir) rechazada(r);
       else {
         escritos++;
         piezas.set(op.pieza.id, despues(op.pieza, r));
       }
     }
-    // 2. El principal ("noExiste" sólo si es el primer pedido: la serie ya no está).
+    // 2. El principal ("noExiste" sólo si no se escribió nada antes: la serie ya no está).
     let principalEscrito = false;
     if (plan.maestro) {
-      const r = await this.parche(url, serie.principal!, plan.maestro, T, escritos === 0);
-      if (r === "conflicto" || r === "noExiste") return r;
-      if (r === "rechazado") previsible = false;
+      const r = await this.parche(url, serie.principal!, plan.maestro, T);
+      if (r === "conflicto") return r;
+      if (r === "noExiste") return escritos ? "conflicto" : "noExiste";
+      if (r instanceof NoSePuedeEscribir) rechazada(r);
       else {
         escritos++;
         principalEscrito = true;
@@ -541,6 +545,9 @@ export class GoogleCalendar implements Transporte {
         }
       }
     }
+    if (rechazo && !escritos) throw rechazo;
+    const parteRechazada = () => this.avisar(`Google Calendar no aceptó parte del cambio de "${T}".`);
+    if (rechazo) parteRechazada();
     // 3. Las fantasmas, sólo con el principal ya escrito (antes, una fantasma cambiada sería un día distinto
     //    de la serie vieja que la pared no tiene). Si una no se puede (Google ya le pasó el cambio y su
     //    If-Match quedó viejo, o alguien la tocó), no se pisa: la vuelta siguiente relee lo que quedó.
@@ -549,7 +556,7 @@ export class GoogleCalendar implements Transporte {
     const faltanDias = () => this.avisar(`"${T}": el cambio no se alcanzó a pasar a todos sus días en Google Calendar; los que faltan quedaron como días cambiados.`);
     if (principalEscrito) {
       for (const op of plan.seguir) {
-        const r = await this.parche(url, op.pieza, op.cuerpo, T, false).catch((e: unknown) => {
+        const r = await this.parche(url, op.pieza, op.cuerpo, T).catch((e: unknown) => {
           if (e instanceof ErrorCalDAV) return "corte" as const;
           throw e;
         });
@@ -558,8 +565,11 @@ export class GoogleCalendar implements Transporte {
           faltanDias();
           break;
         }
-        if (r === "conflicto" || r === "noExiste" || r === "rechazado") previsible = false;
-        else piezas.set(op.pieza.id, despues(op.pieza, r));
+        if (r === "conflicto" || r === "noExiste") previsible = false;
+        else if (r instanceof NoSePuedeEscribir) {
+          previsible = false;
+          parteRechazada();
+        } else piezas.set(op.pieza.id, despues(op.pieza, r));
       }
       if (plan.sinSeguir) {
         previsible = false;

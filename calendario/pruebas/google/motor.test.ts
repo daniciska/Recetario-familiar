@@ -316,10 +316,48 @@ await caso("gana el más reciente", async () => {
   await quieto("gana Google", fam1, con1);
 });
 
-await caso("escritura a medias (TIEMPO entre el principal y un día cambiado)", async () => {
+await caso("título de la serie y lugar de un día cambiado en la misma tanda (Google pasa o no el título a las excepciones)", async () => {
+  // Los PATCH de las excepciones van antes que el del principal: si Google pasa el título nuevo a las
+  // excepciones, el If-Match del día ya se usó y su cambio no se pierde (antes daba 412 y la vuelta
+  // siguiente traía lo de Google sin el lugar).
+  for (const propagar of [false, true]) {
+    sim.interruptores.propagarTituloAExcepciones = propagar;
+    try {
+      const cal = h.nuevoCalendario();
+      const con = h.conexionGoogle(cal);
+      const fam = await h.familia([ev("p1", { titulo: "Piano", repeticion: "semanal", fecha: "2026-11-16", horaInicio: "17:00", horaFin: "18:00" })]);
+      await h.sync(fam, con);
+      sim
+        .actor("web", cal)
+        .moverDia(gid("p1"), "2026-11-23", { dateTime: "2026-11-23T19:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-23T20:00:00-03:00", timeZone: "America/Santiago" });
+      await h.sync(fam, con);
+      await h.dormir(1100); // (`updated` va en segundos: que la pared sea claramente posterior)
+      await h.cambiarEvento(fam, "p1", { titulo: "Piano con la tía" });
+      const dia = (await h.leerEventos(fam)).find((e) => e.externo?.recurrencia);
+      if (!dia) throw new Error("no llegó el día cambiado");
+      await h.cambiarEvento(fam, dia.id, { lugar: "Casa de la tía" });
+      sim.reiniciarContadores();
+      const r = await h.sync(fam, con);
+      await h.sync(fam, con);
+      const l = await h.leerEventos(fam);
+      const g = h.vivos(cal).filter((e) => e.recurringEventId);
+      ok(
+        `${propagar ? "Google pasa" : "Google no pasa"} el título: el lugar del día queda en la pared y en Google, y la serie con su título nuevo`,
+        r.ok && l.find((e) => e.id === dia.id)?.lugar === "Casa de la tía" && g.length === 1 && g[0].location === "Casa de la tía" && sim.evento(cal, gid("p1"))?.summary === "🦄 Piano con la tía" && !sim.contadores.status?.["412"],
+        { r, l: l.map(h.resumen), g: g.map((e) => [e.summary, e.location]), status: sim.contadores.status },
+      );
+      await quieto(`título y día cambiado (${propagar ? "con" : "sin"} propagación)`, fam, con);
+    } finally {
+      sim.interruptores.propagarTituloAExcepciones = false;
+    }
+  }
+});
+
+await caso("escritura a medias (TIEMPO entre un día cambiado y el principal)", async () => {
   // Una serie con un día cambiado hecho en la web; en la pared se cambian la serie y ese día a la vez:
-  // son 2 PATCH. El segundo no alcanza (TIEMPO). La marca cfh hace que lo ya escrito por el panel no le
-  // gane a la pared: la vuelta siguiente termina el cambio en vez de revertirlo.
+  // son 2 PATCH, primero el del día y después el del principal. El segundo no alcanza (TIEMPO). La marca
+  // cfh hace que lo ya escrito por el panel no le gane a la pared: la vuelta siguiente termina el cambio en
+  // vez de revertirlo.
   const prepara = async () => {
     const cal = h.nuevoCalendario();
     const con = h.conexionGoogle(cal);
@@ -344,16 +382,16 @@ await caso("escritura a medias (TIEMPO entre el principal y un día cambiado)", 
   };
 
   const a = await prepara();
-  const freno = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === a.hijo.id, respuestas.demora(15_000));
+  const freno = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === gid("m1"), respuestas.demora(15_000));
   sim.reiniciarContadores();
   const r1 = await h.sync(a.fam, a.con, 5000);
   freno.quitar();
   const principal = sim.evento(a.cal, gid("m1"));
   const l1 = await h.leerEventos(a.fam);
   ok(
-    "vuelta cortada: el principal quedó escrito, el día no; sin error y pendiente",
-    r1.ok && r1.pendiente === true && principal?.summary === "🦄 Inglés avanzado" && !sim.evento(a.cal, a.hijo.id)?.location && freno.disparos === 1,
-    { r1, porTipo: sim.contadores.porTipo, principal: principal?.summary },
+    "vuelta cortada: el día quedó escrito, el principal no; sin error y pendiente",
+    r1.ok && r1.pendiente === true && principal?.summary === "🦄 Inglés" && sim.evento(a.cal, a.hijo.id)?.location === "Sala 2" && freno.disparos === 1,
+    { r1, porTipo: sim.contadores.porTipo, principal: principal?.summary, dia: sim.evento(a.cal, a.hijo.id)?.location },
   );
   ok("…y la pared no se revirtió", l1.find((e) => e.id === "m1")?.titulo === "Inglés avanzado" && l1.find((e) => e.id === a.dia.id)?.lugar === "Sala 2", l1.map(h.resumen));
   const r2 = await h.sync(a.fam, a.con);
@@ -366,9 +404,10 @@ await caso("escritura a medias (TIEMPO entre el principal y un día cambiado)", 
   await quieto("escritura a medias retomada", a.fam, a.con);
 
   // Lo mismo, pero un iPhone vuelve a guardar la serie y borra las extendedProperties (la marca): el
-  // principal pasa a ser "ajeno" y más reciente que la pared → gana Google y se pierde lo que no alcanzó.
+  // principal pasa a ser "ajeno" y más reciente que la pared → gana Google y se pierde lo que no alcanzó
+  // (el título); el día, que sí alcanzó, queda.
   const b = await prepara();
-  const freno2 = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === b.hijo.id, respuestas.demora(15_000));
+  const freno2 = sim.inyectar((p) => p.tipo === "events.patch" && p.eventoId === gid("m1"), respuestas.demora(15_000));
   await h.sync(b.fam, b.con, 5000);
   freno2.quitar();
   sim.interruptores.extendedPropsSeConservan = false;
@@ -377,8 +416,8 @@ await caso("escritura a medias (TIEMPO entre el principal y un día cambiado)", 
   await h.sync(b.fam, b.con);
   const l3 = await h.leerEventos(b.fam);
   ok(
-    "sin la marca (un iPhone borró las extendedProperties) gana Google: el día cambiado vuelve a lo de Google (documentado en RIESGOS)",
-    l3.find((e) => e.id === "m1")?.titulo === "Inglés avanzado" && !l3.find((e) => e.id === b.dia.id)?.lugar && !sim.evento(b.cal, b.hijo.id)?.location,
+    "sin la marca (un iPhone borró las extendedProperties) gana Google: la serie vuelve a lo de Google y el día que sí alcanzó queda (documentado en RIESGOS)",
+    l3.find((e) => e.id === "m1")?.titulo === "Inglés" && l3.find((e) => e.id === b.dia.id)?.lugar === "Sala 2" && sim.evento(b.cal, b.hijo.id)?.location === "Sala 2",
     l3.map(h.resumen),
   );
   await quieto("sin marca", b.fam, b.con);
@@ -408,13 +447,58 @@ await caso("recrear una serie con días cambiados y TIEMPO entre pasos", async (
   const nuevo = sim.evento(cal, gid("m2", 1));
   const avisos = await avisosDe(fam, con);
   ok(
-    "se recreó con gen1 y el día cambiado que no alcanzó queda con aviso «quedó como un día normal»",
-    r.ok && nuevo?.status === "confirmed" && nuevo.summary === "🦄 Yoga suave" && avisos.some((a) => /el día 27-11-2026 .*quedó como un día normal/.test(a)),
+    "se recreó con gen1 y el día cambiado que no alcanzó queda con aviso «no se alcanzó a pasar… quedó como un día normal» (sin decir que dejó de ser parte de la serie)",
+    r.ok &&
+      nuevo?.status === "confirmed" &&
+      nuevo.summary === "🦄 Yoga suave" &&
+      avisos.some((a) => /no se alcanzó a pasar a Google Calendar el cambio del día 27-11-2026; quedó como un día normal/.test(a)) &&
+      !avisos.some((a) => /ya no es parte de la serie/.test(a)),
     { r, nuevo: nuevo?.summary, avisos, disparos: freno.disparos },
   );
   await quieto("recrear con días cambiados", fam, con);
   const l = await h.leerEventos(fam);
   ok("la pared quedó como Google: la serie sin el día cambiado (sin duplicados)", l.length === 1 && l[0].titulo === "Yoga suave" && !l[0].excepciones?.includes("2026-11-27"), l.map(h.resumen));
+});
+
+await caso("recrear una serie con días cambiados y una falla pasajera en el día", async () => {
+  // Borrada en Google y cambiada en la pared → se vuelve a crear y el día cambiado es un GET de instances y
+  // un PATCH de la instancia. Un 5xx (o un límite de uso, o un corte de red) en esos pedidos se reintenta una
+  // vez si queda plazo. Si vuelve a fallar, el día queda normal y el aviso dice que no se alcanzó a pasar.
+  for (const veces of [1, 2]) {
+    const cal = h.nuevoCalendario();
+    const con = h.conexionGoogle(cal);
+    const fam = await h.familia([ev("t1", { titulo: "Taller", repeticion: "semanal", fecha: "2026-11-16", horaInicio: "17:00", horaFin: "18:00" })]);
+    await h.sync(fam, con);
+    sim
+      .actor("web", cal)
+      .moverDia(gid("t1"), "2026-11-23", { dateTime: "2026-11-23T19:00:00-03:00", timeZone: "America/Santiago" }, { dateTime: "2026-11-23T20:00:00-03:00", timeZone: "America/Santiago" });
+    await h.sync(fam, con);
+    sim.actor("web", cal).borrar(gid("t1"));
+    await h.cambiarEvento(fam, "t1", { lugar: "Sala nueva" });
+    const inj = sim.inyectar(es.tipo("events.patch"), respuestas.error("backendError"), veces);
+    const r = await h.sync(fam, con);
+    inj.quitar();
+    const avisos = await avisosDe(fam, con);
+    await h.sync(fam, con);
+    const l = await h.leerEventos(fam);
+    const dia = l.find((e) => e.externo?.recurrencia === "2026-11-23");
+    const enGoogle = h.vivos(cal).find((e) => e.recurringEventId === gid("t1", 1));
+    const detalle = { r, disparos: inj.disparos, avisos, l: l.map(h.resumen), enGoogle: enGoogle?.start };
+    if (veces === 1) {
+      ok(
+        "un 503 en el PATCH del día → se reintenta: el día sigue a las 19:00, en la pared y en Google, sin aviso",
+        r.ok && inj.disparos === 1 && dia?.horaInicio === "19:00" && /T19:00/.test(enGoogle?.start?.dateTime ?? "") && !avisos.some((a) => /23-11-2026/.test(a)),
+        detalle,
+      );
+    } else {
+      ok(
+        "dos 503 seguidos → el día queda normal, con el aviso «no se alcanzó a pasar… quedó como un día normal»",
+        r.ok && inj.disparos === 2 && !dia && avisos.some((a) => /"🦄 Taller": no se alcanzó a pasar a Google Calendar el cambio del día 23-11-2026; quedó como un día normal\./.test(a)),
+        detalle,
+      );
+    }
+    await quieto(`recrear con una falla pasajera (${veces})`, fam, con);
+  }
 });
 
 // =====================================================================================
@@ -655,6 +739,14 @@ await caso("límite de uso en un PATCH", async () => {
       !r.ok && r.error?.codigo === "SERVIDOR" && p?.titulo === `Feriado ${tipo}` && inj.disparos === 1,
       { r, p: p && h.resumen(p) },
     );
+    // «Se reintenta solo» lo agrega la sincronización (que sí reintenta), sólo a un límite de uso.
+    ok(
+      `${tipo}: el texto del error ${tipo === "backendError" ? "no promete reintentos" : "dice que se reintenta solo"}`,
+      tipo === "backendError"
+        ? !/reintenta/.test(r.error?.mensaje ?? "")
+        : r.error?.mensaje === "Google Calendar pidió esperar un momento (límite de uso). Se reintenta solo.",
+      r.error,
+    );
     const r2 = await h.sync(fam1, con1);
     ok(`${tipo}: la vuelta siguiente lo sube`, r2.ok && !r2.error && sim.evento(cal1, gid("r09"))?.summary === `Feriado ${tipo}`, { r2, g: sim.evento(cal1, gid("r09"))?.summary });
   }
@@ -727,16 +819,26 @@ await caso("invitaciones, cumpleaños y rechazos de Google", async () => {
   );
   await quieto("invitación editada", fam1, con1);
   // Borrarla en la pared: no se puede borrar allá → vuelve (sin escribir en Google). El aviso «…solo se
-  // puede borrar en Google Calendar» se anota en esa vuelta, pero la vuelta siguiente del mismo pedido (la
-  // que la trae de vuelta) lo pisa: igual que el aviso de PERMISO de iCloud en borrarAlla (pendiente del motor).
+  // puede borrar en Google Calendar» se anota en la primera vuelta y la segunda vuelta del mismo pedido (la
+  // que la trae de vuelta) lo conserva: la familia ve por qué volvió.
   await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
   sim.reiniciarContadores();
   const r2 = await h.sync(fam1, con1);
+  const avisosR2 = await avisosDe(fam1, con1);
   ok(
     "invitación borrada en la pared → vuelve, sin escribir en Google",
     r2.ok && (await h.leerEventos(fam1)).some((e) => e.titulo === "Reunión de trabajo") && sim.evento(cal1, inv.id)?.status === "confirmed" && !sim.contadores.porTipo["events.delete"],
     { r2, porTipo: sim.contadores.porTipo },
   );
+  ok(
+    "…y con el plazo normal (dos vueltas: la segunda la trae de vuelta) el aviso «…solo se puede borrar en Google Calendar» sigue a la vista",
+    sim.contadores.porTipo["events.list"] === 2 && avisosR2.filter((a) => /"Reunión de trabajo" solo se puede borrar en Google Calendar/.test(a)).length === 1,
+    { porTipo: sim.contadores.porTipo, avisosR2 },
+  );
+  // Los avisos son de la última sincronización que revisó algo: no se juntan de una llamada a otra.
+  await h.guardarEventos(fam1, (x) => x);
+  await h.sync(fam1, con1);
+  ok("…y en la sincronización siguiente que revisa (sin nada que avisar) ya no está", !(await avisosDe(fam1, con1)).some((a) => /solo se puede borrar/.test(a)), await avisosDe(fam1, con1));
   // Con una sola vuelta (sin tiempo para la segunda) el aviso sí queda a la vista.
   await h.guardarEventos(fam1, (x) => x.filter((e) => e.titulo !== "Reunión de trabajo"));
   const r2b = await h.sync(fam1, con1, 3900);
@@ -863,9 +965,10 @@ await caso("sin hora de término con fin = inicio rechazado (respaldo con end: n
 
 await caso("lo que quedó en Google se ve distinto de lo que se mandó", async () => {
   // a) Una «fantasma» (un día que Google materializó idéntico a la serie). Cambiar el lugar de la serie es
-  //    1 PATCH del principal y a la fantasma no se le manda nada: si Google no propaga el cambio, ese día
-  //    queda con el lugar anterior (se ve como un día cambiado, también en los iPhone). El transporte no
-  //    puede prever el etag (la serie ya no se ve como lo que mandó el motor): la pared lo relee.
+  //    1 PATCH del principal y, después, otro de la fantasma con lo mismo: si Google no propaga el cambio,
+  //    ese día igual queda como la serie (no aparece como día cambiado, ni en la pared ni en los iPhone) y
+  //    el transporte prevé el etag. Lo mismo con la hora de término (la fantasma conserva su inicio) y, si
+  //    Google sí pasa el título a la fantasma (su If-Match queda viejo), no se pisa: se relee.
   const cal = h.nuevoCalendario();
   const con = h.conexionGoogle(cal);
   const fam = await h.familia([ev("f1", { titulo: "Teatro", repeticion: "semanal", fecha: "2026-11-12", repetirHasta: "2027-01-28", lugar: "Sala 1" })]);
@@ -877,20 +980,65 @@ await caso("lo que quedó en Google se ve distinto de lo que se mandó", async (
   sim.interruptores.probFantasma = 0.3;
   const fantasmas = h.vivos(cal).filter((e) => e.recurringEventId);
   ok("hay una fantasma y la pared no la muestra", fantasmas.length === 1 && (await h.leerEventos(fam)).length === 1, fantasmas.map((e) => e.id));
+  const fid = fantasmas[0]?.id ?? "";
+  const patches = () => h.log.filter((x) => x.startsWith("PATCH ")).map((x) => decodeURIComponent(x.split("?")[0].split("/").pop() ?? ""));
   await h.cambiarEvento(fam, "f1", { lugar: "Sala 2" });
   sim.reiniciarContadores();
+  h.log.length = 0;
   const r = await h.sync(fam, con);
   const porTipo = { ...sim.contadores.porTipo };
+  const orden = patches();
   const rec = (await h.estado(fam, con))?.recursos[h.uidPanel("f1")];
   const r1 = await h.sync(fam, con);
   const l = await h.leerEventos(fam);
-  const dia = l.find((e) => e.externo?.recurrencia);
   ok(
-    "1 PATCH del principal, sin etag previsto; la vuelta siguiente muestra el día de la fantasma con el lugar anterior (como Google)",
-    r.ok && r1.ok && porTipo["events.patch"] === 1 && rec?.etag === null && sim.evento(cal, gid("f1"))?.location === "Sala 2" && l.find((e) => e.id === "f1")?.lugar === "Sala 2" && dia?.lugar === "Sala 1",
-    { r, r1, porTipo, rec, l: l.map(h.resumen) },
+    "lugar de la serie: 2 PATCH (el principal y después la fantasma), con etag previsto; la fantasma tiene el lugar nuevo y la pared no muestra un día cambiado",
+    r.ok &&
+      r1.ok &&
+      porTipo["events.patch"] === 2 &&
+      JSON.stringify(orden) === JSON.stringify([gid("f1"), fid]) &&
+      rec?.etag !== null &&
+      sim.evento(cal, gid("f1"))?.location === "Sala 2" &&
+      sim.evento(cal, fid)?.location === "Sala 2" &&
+      l.length === 1 &&
+      l[0].lugar === "Sala 2",
+    { r, r1, porTipo, orden, rec, l: l.map(h.resumen), fantasma: sim.evento(cal, fid) },
   );
-  await quieto("fantasma que quedó distinta", fam, con);
+  await quieto("fantasma con el lugar nuevo", fam, con);
+  // a2) La hora de término de la serie: la fantasma recibe su propio fin (su inicio no cambia).
+  await h.cambiarEvento(fam, "f1", { horaFin: "11:30" });
+  sim.reiniciarContadores();
+  const ra2 = await h.sync(fam, con);
+  const fa2 = sim.evento(cal, fid);
+  const la2 = await h.leerEventos(fam);
+  ok(
+    "hora de término de la serie: la fantasma termina a las 11:30 de su día (mismo inicio) y la pared no muestra un día cambiado",
+    ra2.ok &&
+      sim.contadores.porTipo["events.patch"] === 2 &&
+      Date.parse(fa2?.end?.dateTime ?? "") - Date.parse(fa2?.start?.dateTime ?? "") === 90 * 60_000 &&
+      Date.parse(fa2?.start?.dateTime ?? "") === Date.parse(fantasmas[0].start?.dateTime ?? "x") &&
+      la2.length === 1 &&
+      la2[0].horaFin === "11:30",
+    { ra2, porTipo: sim.contadores.porTipo, fa2: fa2 && { start: fa2.start, end: fa2.end }, l: la2.map(h.resumen) },
+  );
+  await quieto("fantasma con la hora de término nueva", fam, con);
+  // a3) Google pasa el título nuevo a la fantasma: su PATCH da 412 (If-Match viejo) y no se pisa; se relee.
+  sim.interruptores.propagarTituloAExcepciones = true;
+  try {
+    await h.cambiarEvento(fam, "f1", { titulo: "Teatro musical" });
+    sim.reiniciarContadores();
+    const ra3 = await h.sync(fam, con);
+    const avisos3 = await avisosDe(fam, con);
+    const la3 = await h.leerEventos(fam);
+    ok(
+      "título con Google que lo pasa a la fantasma: el 412 de la fantasma no es error ni aviso; la pared no muestra un día cambiado",
+      ra3.ok && !ra3.error && sim.contadores.status?.["412"] === 1 && sim.evento(cal, fid)?.summary === "🦄 Teatro musical" && la3.length === 1 && la3[0].titulo === "Teatro musical" && !avisos3.length,
+      { ra3, status: sim.contadores.status, avisos3, l: la3.map(h.resumen) },
+    );
+    await quieto("fantasma con el título pasado por Google", fam, con);
+  } finally {
+    sim.interruptores.propagarTituloAExcepciones = false;
+  }
 
   // b) Un día borrado en la web (excepción cancelada) y después la pared cambia la hora de la serie: la
   //    cancelada queda «huérfana» (a la hora vieja) y planear borra ese día con un EXDATE a la hora nueva.
@@ -976,6 +1124,16 @@ await caso("lápida restaurada", async () => {
   );
   await quieto("UID repetidos", fam, con);
 });
+
+// =====================================================================================
+seccion("12. Avisos de varias vueltas de una misma sincronización");
+ok(
+  "juntarAvisos: primero los de las vueltas anteriores, sin repetir y hasta 5; sin avisos → undefined",
+  JSON.stringify(h.S.juntarAvisos(["a", "b"], ["b", "c", "a", "d", "e", "f"])) === '["a","b","c","d","e"]' &&
+    JSON.stringify(h.S.juntarAvisos([], ["x", "x"])) === '["x"]' &&
+    h.S.juntarAvisos([], []) === undefined &&
+    h.S.MAX_AVISOS === 5,
+);
 
 seccion("Al final");
 ok("ningún pedido salió de esta máquina", h.urlsVistas.length > 0 && h.urlsVistas.every((u) => u.startsWith("http://127.0.0.1:")), h.urlsVistas.filter((u) => !u.startsWith("http://127.0.0.1:")).slice(0, 5));

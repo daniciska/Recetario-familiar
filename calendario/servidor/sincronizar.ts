@@ -287,9 +287,9 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
     let avisosAntes: string[] = [];
     // Si quedó trabajo o mientras tanto cambió algo en el panel, se da otra vuelta (hasta 3, si alcanza el tiempo).
     for (let vuelta = 0; vuelta < 3; vuelta++) {
-      const { avisos, ...r } = await unaVuelta(familiaId, conexion, { ...op, resolver: vuelta ? undefined : op.resolver, avisosAntes });
-      resultado = r;
-      // Los avisos de esta llamada siguen a la vista aunque otra vuelta no tenga nada que avisar.
+      const { avisos, ...esta } = await unaVuelta(familiaId, conexion, { ...op, resolver: vuelta ? undefined : op.resolver, avisosAntes });
+      resultado = esta;
+      // Los avisos de esta llamada siguen a la vista aunque la vuelta siguiente no tenga nada que avisar.
       if (avisos) avisosAntes = avisos;
       // Una respuesta anotada se aplica en una vuelta siguiente (de ésta o de la programada).
       if (resultado.respuesta && respuesta !== "aplicada") respuesta = resultado.respuesta;
