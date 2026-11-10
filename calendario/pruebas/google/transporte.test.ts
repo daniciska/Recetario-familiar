@@ -837,6 +837,18 @@ await caso("fantasmas: después del principal, dentro del plazo, y un 412 se rel
   const t0c = gc();
   await t0c.listar(cal);
   ok("…y la siguiente ya no tiene nada que hacer", (await t0c.pendientes(cal)) === false && escrituras() === 0);
+  // 1c. Plazo para la fantasma, pero no de sobra (MARGEN_EN_LINEA para lo demás de la vuelta): el
+  //     principal ahora y la fantasma al final de la vuelta (pendientes()), después de lo que escriba el
+  //     motor. Antes se mandaba en línea apenas alcanzaba y lo nuevo de la vuelta quedaba para otra.
+  const t0d = gc({ hasta: Date.now() + 3000 });
+  sim.reiniciarContadores();
+  const { r: r0d } = await cambiarEnPanel(t0d, cal, uid, lugar("Piscina 1b"));
+  ok(
+    "plazo justo para la fantasma → sólo el principal en la pasada y {etag: null}",
+    !r0d.error && JSON.stringify(r0d.valor) === JSON.stringify({ etag: null }) && JSON.stringify(patches()) === JSON.stringify([s.id]) && sim.evento(cal, f.id).location === "Piscina 1",
+    [codigo(r0d), r0d.valor, patches()],
+  );
+  ok("…y pendientes() (con el plazo que quede) la pone al día", (await t0d.pendientes(cal)) === false && sim.evento(cal, f.id).location === "Piscina 1b", [patches(), sim.evento(cal, f.id).location]);
   // 2. Con plazo: el principal y después la fantasma; el etag previsto es el del listado siguiente.
   const t1 = gc();
   sim.reiniciarContadores();
@@ -872,10 +884,11 @@ await caso("fantasmas: después del principal, dentro del plazo, y un 412 se rel
   } finally {
     sim.interruptores.propagarTituloAExcepciones = false;
   }
-  // 4. Se acaba el plazo en el PATCH de la fantasma: el principal ya está escrito, así que no se lanza:
-  //    {etag: null} (el motor relee) y sin aviso; la fantasma, rezagada, no se ve como día cambiado y otra
-  //    vuelta la pone al día. (Antes quedaba como día cambiado con el lugar viejo, con un aviso.)
-  const t4 = gc({ hasta: Date.now() + 2600 });
+  // 4. Se acaba el plazo en el PATCH de la fantasma (en línea: hay plazo de sobra al empezar, pero Google
+  //    tarda): el principal ya está escrito, así que no se lanza: {etag: null} (el motor relee) y sin aviso;
+  //    la fantasma, rezagada, no se ve como día cambiado y otra vuelta la pone al día. (Antes quedaba como
+  //    día cambiado con el lugar viejo, con un aviso.)
+  const t4 = gc({ hasta: Date.now() + 5000 });
   const freno = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === f.id, respuestas.demora(5000));
   const { r: r4 } = await cambiarEnPanel(t4, cal, uid, lugar("Piscina 4"));
   freno.quitar();

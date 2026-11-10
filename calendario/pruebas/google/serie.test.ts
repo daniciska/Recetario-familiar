@@ -12,6 +12,7 @@ import {
   esPropia,
   esRezagada,
   etagSerie,
+  excluirDeMarca,
   huellaPieza,
   inst,
   marcaFantasmas,
@@ -529,6 +530,62 @@ caso("fantasmas rezagadas (marca cfv del principal)", () => {
     const m = p.extendedProperties?.private?.[MARCA_FANTASMAS] ?? "";
     return m.split(",").length <= 24 && m.length < 1024;
   })());
+});
+
+caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () => {
+  const base = natacion();
+  const [p0, , , f0] = base;
+  const ahora = Date.parse("2026-11-08T12:00:00.000Z");
+  const conMarca = (p: EvG, m: string | null | undefined) => ({ ...p, extendedProperties: { private: { cfh: "x", ...(m ? { [MARCA_FANTASMAS]: m } : {}) } } });
+  const iso = (ms: number) => new Date(ms).toISOString();
+  // Primer cambio: el lugar. f0 (fantasma) queda rezagada con el lugar de antes (ninguno).
+  const nuevo = { ...p0, location: "Piscina 2" };
+  const pM = conMarca(nuevo, marcaFantasmas(p0, nuevo, [f0], ahora) as string);
+  ok("la fantasma sin lugar es rezagada del primer cambio", esRezagada(f0, pM));
+  // Diez minutos después, otro cambio (el título); al aplicarlo Google le pasa el título a f0 y le sube
+  // `updated`: con el hasta viejo de la entrada del lugar dejaría de ser rezagada (día cambiado sin aviso).
+  const despues = ahora + 600_000;
+  const otro = { ...pM, summary: "🦄 Natación libre" };
+  const tocada = { ...f0, summary: otro.summary, updated: iso(despues + 5000) };
+  const pM2 = conMarca(otro, marcaFantasmas(pM, otro, [f0], despues) as string);
+  ok("segundo cambio: la entrada que explica a la rezagada se vuelve a anotar con el hasta nuevo (la que Google tocó sigue siendo rezagada)", esRezagada(tocada, pM2) && esRezagada(f0, pM2), pM2.extendedProperties.private.cfv);
+  // …salvo que así cubriera un día cambiado de verdad: alguien volvió un día al lugar de antes después
+  // del primer cambio (sin lugar, como f0). Ese día no se pisa; la rezagada que Google toque queda como
+  // día cambiado (como antes de extender), que es lo seguro.
+  const vuelta: EvG = {
+    ...f0,
+    id: `${idNat}_20261209T120000Z`,
+    originalStartTime: h("2026-12-09T09:00:00-03:00"),
+    start: h("2026-12-09T09:00:00-03:00"),
+    end: h("2026-12-09T10:00:00-03:00"),
+    summary: p0.summary,
+    updated: iso(ahora + 300_000),
+  };
+  ok("ese día es un día cambiado (tocado después del hasta del primer cambio)", !esRezagada(vuelta, pM) && unaSerie([pM, vuelta]).vivas.length === 1);
+  const pM3 = conMarca(otro, marcaFantasmas(pM, otro, [f0], despues, [vuelta]) as string);
+  ok("con ese día entre las vivas no se extiende: sigue siendo día cambiado después del segundo cambio", !esRezagada(vuelta, pM3) && esRezagada(f0, pM3) && !esRezagada(tocada, pM3), pM3.extendedProperties.private.cfv);
+  // Excluir: una rezagada que Google no deja poner al día.
+  const otra = { ...f0, id: `${idNat}_20261216T120000Z`, originalStartTime: h("2026-12-16T09:00:00-03:00"), start: h("2026-12-16T09:00:00-03:00"), end: h("2026-12-16T10:00:00-03:00") };
+  const ex = excluirDeMarca(pM, [f0.id]);
+  const pX = conMarca(nuevo, ex);
+  ok(
+    "excluida: deja de ser rezagada (la pared la ve como día cambiado) y las demás siguen siéndolo",
+    typeof ex === "string" && /,x\.[0-9a-f]{12}$/.test(ex) && !esRezagada(f0, pX) && esRezagada(otra, pX) && unaSerie([pX, f0, otra]).vivas.length === 1,
+    ex,
+  );
+  ok("excluir otra vez la misma, o sin marca: no hay nada que mandar", excluirDeMarca(pX, [f0.id]) === undefined && excluirDeMarca(p0, [f0.id]) === undefined);
+  const m4 = marcaFantasmas(pX, { ...pX, summary: "Otra" }, [f0, otra], ahora + 1000);
+  ok("un cambio posterior conserva la exclusión", typeof m4 === "string" && m4.includes(",x.") && !esRezagada(f0, conMarca({ ...pX, summary: "Otra" }, m4)), m4);
+  ok("…y cuando la marca ya no explica a nadie se borra entera", marcaFantasmas(pX, { ...pX, summary: "Otra" }, [], ahora) === null);
+  ok(
+    "con muchas excluidas la marca no pasa de 24 entradas ni de 1024 caracteres",
+    (() => {
+      let p = pX;
+      for (let i = 0; i < 30; i++) p = conMarca(p, excluirDeMarca(p, [`${idNat}_x${i}`]) ?? p.extendedProperties.private.cfv);
+      const m = p.extendedProperties.private.cfv ?? "";
+      return m.split(",").length <= 24 && m.length < 1024 && m.split(",").filter((x) => x.startsWith("x.")).length === 8 && /^l\./.test(m);
+    })(),
+  );
 });
 
 for (const r of resultados) console.log(r);
