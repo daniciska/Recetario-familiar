@@ -1,10 +1,10 @@
 # Plan: lo que falta para que el calendario quede como Skylight (o mejor)
 
-Estado al 3 de noviembre de 2026. Hecho y publicado: calendario, menú con colación, recetas, lista de compras
+Estado al 10 de noviembre de 2026. Hecho y publicado: calendario, menú con colación, recetas, lista de compras
 inteligente, quehaceres con estrellas y premios, cuentas regresivas (y repetición anual), PIN para la pared, datos
 compartidos entre equipos y calendario de iCloud en ambos sentidos.
-Hecho en código el 10 de noviembre (falta publicar y que la familia lo pruebe): menú por ítems y recetas dictadas con
-Gemini (Fase 4).
+Publicado el 10 de noviembre (falta que la familia lo pruebe): menú por ítems, recetas dictadas con Gemini (Fase 4) y
+Google Calendar (Fase 2b; se activa cuando la familia ponga `GOOGLE_CUENTA_SERVICIO` y se vuelva a publicar).
 Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `calendario-familiar-pared`).
 
 ## Decisiones de la familia
@@ -63,7 +63,8 @@ pared no los muestra).
 - Key: `GOOGLE_CUENTA_SERVICIO`. Valor: el archivo en base64 (en la Mac, en Terminal:
   `base64 -i ~/Downloads/<archivo>.json | pbcopy`, y pegar) o el JSON tal cual.
 - Marcar «Contains secret values» (si el plan lo permite, con Functions en el alcance).
-- Guardar → Deploys → Trigger deploy → Deploy site.
+- Guardar y volver a publicar, para que las funciones tomen la clave (el sitio se publica subiendo el código, no desde
+  GitHub: pedirle a Claude que lo publique de nuevo).
 - Después, borrar el archivo descargado o guardarlo en un gestor de contraseñas. Nunca subirlo a GitHub (Google
   deshabilita las claves expuestas) ni pegarlo en el chat.
 
