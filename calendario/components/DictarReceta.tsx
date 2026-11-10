@@ -1,0 +1,693 @@
+"use client";
+
+// Ventana «🎙️ Dictar receta»: grabar en el panel (MediaRecorder) o subir una nota de voz → copia en este
+// equipo (IndexedDB) → subida a la nube (PUT idempotente) → Gemini en una función en segundo plano →
+// borrador que se revisa en el editor de recetas. Desde que el audio quedó guardado se puede cerrar: la
+// subida sigue sola (lib/dictados/cliente.ts) y el resultado aparece en Recetas → 🎙️ Dictadas.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useDatos } from "@/lib/store";
+import { AccesoRevocado } from "@/lib/datos/nube";
+import * as cliente from "@/lib/dictados/cliente";
+import type { ResultadoSubida } from "@/lib/dictados/cliente";
+import {
+  aceptarArchivos,
+  crearGrabadora,
+  duracionArchivo,
+  esIOS,
+  muyLargo,
+  puedeGrabar,
+  type AvisoGrabadora,
+  type EstadoGrabadora,
+  type Grabadora,
+  ErrorGrabadora,
+} from "@/lib/dictados/grabadora";
+import * as pendientes from "@/lib/dictados/pendientes";
+import type { PendienteLocal } from "@/lib/dictados/pendientes";
+import { CHIPS, TEXTOS, botonesDictado, mensajeError, mmss, situacion } from "@/lib/dictados/textos";
+import { GRABACION_MIN_SEG, MAX_AUDIO, type DictadoPublico } from "@/lib/dictados/tipos";
+import { mensajeNube, VerLoQueSeDijo } from "./Escuchar";
+import { Boton, Modal, cx } from "./ui";
+
+type Fase = "inicio" | "grabando" | "avance";
+/** Cómo va la subida a la nube. */
+type Subida = { e: "subiendo" } | { e: "ok" } | { e: "sin_conexion" } | { e: "rechazo"; motivo: "ya_guardada" | "lleno" | "rechazado"; mensaje: string };
+
+const NIVEL_SONIDO = 0.04;
+
+/** Consultar el dictado: a los 2 s, cada 3 s hasta el segundo 60 y después cada 10 s. */
+const esperaConsulta = (n: number, desde: number) => (n === 0 ? 2000 : Date.now() - desde < 60_000 ? 3000 : 10_000);
+
+function textoGrabadora(e: unknown): string {
+  if (e instanceof ErrorGrabadora) {
+    if (e.motivo === "permiso") return TEXTOS.micDenegado;
+    if (e.motivo === "sin_microfono") return TEXTOS.sinMicrofono;
+    if (e.motivo === "sin_soporte") return TEXTOS.sinGrabadora;
+  }
+  return TEXTOS.micOtro;
+}
+
+const extension = (mime: string) =>
+  ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/aac": "aac", "audio/flac": "flac" })[
+    mime.split(";")[0]
+  ] ?? "audio";
+
+/** «📤 Guardar una copia en Archivos»: con la hoja de compartir (iPhone) o como descarga. */
+async function guardarCopia(p: PendienteLocal) {
+  const nombre = p.archivo ?? `receta-dictada-${p.creado.slice(0, 16).replace(/[:T]/g, "-")}.${extension(p.mime)}`;
+  const f = new File([p.blob], nombre, { type: p.mime || p.blob.type });
+  try {
+    if (navigator.canShare?.({ files: [f] })) {
+      await navigator.share({ files: [f] });
+      return;
+    }
+  } catch {
+    /* canceló o no se pudo: se descarga */
+  }
+  const url = URL.createObjectURL(f);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+export default function DictarReceta({
+  alCerrar,
+  alRevisar,
+  alCambiar,
+}: {
+  alCerrar: () => void;
+  /** «Revisar receta»: el dictado completo, con su borrador. */
+  alRevisar: (d: DictadoPublico) => void;
+  /** Algo cambió en la nube (subió, se descartó): la lista de Dictadas se vuelve a mirar. */
+  alCambiar?: () => void;
+}) {
+  const { nube } = useDatos();
+  const conNube = !!nube;
+  const [fase, setFase] = useState<Fase>("inicio");
+  const [aviso, setAviso] = useState<string | null>(null);
+  const [geminiFalta, setGeminiFalta] = useState(false);
+  const [iniciando, setIniciando] = useState(false);
+  // Grabando
+  const grab = useRef<Grabadora | null>(null);
+  const [estadoGrab, setEstadoGrab] = useState<EstadoGrabadora>("inactiva");
+  const [segundos, setSegundos] = useState(0);
+  const [nivel, setNivel] = useState(0);
+  const [avisoGrab, setAvisoGrab] = useState<AvisoGrabadora | null>(null);
+  const [confirmarCierre, setConfirmarCierre] = useState(false);
+  const [maximo, setMaximo] = useState(false);
+  // Avance
+  const [pendiente, setPendiente] = useState<PendienteLocal | null>(null);
+  const [enEquipo, setEnEquipo] = useState<boolean | null>(null);
+  const [subida, setSubida] = useState<Subida | null>(null);
+  const [dictado, setDictado] = useState<DictadoPublico | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [confirmarDescarte, setConfirmarDescarte] = useState(false);
+
+  const vivo = useRef(true);
+  const alCambiarRef = useRef(alCambiar);
+  useEffect(() => {
+    alCambiarRef.current = alCambiar;
+  }, [alCambiar]);
+  useEffect(() => {
+    vivo.current = true;
+    return () => {
+      vivo.current = false;
+      grab.current?.cancelar(); // se cerró la ventana sin terminar (no debería pasar: ✕ pregunta antes)
+      grab.current = null;
+    };
+  }, []);
+
+  // ¿Gemini tiene clave? (no impide grabar: el audio queda guardado y se procesa cuando esté).
+  useEffect(() => {
+    if (!conNube) return;
+    void cliente.salud().then((s) => vivo.current && setGeminiFalta(!!s && s.gemini !== "ok"));
+  }, [conNube]);
+
+  // ---------- Subir ----------
+
+  const subir = useCallback(async (p: PendienteLocal) => {
+    setSubida({ e: "subiendo" });
+    let r: ResultadoSubida;
+    try {
+      r = await cliente.subirPendiente(p);
+    } catch (e) {
+      if (vivo.current) setSubida({ e: "rechazo", motivo: "rechazado", mensaje: e instanceof AccesoRevocado ? e.message : mensajeNube(e) });
+      return;
+    }
+    if (r.ok) alCambiarRef.current?.(); // también si ya se cerró la ventana: la lista de Dictadas se pone al día
+    if (!vivo.current) return;
+    if (r.ok) {
+      setSubida({ e: "ok" });
+      setDictado(r.dictado);
+    } else if (r.motivo === "sin_conexion") setSubida({ e: "sin_conexion" });
+    else setSubida({ e: "rechazo", motivo: r.motivo, mensaje: r.mensaje });
+  }, []);
+
+  const enviar = async (blob: Blob, meta: { origen: "grabacion" | "archivo"; segundos?: number; archivo?: string; mime?: string }) => {
+    const p = cliente.nuevoPendiente(blob, meta);
+    setPendiente(p);
+    setFase("avance");
+    setSubida({ e: "subiendo" });
+    const guardado = await pendientes.guardar(p); // primero la copia en este equipo
+    if (!vivo.current) return;
+    setEnEquipo(guardado);
+    await subir(p);
+  };
+
+  // Sin conexión: apenas vuelve internet se sube (además del botón «Reintentar ahora»).
+  useEffect(() => {
+    if (subida?.e !== "sin_conexion" || !pendiente) return;
+    const volver = () => void subir(pendiente);
+    window.addEventListener("online", volver);
+    return () => window.removeEventListener("online", volver);
+  }, [subida, pendiente, subir]);
+
+  // ---------- Esperar a Gemini ----------
+
+  const enCamino = dictado && (dictado.estado === "subido" || dictado.estado === "procesando");
+  useEffect(() => {
+    if (!dictado || !enCamino) return;
+    const id = dictado.id;
+    const desde = Date.now();
+    let n = 0;
+    let t: ReturnType<typeof setTimeout>;
+    let parar = false;
+    const mirar = async () => {
+      try {
+        const d = await cliente.leerDictado(id);
+        if (parar || !vivo.current) return;
+        if (!d) {
+          setMsg(TEXTOS.yaNoExiste);
+          return;
+        }
+        setDictado(d);
+        if (d.estado !== "subido" && d.estado !== "procesando") {
+          alCambiarRef.current?.();
+          return;
+        }
+      } catch {
+        /* sin red: se vuelve a mirar */
+      }
+      if (!parar) t = setTimeout(mirar, esperaConsulta(++n, desde));
+    };
+    t = setTimeout(mirar, esperaConsulta(n, desde));
+    return () => {
+      parar = true;
+      clearTimeout(t);
+    };
+    // Sólo al cambiar de dictado o al pasar a «en camino» (no en cada consulta).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dictado?.id, enCamino]);
+
+  // ---------- Grabar ----------
+
+  const terminarGrabacion = async () => {
+    const g = grab.current;
+    if (!g) return;
+    grab.current = null; // un segundo toque (o el corte automático) no manda dos veces
+    setConfirmarCierre(false);
+    const r = await g.terminar();
+    if (!vivo.current) return;
+    if (r.segundos < GRABACION_MIN_SEG || !r.blob.size) {
+      setFase("inicio");
+      setAviso(TEXTOS.muyCorta);
+      return;
+    }
+    await enviar(r.blob, { origen: "grabacion", segundos: r.segundos, mime: r.mime });
+  };
+  const terminarRef = useRef(terminarGrabacion);
+  useEffect(() => {
+    terminarRef.current = terminarGrabacion;
+  });
+
+  const grabar = async () => {
+    setAviso(null);
+    if (!puedeGrabar()) return setAviso(TEXTOS.sinGrabadora);
+    setIniciando(true);
+    setSegundos(0);
+    setNivel(0);
+    setAvisoGrab(null);
+    setMaximo(false);
+    const g = crearGrabadora({
+      alNivel: (n) => {
+        if (!vivo.current) return;
+        setNivel(n);
+        if (n >= NIVEL_SONIDO) setAvisoGrab((a) => (a === "silencio" ? null : a));
+      },
+      alTiempo: (s) => vivo.current && setSegundos(s),
+      alEstado: (e) => vivo.current && setEstadoGrab(e),
+      alAviso: (a) => {
+        if (!vivo.current) return;
+        if (a === "maximo") {
+          setMaximo(true);
+          void terminarRef.current();
+        } else setAvisoGrab(a);
+      },
+    });
+    grab.current = g;
+    try {
+      await g.empezar(); // dentro del toque: en la app de inicio del iPhone el permiso dura esa apertura
+      if (vivo.current) setFase("grabando");
+    } catch (e) {
+      grab.current = null;
+      if (vivo.current) setAviso(textoGrabadora(e));
+    } finally {
+      if (vivo.current) setIniciando(false);
+    }
+  };
+
+  // ---------- Archivo ----------
+
+  const elegirArchivo = async (a: File) => {
+    setAviso(null);
+    if (!a.size) return setAviso(TEXTOS.archivoVacio);
+    if (a.size > MAX_AUDIO) return setAviso(TEXTOS.archivoGrande);
+    const seg = await duracionArchivo(a);
+    if (!vivo.current) return;
+    if (muyLargo(seg)) return setAviso(TEXTOS.archivoLargo);
+    await enviar(a, { origen: "archivo", segundos: seg, archivo: a.name, mime: cliente.tipoDeArchivo(a.name, a.type) });
+  };
+
+  // ---------- Acciones sobre el dictado ----------
+
+  const procesar = async (otraVez: boolean) => {
+    if (!dictado) return;
+    setMsg(null);
+    setOcupado(true);
+    try {
+      const d = await cliente.procesarDictado(dictado.id, otraVez);
+      if (!vivo.current) return;
+      if (d) setDictado(d);
+      else setMsg(TEXTOS.yaNoExiste);
+      alCambiarRef.current?.();
+    } catch (e) {
+      if (vivo.current) setMsg(mensajeNube(e));
+    } finally {
+      if (vivo.current) setOcupado(false);
+    }
+  };
+
+  const revisar = async () => {
+    if (!dictado) return;
+    if (dictado.borrador) return alRevisar(dictado);
+    setOcupado(true);
+    try {
+      const d = await cliente.leerDictado(dictado.id);
+      if (!vivo.current) return;
+      if (d) alRevisar(d);
+      else setMsg(TEXTOS.yaNoExiste);
+    } catch (e) {
+      if (vivo.current) setMsg(mensajeNube(e));
+    } finally {
+      if (vivo.current) setOcupado(false);
+    }
+  };
+
+  const descartar = async () => {
+    setMsg(null);
+    setOcupado(true);
+    try {
+      const id = dictado?.id ?? pendiente?.id;
+      if (id) {
+        if (dictado) await cliente.descartarDictado(id);
+        else await pendientes.borrar(id); // nunca llegó a la nube
+      }
+      alCambiarRef.current?.();
+      alCerrar();
+    } catch (e) {
+      if (vivo.current) setMsg(mensajeNube(e));
+    } finally {
+      if (vivo.current) setOcupado(false);
+    }
+  };
+
+  // ✕, Escape o un toque afuera: grabando, se pregunta antes (lo grabado se guarda).
+  const cerrar = () => {
+    if (fase === "grabando" && grab.current) return setConfirmarCierre(true);
+    alCerrar();
+  };
+
+  if (!nube)
+    return (
+      <Modal
+        titulo={TEXTOS.tituloDictar}
+        alCerrar={alCerrar}
+        ancho="max-w-lg"
+        pie={
+          <Boton variante="primario" onClick={alCerrar}>
+            {TEXTOS.entendido}
+          </Boton>
+        }
+      >
+        <p className="text-lg">{TEXTOS.sinNube}</p>
+      </Modal>
+    );
+
+  return (
+    <Modal titulo={TEXTOS.tituloDictar} alCerrar={cerrar} ancho="max-w-2xl" pie={pie()}>
+      {fase === "inicio" && (
+        <Inicio
+          aviso={aviso}
+          geminiFalta={geminiFalta}
+          iniciando={iniciando}
+          alGrabar={() => void grabar()}
+          alElegir={(a) => void elegirArchivo(a)}
+        />
+      )}
+      {fase === "grabando" && (
+        <Grabando
+          estado={estadoGrab}
+          segundos={segundos}
+          nivel={nivel}
+          aviso={avisoGrab}
+          confirmar={confirmarCierre}
+          alPausar={() => grab.current?.pausar()}
+          alSeguir={() => {
+            setAvisoGrab((a) => (a === "interrumpida" ? null : a));
+            grab.current?.seguir();
+          }}
+          alTerminar={() => void terminarGrabacion()}
+          alSeguirGrabando={() => setConfirmarCierre(false)}
+        />
+      )}
+      {fase === "avance" && (
+        <Avance
+          pendiente={pendiente}
+          enEquipo={enEquipo}
+          subida={subida}
+          dictado={dictado}
+          maximo={maximo}
+          msg={msg}
+          confirmarDescarte={confirmarDescarte}
+          ocupado={ocupado}
+          alSiDescartar={() => void descartar()}
+          alNoDescartar={() => setConfirmarDescarte(false)}
+        />
+      )}
+    </Modal>
+  );
+
+  function pie() {
+    if (fase !== "avance") return undefined;
+    const botones: React.ReactNode[] = [];
+    const cerrarBtn = (
+      <Boton key="cerrar" variante="fantasma" onClick={alCerrar}>
+        {TEXTOS.cerrar}
+      </Boton>
+    );
+    const descartarBtn = !confirmarDescarte && (
+      <Boton key="descartar" variante="peligro" className="mr-auto" disabled={ocupado} onClick={() => setConfirmarDescarte(true)}>
+        {TEXTOS.descartar}
+      </Boton>
+    );
+    if (subida?.e === "sin_conexion" && pendiente) {
+      if (enEquipo === false)
+        botones.push(
+          <Boton key="copia" onClick={() => void guardarCopia(pendiente)}>
+            {TEXTOS.guardarCopia}
+          </Boton>,
+        );
+      botones.push(
+        cerrarBtn,
+        <Boton key="reintentar" variante="primario" onClick={() => void subir(pendiente)}>
+          {TEXTOS.reintentarAhora}
+        </Boton>,
+      );
+      return botones;
+    }
+    if (subida?.e === "rechazo") {
+      if (subida.motivo !== "ya_guardada") botones.push(descartarBtn); // ya_guardada: el audio es de una receta guardada
+      botones.push(cerrarBtn);
+      return botones;
+    }
+    if (!dictado) return [cerrarBtn];
+    const b = botonesDictado(dictado);
+    if (dictado.estado === "listo" && dictado.esReceta !== false)
+      return [
+        cerrarBtn,
+        <Boton key="revisar" variante="primario" disabled={ocupado} onClick={() => void revisar()}>
+          {TEXTOS.revisarReceta}
+        </Boton>,
+      ];
+    if (b.includes("revisar_igual"))
+      return [
+        descartarBtn,
+        <Boton key="otra" disabled={ocupado} onClick={() => void procesar(true)}>
+          {TEXTOS.otraVersion}
+        </Boton>,
+        <Boton key="igual" variante="primario" disabled={ocupado} onClick={() => void revisar()}>
+          {TEXTOS.revisarIgual}
+        </Boton>,
+      ];
+    if (dictado.estado === "error") {
+      botones.push(descartarBtn, cerrarBtn);
+      if (b.includes("intentar"))
+        botones.push(
+          <Boton key="intentar" variante="primario" disabled={ocupado} onClick={() => void procesar(false)}>
+            {TEXTOS.intentar}
+          </Boton>,
+        );
+      return botones;
+    }
+    return [cerrarBtn];
+  }
+}
+
+// ---------- Pantallas ----------
+
+function Inicio({
+  aviso,
+  geminiFalta,
+  iniciando,
+  alGrabar,
+  alElegir,
+}: {
+  aviso: string | null;
+  geminiFalta: boolean;
+  iniciando: boolean;
+  alGrabar: () => void;
+  alElegir: (a: File) => void;
+}) {
+  const [graba] = useState(() => puedeGrabar());
+  const [ios] = useState(() => esIOS());
+  const [accept] = useState(() => aceptarArchivos());
+  return (
+    <div className="space-y-4 text-lg">
+      {aviso && (
+        <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 font-bold text-red-700 noche:text-red-300">
+          {aviso}
+        </p>
+      )}
+      {geminiFalta && <p className="rounded-2xl bg-acento-suave px-4 py-3">{TEXTOS.geminiNoConectado}</p>}
+      <p>{TEXTOS.inicio}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Boton variante="primario" grande disabled={!graba || iniciando} onClick={alGrabar}>
+            {iniciando ? TEXTOS.abriendoMicrofono : TEXTOS.empezar}
+          </Boton>
+          {!graba && <span className="text-base text-tinta-suave">{TEXTOS.sinGrabadora}</span>}
+          {graba && ios && <span className="text-base text-tinta-suave">{TEXTOS.permisoIphone}</span>}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="inline-flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-2xl bg-superficie-2 px-6 text-xl font-bold transition active:scale-[0.97]">
+            {TEXTOS.subirAudio}
+            {/* En iOS sin `accept`: con "audio/*" el selector no deja elegir el .opus de WhatsApp desde Archivos. */}
+            <input
+              type="file"
+              accept={accept}
+              className="sr-only"
+              aria-label={TEXTOS.subirAudio}
+              onChange={(e) => {
+                const a = e.target.files?.[0];
+                e.target.value = ""; // así se puede volver a elegir el mismo
+                if (a) alElegir(a);
+              }}
+            />
+          </label>
+          <span className="text-base text-tinta-suave">{TEXTOS.subirAudioLinea}</span>
+        </div>
+      </div>
+      <details className="rounded-2xl bg-superficie-2 p-3 text-base">
+        <summary className="min-h-8 cursor-pointer text-lg font-bold">{TEXTOS.whatsappTitulo}</summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-6 text-lg">
+          {TEXTOS.whatsappPasos.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ol>
+      </details>
+      <p className="text-base text-tinta-suave">{TEXTOS.privacidad}</p>
+    </div>
+  );
+}
+
+function Grabando({
+  estado,
+  segundos,
+  nivel,
+  aviso,
+  confirmar,
+  alPausar,
+  alSeguir,
+  alTerminar,
+  alSeguirGrabando,
+}: {
+  estado: EstadoGrabadora;
+  segundos: number;
+  nivel: number;
+  aviso: AvisoGrabadora | null;
+  confirmar: boolean;
+  alPausar: () => void;
+  alSeguir: () => void;
+  alTerminar: () => void;
+  alSeguirGrabando: () => void;
+}) {
+  const pausa = estado === "pausa";
+  const textoAviso = aviso === "silencio" ? TEXTOS.silencio : aviso === "quedan_dos" ? TEXTOS.quedanDos : aviso === "interrumpida" ? TEXTOS.interrumpida : null;
+  return (
+    <div className="flex flex-col items-center gap-4 py-2 text-center">
+      <div className={cx("text-2xl font-extrabold", !pausa && "text-red-700 noche:text-red-300")} role="status">
+        {pausa ? TEXTOS.enPausa : TEXTOS.grabando}
+      </div>
+      <div className="num font-display text-7xl font-semibold" aria-label={`Tiempo grabado ${mmss(segundos)}`}>
+        {mmss(segundos)}
+      </div>
+      <div className="text-base text-tinta-suave">{TEXTOS.maximo}</div>
+      <div className="h-4 w-full max-w-md overflow-hidden rounded-full bg-superficie-2" aria-hidden>
+        <div className="h-full rounded-full bg-acento transition-[width] duration-200" style={{ width: `${Math.round((pausa ? 0 : nivel) * 100)}%` }} />
+      </div>
+      {textoAviso && (
+        <p role="alert" className="max-w-lg rounded-2xl bg-acento-suave px-4 py-3 text-lg font-bold">
+          {textoAviso}
+        </p>
+      )}
+      {confirmar ? (
+        <div className="w-full max-w-lg rounded-2xl bg-superficie-2 p-4">
+          <p className="mb-3 text-xl font-bold">{TEXTOS.confirmarTerminar}</p>
+          <div className="flex flex-wrap justify-center gap-3">
+            <Boton variante="primario" onClick={alTerminar}>
+              {TEXTOS.terminarYGuardar}
+            </Boton>
+            <Boton onClick={alSeguirGrabando}>{TEXTOS.seguirGrabando}</Boton>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap justify-center gap-3">
+          {pausa ? (
+            <Boton grande onClick={alSeguir}>
+              {TEXTOS.seguir}
+            </Boton>
+          ) : (
+            <Boton grande onClick={alPausar}>
+              {TEXTOS.pausa}
+            </Boton>
+          )}
+          <Boton grande variante="primario" onClick={alTerminar}>
+            {TEXTOS.terminar}
+          </Boton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Paso({ hecho, actual, children }: { hecho?: boolean; actual?: boolean; children: React.ReactNode }) {
+  return (
+    <li className={cx("rounded-2xl px-4 py-2.5 text-xl font-bold", hecho ? "bg-superficie-2" : actual ? "animate-pulse bg-acento-suave" : "bg-superficie-2 opacity-50")}>
+      {children}
+    </li>
+  );
+}
+
+function Avance({
+  pendiente,
+  enEquipo,
+  subida,
+  dictado,
+  maximo,
+  msg,
+  confirmarDescarte,
+  ocupado,
+  alSiDescartar,
+  alNoDescartar,
+}: {
+  pendiente: PendienteLocal | null;
+  enEquipo: boolean | null;
+  subida: Subida | null;
+  dictado: DictadoPublico | null;
+  maximo: boolean;
+  msg: string | null;
+  confirmarDescarte: boolean;
+  ocupado: boolean;
+  alSiDescartar: () => void;
+  alNoDescartar: () => void;
+}) {
+  const enNube = subida?.e === "ok" || !!dictado;
+  const s = dictado ? situacion(dictado) : null;
+  const escribiendo = dictado && (dictado.estado === "subido" || dictado.estado === "procesando");
+  const lista = dictado?.estado === "listo" && dictado.esReceta !== false;
+  return (
+    <div className="space-y-4 text-lg">
+      {maximo && <p className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">{TEXTOS.maximoAlcanzado}</p>}
+      <ol className="space-y-2" aria-label="Avance">
+        {enEquipo === false ? (
+          <li className="rounded-2xl bg-red-600/15 px-4 py-2.5 text-lg font-bold text-red-700 noche:text-red-300">{TEXTOS.sinCopiaLocal}</li>
+        ) : (
+          <Paso hecho={enEquipo === true} actual={enEquipo === null}>
+            {TEXTOS.guardadoEquipo(pendiente?.segundos)}
+          </Paso>
+        )}
+        <Paso hecho={enNube} actual={subida?.e === "subiendo"}>
+          {enNube ? TEXTOS.guardadoNube : TEXTOS.subiendo}
+        </Paso>
+        {(enNube || escribiendo) && (
+          <Paso hecho={dictado?.estado === "listo"} actual={!!escribiendo}>
+            {lista ? TEXTOS.lista : (dictado?.estado === "error" || s === "no_receta") && s ? CHIPS[s] : TEXTOS.escribiendo}
+          </Paso>
+        )}
+      </ol>
+
+      {subida?.e === "sin_conexion" && <p className="rounded-2xl bg-acento-suave px-4 py-3 font-bold">{TEXTOS.sinConexion}</p>}
+      {subida?.e === "rechazo" && (
+        <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-3 font-bold text-red-700 noche:text-red-300">
+          {subida.mensaje}
+        </p>
+      )}
+
+      {dictado?.estado === "error" && (
+        <div className="space-y-2 rounded-2xl bg-superficie-2 p-4">
+          <p className="text-xl font-extrabold">{s === "esperando_gemini" ? CHIPS.esperando_gemini : TEXTOS.errorTitulo}</p>
+          <p role="alert">{mensajeError(dictado)}</p>
+          {dictado.transcripcion && <VerLoQueSeDijo titulo={TEXTOS.loQueSeEscucho} texto={dictado.transcripcion} />}
+        </div>
+      )}
+      {s === "no_receta" && (
+        <div className="space-y-2 rounded-2xl bg-superficie-2 p-4">
+          <p role="alert">{TEXTOS.noReceta(dictado?.motivo)}</p>
+          {dictado?.transcripcion && <VerLoQueSeDijo titulo={TEXTOS.loQueSeEscucho} texto={dictado.transcripcion} />}
+        </div>
+      )}
+      {msg && (
+        <p role="alert" className="font-bold">
+          {msg}
+        </p>
+      )}
+      {confirmarDescarte && (
+        <div className="rounded-2xl bg-red-600/10 p-4">
+          <p className="mb-3 font-bold">{TEXTOS.confirmarDescartar}</p>
+          <div className="flex flex-wrap gap-2">
+            <Boton variante="peligro" disabled={ocupado} onClick={alSiDescartar}>
+              {TEXTOS.siDescartar}
+            </Boton>
+            <Boton variante="fantasma" onClick={alNoDescartar}>
+              {TEXTOS.no}
+            </Boton>
+          </div>
+        </div>
+      )}
+      {!lista && (subida?.e !== "rechazo" || subida.motivo === "lleno") && <p className="text-base text-tinta-suave">{TEXTOS.pieAvance}</p>}
+    </div>
+  );
+}

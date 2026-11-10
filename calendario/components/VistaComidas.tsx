@@ -28,6 +28,7 @@ import {
   type Espacio,
 } from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
+import { conAprox } from "@/lib/dictados/textos";
 import { useIrAHoyEnMovil } from "@/lib/hooks";
 import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, cx } from "./ui";
 import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
@@ -717,7 +718,7 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
                         {todoComprado ? (
                           <span className="font-bold text-ok">✓ ya en el carro</span>
                         ) : (
-                          <span className="num font-bold text-acento">{textoCantidad(l.cantidad, l.unidad)}</span>
+                          <span className="num font-bold text-acento">{conAprox(textoCantidad(l.cantidad, l.unidad), l.estimado && l.cantidad != null)}</span>
                         )}
                       </div>
                       <div className="truncate text-sm text-tinta-suave">

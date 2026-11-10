@@ -287,6 +287,19 @@ export const TEXTOS = {
   audioBorrado: "El audio ya se borró; queda lo que se dijo.",
   noReproduce: "Este equipo no puede reproducir este audio.",
   sinRed: "No hay conexión con la nube.",
+  confirmarBorrarAudio: "¿Borrar el audio? La receta queda como está; se borran el audio y lo que se dijo.",
+  siBorrarAudio: "Sí, borrar el audio",
+  // Escuchar y lo demás de las pantallas
+  cargandoAudio: "⏳ Bajando el audio…",
+  cargando: "Cargando…",
+  textoNoEsta: "Lo que se dijo ya no está en la nube.",
+  yaNoExiste: "Esta receta dictada ya no existe (la guardaron o la descartaron desde otro equipo).",
+  sinDictados: "No hay recetas dictadas pendientes.",
+  algoFallo: "Algo falló. Inténtalo de nuevo.",
+  micOtro: "No se pudo usar el micrófono. Graba con Notas de Voz o WhatsApp y súbelo con 📎.",
+  abriendoMicrofono: "Abriendo el micrófono…",
+  archivoVacio: "El archivo está vacío o incompleto.",
+  limites: "Cada audio puede durar hasta 15 minutos (4 MB), y puede haber hasta 20 recetas dictadas sin revisar.",
   // Respaldo
   respaldo: "Los audios de las recetas dictadas y lo que se dijo quedan en la nube; no van en el respaldo.",
 };

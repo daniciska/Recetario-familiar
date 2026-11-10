@@ -8,6 +8,7 @@ import qrcode from "qrcode-generator";
 import { useDatos } from "@/lib/store";
 import { AccesoRevocado, SinConexion, api, borrarSesion, guardarSesion, leerSesion, nombreDeEsteEquipo } from "@/lib/datos/nube";
 import { descargarRespaldo } from "@/lib/respaldo";
+import { TEXTOS } from "@/lib/dictados/textos";
 import { Boton, Entrada, Modal, cx } from "./ui";
 
 const SIN_RED = "No hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.";
@@ -306,7 +307,7 @@ function FamiliaConectada() {
         >
           <p className="text-lg">
             {quitar.esEste
-              ? "Este equipo deja de ver los cambios de la familia y se queda con una copia de lo que hay ahora. Para volver, hace falta un código nuevo."
+              ? `Este equipo deja de ver los cambios de la familia y se queda con una copia de lo que hay ahora. Para volver, hace falta un código nuevo. ${TEXTOS.respaldo}`
               : "Ese equipo deja de ver y cambiar los datos de la familia (sirve si se perdió un teléfono). Se queda con una copia de lo que tenía."}
           </p>
         </Modal>

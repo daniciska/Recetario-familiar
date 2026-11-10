@@ -8,6 +8,8 @@ import { normalizarRespaldo } from "@/lib/datos/normalizar";
 import { COLORES_MIEMBRO, EMOJIS_MIEMBRO, estadoEjemplo, nuevoId } from "@/lib/ejemplo";
 import { descargarRespaldo } from "@/lib/respaldo";
 import { SeccionNube } from "./Nube";
+import { SeccionGemini } from "./GeminiAjustes";
+import { TEXTOS as TEXTOS_DICTADOS } from "@/lib/dictados/textos";
 import { SeccionGoogle } from "./CalendarioGoogle";
 import { SeccionICloud } from "./CalendarioICloud";
 import { useModoPared } from "@/lib/hooks";
@@ -166,6 +168,8 @@ export default function VistaAjustes() {
 
         <SeccionNube />
 
+        <SeccionGemini />
+
         <SeccionGoogle />
 
         <SeccionICloud />
@@ -177,6 +181,7 @@ export default function VistaAjustes() {
           <p className="mb-3 text-base text-tinta-suave">
             Por ahora los datos se guardan en este dispositivo. Descarga un respaldo para pasarlos a otro (p. ej. del tablet al teléfono) o
             por si se borra el navegador.
+            {nube && ` ${TEXTOS_DICTADOS.respaldo}`}
           </p>
           <div className="flex flex-wrap gap-2">
             <Boton onClick={exportar}>⬇️ Descargar respaldo</Boton>
