@@ -11,12 +11,15 @@ import {
   MAX_PERSONAS,
   NoSePuedeCompartir,
   cambiarPermiso,
+  esLimiteDeUso,
   invitar,
   normalizarCorreo,
   permisoDeRol,
   permisos,
   puedeInvitar,
   quitar,
+  sinReintento,
+  textoSinReintento,
 } from "../../servidor/google/compartir";
 
 // ---------- Arnés ----------
@@ -237,6 +240,62 @@ await caso("quitar", async () => {
   await invitar(g(), cal, "prima@gmail.com", "lectura", ctx);
   sim.compartir(cal, SA, "writer");
   ok("panel sin administrar → manual (la regla sigue)", (await quitar(g(), cal, "prima@gmail.com", ctx)).modo === "manual" && rolDe(cal, "prima@gmail.com") === "reader");
+});
+
+// Google responde el mismo 404 a «esa persona no tiene regla» y a «el panel ya no ve el calendario»
+// (revisión, hallazgos 4 y 6): antes de decir «ya no estaba» / «no está» se confirma el calendario.
+await caso("quitar y cambiarPermiso cuando el panel ya no ve el calendario", async () => {
+  const cal = nuevoCal();
+  await invitar(g(), cal, PAPA, "editor", ctx);
+  sim.quitar(cal, SA);
+  const q = await intentar(quitar(g(), cal, PAPA, ctx));
+  ok("quitar sin acceso al calendario → NO_ENCONTRADO (no «yaNoEstaba»), la regla sigue", codigo(q) === "NO_ENCONTRADO" && rolDe(cal, PAPA) === "writer", [q.valor, codigo(q)]);
+  const p = await intentar(cambiarPermiso(g(), cal, PAPA, "lectura", ctx));
+  ok("cambiarPermiso sin acceso al calendario → NO_ENCONTRADO (no «noEsta»)", codigo(p) === "NO_ENCONTRADO" && rolDe(cal, PAPA) === "writer", [p.valor, codigo(p)]);
+  // El acceso se pierde entre la lectura de la regla y la escritura (404 en el DELETE / PATCH).
+  sim.compartir(cal, SA, "owner");
+  sim.inyectar((x) => x.tipo === "acl.delete" && (sim.quitar(cal, SA), true), respuestas.error("notFound"));
+  const q2 = await intentar(quitar(g(), cal, PAPA, ctx));
+  ok("…404 en el DELETE porque se perdió el acceso entre medio → NO_ENCONTRADO", codigo(q2) === "NO_ENCONTRADO" && rolDe(cal, PAPA) === "writer", [q2.valor, codigo(q2)]);
+  sim.compartir(cal, SA, "owner");
+  sim.inyectar((x) => x.tipo === "acl.patch" && (sim.quitar(cal, SA), true), respuestas.error("notFound"));
+  const p2 = await intentar(cambiarPermiso(g(), cal, PAPA, "lectura", ctx));
+  ok("…404 en el PATCH porque se perdió el acceso entre medio → NO_ENCONTRADO", codigo(p2) === "NO_ENCONTRADO" && rolDe(cal, PAPA) === "writer", [p2.valor, codigo(p2)]);
+  // Con el calendario a la vista, un 404 sigue siendo «no tiene regla» (con un solo pedido más).
+  sim.compartir(cal, SA, "owner");
+  sim.reiniciarContadores();
+  const nadie = await quitar(g(), cal, "nadie@gmail.com", ctx);
+  ok("quitar a quien no tiene regla (calendario a la vista) → yaNoEstaba, con 2 pedidos", nadie.modo === "panel" && "yaNoEstaba" in nadie && nadie.yaNoEstaba === true && sim.contadores.api === 2, [nadie, sim.contadores]);
+  sim.reiniciarContadores();
+  const nuevo = await invitar(g(), cal, "vecina2@gmail.com", "lectura", ctx);
+  ok("invitar a alguien nuevo no agrega el pedido de confirmación (GET regla + insert)", nuevo.modo === "panel" && sim.contadores.api === 2, sim.contadores);
+});
+
+// Nada reintenta solo estos pedidos (revisión, hallazgo 7): un límite de uso dice «vuelve a intentarlo».
+await caso("textoSinReintento", async () => {
+  const cal = nuevoCal();
+  sim.inyectar(es.tipo("acl.insert"), respuestas.error("rateLimitExceeded"));
+  const lim = await intentar(invitar(g(), cal, "vecina@gmail.com", "lectura", ctx));
+  const t = lim.error instanceof ErrorCalDAV ? textoSinReintento(lim.error) : "";
+  ok("403 rateLimitExceeded al invitar → «vuelve a intentarlo en un minuto», sin «se reintenta solo»", /vuelve a intentarlo en un minuto/.test(t) && !/se reintenta solo/.test(t), t);
+  sim.inyectar(es.tipo("acl.delete"), respuestas.error("rateLimit429"));
+  await invitar(g(), cal, "vecina@gmail.com", "lectura", ctx);
+  const lim2 = await intentar(quitar(g(), cal, "vecina@gmail.com", ctx));
+  ok("429 al quitar → esLimiteDeUso y el mismo texto", esLimiteDeUso(lim2.error) && /vuelve a intentarlo en un minuto/.test(textoSinReintento(lim2.error as ErrorCalDAV)), codigo(lim2));
+  const neutro = new ErrorCalDAV("Google Calendar pidió esperar un momento (límite de uso).", 403, "SERVIDOR");
+  ok("con un texto neutro del transporte: «…(límite de uso): vuelve a intentarlo en un minuto.»", textoSinReintento(neutro) === "Google Calendar pidió esperar un momento (límite de uso): vuelve a intentarlo en un minuto.", textoSinReintento(neutro));
+  const token = new ErrorCalDAV("Google respondió 429: inténtalo en unos minutos", 429, "SERVIDOR");
+  ok("si ya dice que se intente de nuevo, queda igual", textoSinReintento(token) === token.message, textoSinReintento(token));
+  const otros = [
+    new ErrorCalDAV("Google Calendar no aceptó el pedido (403 desconocido).", 403, "SERVIDOR"),
+    new ErrorCalDAV("No encontramos el calendario o no está compartido con x.", 404, "NO_ENCONTRADO"),
+    new ErrorCalDAV("Google Calendar respondió 503: inténtalo en unos minutos", 503, "SERVIDOR"),
+  ];
+  ok("lo que no es límite de uso queda igual", otros.every((e) => !esLimiteDeUso(e) && textoSinReintento(e) === e.message));
+  ok("sinReintento: el mismo error (status y código) con el texto nuevo; lo demás, el mismo objeto", (() => {
+    const x = sinReintento(lim.error) as ErrorCalDAV;
+    return x instanceof ErrorCalDAV && x.status === 403 && x.codigo === "SERVIDOR" && x.message === t && sinReintento(otros[0]) === otros[0];
+  })());
 });
 
 // =====================================================================================

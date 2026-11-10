@@ -212,6 +212,121 @@ await caso("manual", async () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+seccion("Revisión: estados de las personas y casos de borde");
+
+// Hallazgos 4 y 6: el 404 de un calendario que el panel ya no ve no es «esa persona no tiene regla».
+await caso("quitar y /permiso cuando el panel ya no ve el calendario", async () => {
+  const { fam, cal } = await conectada("owner");
+  await pedir(fam, "POST", "invitar", { nombre: "Rodrigo", correo: PAPA, rol: "padre", permiso: "editor", miembroId: "papa" });
+  sim.quitar(cal, a.SA);
+  let r = await pedir(fam, "POST", "quitar", { correo: PAPA });
+  ok("/quitar → 424 NO_ENCONTRADO (no «ya no ve el calendario»)", r.status === 424 && r.datos.codigo === "NO_ENCONTRADO" && !r.datos.yaNoEstaba, r);
+  ok("…sigue con acceso en Google y sigue guardado en el panel", rolEn(cal, PAPA) === "writer" && (await guardadas(fam)).some((p) => p.correo === PAPA), [sim.acl(cal), await guardadas(fam)]);
+  r = await pedir(fam, "POST", "permiso", { correo: PAPA, permiso: "lectura" });
+  ok("/permiso → 424 NO_ENCONTRADO (no NO_ESTA «invítala de nuevo»)", r.status === 424 && r.datos.codigo === "NO_ENCONTRADO", r);
+  ok("…nada cambió", rolEn(cal, PAPA) === "writer" && (await guardadas(fam)).find((p) => p.correo === PAPA)?.permiso === "editor", await guardadas(fam));
+  sim.compartir(cal, a.SA, "owner");
+  r = await pedir(fam, "POST", "quitar", { correo: PAPA });
+  ok("con el acceso de vuelta, /quitar funciona", r.status === 200 && r.datos.modo === "panel" && !r.datos.yaNoEstaba && rolEn(cal, PAPA) === "none" && (await guardadas(fam)).length === 0, r);
+  await liberar(fam);
+});
+
+// Hallazgo 5: invitaciones simultáneas cerca del máximo no recortan en silencio a la recién invitada.
+await caso("invitaciones simultáneas cerca del máximo", async () => {
+  const { fam, cal } = await conectada("owner");
+  for (let i = 0; i < 18; i++) {
+    const x = await pedir(fam, "POST", "invitar", { nombre: `P${i}`, correo: `p${i}@gmail.com`, rol: "adulto", permiso: "lectura" });
+    if (x.status !== 200) ok(`invitar P${i}`, false, x);
+  }
+  const rs = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => pedir(fam, "POST", "invitar", { nombre: `Q${i}`, correo: `q${i}@gmail.com`, rol: "adulto", permiso: "editor" })));
+  const aceptadas = rs.filter((x) => x.status === 200).map((x) => x.datos.persona.correo as string);
+  let g = await guardadas(fam);
+  const perdidas = aceptadas.filter((c) => !g.some((p) => p.correo === c));
+  ok("toda persona respondida con 200 queda guardada (nadie se recorta)", aceptadas.length > 0 && perdidas.length === 0, { aceptadas, perdidas, guardadas: g.length });
+  ok("…y con su nombre (no como «compartido en Google»)", aceptadas.every((c) => g.find((p) => p.correo === c)?.nombre?.startsWith("Q")), g.slice(-6));
+  ok("…lo guardado calza con la ACL", g.every((p) => rolEn(cal, p.correo) !== "none") && g.length === 18 + aceptadas.length, g.length);
+  const total = g.length;
+  let r = await pedir(fam, "POST", "permiso", { correo: "p0@gmail.com", permiso: "editor" });
+  g = await guardadas(fam);
+  ok("un /permiso después tampoco recorta la lista", r.status === 200 && g.length === total, [r.status, g.length]);
+  r = await pedir(fam, "POST", "invitar", { nombre: "Otra", correo: "otra@gmail.com", rol: "adulto", permiso: "lectura" });
+  ok("pasado el máximo, la siguiente → 400 MAXIMO sin escribir en Google", r.status === 400 && r.datos.codigo === "MAXIMO" && rolEn(cal, "otra@gmail.com") === "none", r);
+  await liberar(fam);
+});
+
+// Hallazgo 7: nada reintenta solo invitar, /permiso ni /quitar.
+await caso("límite de uso: «vuelve a intentarlo en un minuto»", async () => {
+  const { fam } = await conectada("owner");
+  const sinPromesa = (r: { datos: any }) => /vuelve a intentarlo en un minuto/.test(r.datos?.error ?? "") && !/se reintenta solo/.test(r.datos?.error ?? "");
+  sim.inyectar(es.tipo("acl.insert"), respuestas.error("rateLimitExceeded"), 1);
+  let r = await pedir(fam, "POST", "invitar", { nombre: "Rodrigo", correo: PAPA, rol: "padre", permiso: "editor" });
+  ok("invitar con límite de uso → 424 SERVIDOR que pide volver a intentarlo (sin «se reintenta solo»)", r.status === 424 && r.datos.codigo === "SERVIDOR" && sinPromesa(r), r);
+  await pedir(fam, "POST", "invitar", { nombre: "Rodrigo", correo: PAPA, rol: "padre", permiso: "editor" });
+  sim.inyectar(es.tipo("acl.patch"), respuestas.error("rateLimit429"), 1);
+  r = await pedir(fam, "POST", "permiso", { correo: PAPA, permiso: "lectura" });
+  ok("/permiso con 429 → lo mismo", r.status === 424 && sinPromesa(r), r);
+  sim.inyectar(es.tipo("acl.delete"), respuestas.error("userRateLimitExceeded"), 1);
+  r = await pedir(fam, "POST", "quitar", { correo: PAPA });
+  ok("/quitar con límite de uso → lo mismo, y sigue guardado", r.status === 424 && sinPromesa(r) && (await guardadas(fam)).length === 1, r);
+  sim.inyectar(es.tipo("acl.list"), respuestas.error("rateLimitExceeded"), 1);
+  r = await pedir(fam, "GET", "personas");
+  ok("GET /personas con límite de uso → aviso que pide volver a intentarlo", r.status === 200 && /vuelve a intentarlo en un minuto/.test(r.datos.aviso ?? "") && !/se reintenta solo/.test(r.datos.aviso ?? ""), r.datos);
+  await liberar(fam);
+});
+
+// Hallazgo 8: una persona manual cuando el panel ya puede invitar → «sinInvitar» («Invitar ahora»).
+await caso("manual y después el panel puede invitar → sinInvitar", async () => {
+  const { fam, cal } = await conectada("writer");
+  await pedir(fam, "POST", "invitar", { nombre: "Rodrigo", correo: PAPA, rol: "padre", permiso: "editor", miembroId: "papa" });
+  await pedir(fam, "POST", "invitar", { nombre: "Abuela", correo: "abuela@gmail.com", rol: "adulto", permiso: "lectura" });
+  let r = await pedir(fam, "GET", "personas");
+  ok("con writer: las dos «pendiente»", r.datos.puedeInvitar === false && r.datos.personas.length === 2 && r.datos.personas.every((p: any) => p.estado === "pendiente"), r.datos.personas);
+  // La dueña sigue el consejo: «Realizar cambios y administrar el uso compartido».
+  sim.compartir(cal, a.SA, "owner");
+  r = await pedir(fam, "GET", "personas");
+  const papa = r.datos.personas.find((p: any) => p.correo === PAPA);
+  ok("con owner: puedeInvitar y la persona manual queda «sinInvitar» con el permiso pedido", r.datos.puedeInvitar === true && papa?.estado === "sinInvitar" && papa.permiso === "editor" && papa.rolGoogle === null && papa.modo === "manual" && papa.miembroId === "papa", r.datos.personas);
+  ok("…la otra también", r.datos.personas.find((p: any) => p.correo === "abuela@gmail.com")?.estado === "sinInvitar", r.datos.personas);
+  // «Invitar ahora»: la interfaz manda lo guardado. Aunque no venga el miembroId, se conserva.
+  r = await pedir(fam, "POST", "invitar", { nombre: papa.nombre, correo: papa.correo, rol: papa.rol, permiso: papa.permiso });
+  ok("«Invitar ahora» → 200 modo panel, writer en Google", r.status === 200 && r.datos.modo === "panel" && rolEn(cal, PAPA) === "writer", r);
+  const g = await guardadas(fam);
+  ok("…la misma persona actualizada en su lugar (sin duplicar, modo panel, conserva su miembroId)", g.length === 2 && g[0].correo === PAPA && g[0].modo === "panel" && g[0].miembroId === "papa" && g[0].permiso === "editor", g);
+  ok("…con la fecha de la invitación nueva", g[0].invitada === r.datos.persona.invitada && r.datos.persona.miembroId === "papa", [g[0], r.datos.persona]);
+  r = await pedir(fam, "GET", "personas");
+  ok("…y se ve «ok»", r.datos.personas.find((p: any) => p.correo === PAPA)?.estado === "ok", r.datos.personas);
+  r = await pedir(fam, "POST", "invitar", { nombre: "Rodrigo", correo: PAPA, rol: "padre", permiso: "editor", miembroId: "sofi" });
+  ok("un miembroId que sí viene reemplaza al guardado", (await guardadas(fam))[0].miembroId === "sofi", await guardadas(fam));
+  await liberar(fam);
+});
+
+// Hallazgo 10: persona manual que ya tenía en Google una regla de otro permiso.
+await caso("manual con una regla de otro permiso → pendiente (con rolGoogle) o sinInvitar", async () => {
+  const { fam, cal } = await conectada("writer");
+  sim.compartir(cal, PAPA, "freeBusyReader");
+  sim.compartir(cal, "abuela@gmail.com", "reader");
+  for (const [correo, permiso] of [[PAPA, "editor"], ["abuela@gmail.com", "editor"], ["tio@gmail.com", "editor"], ["admin@gmail.com", "lectura"]]) {
+    const x = await pedir(fam, "POST", "invitar", { nombre: correo.split("@")[0], correo, rol: "adulto", permiso });
+    ok(`invitar a ${correo} como ${permiso} → manual`, x.status === 200 && x.datos.modo === "manual", x);
+  }
+  // La dueña lo hace a mano en Google: al tío con lo pedido, y a otro le da «administrar».
+  sim.compartir(cal, "tio@gmail.com", "writer");
+  sim.compartir(cal, "admin@gmail.com", "owner");
+  let r = await pedir(fam, "GET", "personas");
+  const ver = (c: string) => r.datos.personas.find((p: any) => p.correo === c);
+  ok("disponible/ocupado y se pidió editor → «pendiente», rolGoogle freeBusyReader, permiso pedido", ver(PAPA)?.estado === "pendiente" && ver(PAPA).rolGoogle === "freeBusyReader" && ver(PAPA).permiso === "editor", ver(PAPA));
+  ok("solo lectura y se pidió editor → «pendiente», rolGoogle reader", ver("abuela@gmail.com")?.estado === "pendiente" && ver("abuela@gmail.com").rolGoogle === "reader" && ver("abuela@gmail.com").permiso === "editor", ver("abuela@gmail.com"));
+  ok("ya tiene lo pedido → «ok»", ver("tio@gmail.com")?.estado === "ok" && ver("tio@gmail.com").permiso === "editor", ver("tio@gmail.com"));
+  ok("quien administra (owner) ya tiene más que lo pedido → «ok»", ver("admin@gmail.com")?.estado === "ok" && ver("admin@gmail.com").rolGoogle === "owner", ver("admin@gmail.com"));
+  sim.compartir(cal, a.SA, "owner");
+  r = await pedir(fam, "GET", "personas");
+  ok("con owner → «sinInvitar» (con rolGoogle)", ver(PAPA)?.estado === "sinInvitar" && ver(PAPA).rolGoogle === "freeBusyReader" && ver("abuela@gmail.com")?.estado === "sinInvitar", r.datos.personas);
+  r = await pedir(fam, "POST", "invitar", { nombre: "papa", correo: PAPA, rol: "adulto", permiso: "editor" });
+  ok("«Invitar ahora» → PATCH a writer y queda «ok»", r.status === 200 && r.datos.modo === "panel" && rolEn(cal, PAPA) === "writer" && (await pedir(fam, "GET", "personas")).datos.personas.find((p: any) => p.correo === PAPA)?.estado === "ok", [r, sim.acl(cal)]);
+  await liberar(fam);
+});
+
+// ---------------------------------------------------------------------------------------------
 seccion("POST /dueno");
 await caso("dueño", async () => {
   const { fam } = await conectada("owner");

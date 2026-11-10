@@ -19,6 +19,9 @@
 //   limpiarRestos(g, familiaId): Promise<boolean>            borra el evento de una prueba anterior que se cortó (true si no queda nada)
 //   CLAVE_PRUEBA(familiaId), CLAVE_CAPACIDADES(familiaId)
 //
+// Nada reintenta solo la prueba: los textos de error pasan por textoSinReintento (un límite de uso dice
+// «vuelve a intentarlo en un minuto»).
+//
 // servidor/google/* nunca importa servidor/sincronizar.ts.
 
 import { ErrorCalDAV } from "../caldav";
@@ -26,6 +29,7 @@ import { almacen, idAzar } from "../comun";
 import { ZONA } from "../../lib/fechas";
 import { tokenDeAcceso } from "./cuenta";
 import { marcar, type Cuerpo } from "./escritura";
+import { textoSinReintento } from "./compartir";
 import { idDePrueba } from "./ids";
 import { huellaPieza, type EvG } from "./serie";
 import { problemaDeRol, rutaCalendario, type GoogleCalendar, type RespuestaGoogle } from "./transporte";
@@ -173,7 +177,7 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
       paso("token", "ok", "La clave de la cuenta de servicio funciona.");
     } catch (e) {
       if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") throw new Corte();
-      paso("token", "error", e instanceof ErrorCalDAV ? e.message : "No se pudo pedir el permiso a Google.");
+      paso("token", "error", e instanceof ErrorCalDAV ? textoSinReintento(e) : "No se pudo pedir el permiso a Google.");
       return res;
     }
 
@@ -184,7 +188,7 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
       info = await g.calendario(calId);
     } catch (e) {
       if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") throw new Corte();
-      paso("permiso", "error", e instanceof ErrorCalDAV ? e.message : "No se pudo leer el calendario.");
+      paso("permiso", "error", e instanceof ErrorCalDAV ? textoSinReintento(e) : "No se pudo leer el calendario.");
       return res;
     }
     res.nombre = info.nombre;
@@ -217,7 +221,7 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
         a = await pedir("GET", `${rutaCalendario(calId)}/acl`, { query: { maxResults: "1", fields: "items(id)" } });
       } catch (e) {
         if (e instanceof Corte || !(e instanceof ErrorCalDAV) || e.codigo === "TIEMPO") throw e;
-        paso("compartir", "aviso", `No se pudo revisar si el panel puede invitar a otras personas: ${e.message}`);
+        paso("compartir", "aviso", `No se pudo revisar si el panel puede invitar a otras personas: ${textoSinReintento(e)}`);
       }
       if (a) {
         cap.puedeInvitar = a.status === 200;
@@ -241,7 +245,7 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
       await limpiarRestos(g, familiaId);
     } catch (e) {
       if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") throw new Corte();
-      paso("limpieza", "error", `No se pudo borrar el evento de una prueba anterior: ${(e as Error).message}`);
+      paso("limpieza", "error", `No se pudo borrar el evento de una prueba anterior: ${e instanceof ErrorCalDAV ? textoSinReintento(e) : (e as Error).message}`);
       return res;
     }
 
@@ -382,7 +386,7 @@ export async function probar(g: GoogleCalendar, calId: string, familiaId: string
       return res; // lo anotado en Blobs se limpia en la próxima prueba
     }
     if (!(e instanceof ErrorCalDAV)) throw e;
-    paso(actual, "error", e.message);
+    paso(actual, "error", textoSinReintento(e));
     // Se intenta borrar el evento de prueba ahora (si no se puede, lo hace la próxima prueba). También si
     // el pedido que lo creaba falló sin respuesta: pudo haberse creado igual.
     const pendiente = id ?? anotado;

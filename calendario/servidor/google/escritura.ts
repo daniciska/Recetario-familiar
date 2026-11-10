@@ -5,7 +5,9 @@
 // planear compara A con B pieza por pieza y traduce la diferencia a lo que Google sí permite:
 // - campos del principal (título, nota, lugar, horas, repetición) → un PATCH del principal;
 // - un día borrado → EXDATE en recurrence, o cancelar la excepción de ese día si existe;
-// - un día cambiado que se edita → PATCH de esa excepción.
+// - un día cambiado que se edita → PATCH de esa excepción;
+// - las "fantasmas" (días que Google materializó idénticos a la serie) reciben lo mismo que el principal
+//   (textos y, si cambió la duración, la hora de término), para que sigan siendo iguales a la serie.
 // Lo que Google no deja hacer sin cambiar otra cosa (mover una serie que tiene días cambiados, revivir
 // un día cancelado allá, crear o deshacer un día cambiado) lanza NoSePuedeEscribir: el motor deja lo de
 // Google y avisa.
@@ -13,7 +15,7 @@
 // API:
 //   vista(ics): Record<clave, VistaPieza>          clave "" = principal; si no, claveValor(RECURRENCE-ID)
 //   ocurre(principalB, original): boolean          ¿la regla de B (sin EXDATE) genera ese inicio?
-//   planear(serie, icsB): Plan                     { maestro?, ops, avisoTitulo } o NoSePuedeEscribir
+//   planear(serie, icsB): Plan                     { maestro?, ops, seguir, avisoTitulo } o NoSePuedeEscribir
 //   seVeIgual(serie, ics): boolean                 ¿la serie proyectada se ve igual que ese .ics? (sin nada que mandar)
 //   cuerposDeHora(vevent, conRecurrencia)          { start, end } con date/dateTime/timeZone (null = borrar)
 //   recurrenciaDe(vevent): string[]                RRULE/EXRULE/RDATE + un EXDATE por valor
@@ -39,6 +41,7 @@ import {
   esZonaUTC,
   fechaDeClave,
   huellaPieza,
+  instanteDeHora,
   normRec,
   proyectar,
   relojEn,
@@ -85,8 +88,16 @@ export interface Op {
 export interface Plan {
   /** PATCH del principal (si hay algo que cambiarle). */
   maestro?: Cuerpo;
-  /** PATCH de excepciones, en orden: primero las que se cambian, después las que se cancelan. */
+  /** PATCH de excepciones, en orden: primero las que se cambian, después las que se cancelan. Van antes del principal. */
   ops: Op[];
+  /**
+   * PATCH de las fantasmas (no canceladas en este plan) con lo mismo que cambia el principal: textos y, si
+   * cambió la duración, la hora de término con su mismo inicio. Van después del principal y sólo si se
+   * escribió (si no, quedarían distintas de la serie vieja). Hasta MAX_SEGUIR, por fecha.
+   */
+  seguir: Op[];
+  /** Fantasmas que no entraron en `seguir` (más de MAX_SEGUIR): quedarán como días cambiados. */
+  sinSeguir?: number;
   /** SUMMARY de B (para los avisos). */
   avisoTitulo: string;
   /**
@@ -412,6 +423,25 @@ function ajustarFin(cuerpo: Cuerpo, base: EvG) {
 // ---------- Planear un cambio ----------
 
 const TEXTOS = ["summary", "description", "location"] as const;
+/** Cuántas fantasmas se ponen al día por cambio (cada una es un PATCH; más no cabrían en el plazo de una vuelta). */
+export const MAX_SEGUIR = 10;
+
+const horaCuerpo = (t: HoraG | undefined): HoraCuerpo => ({ date: t?.date ?? null, dateTime: t?.dateTime ?? null, timeZone: t?.timeZone ?? null });
+
+/**
+ * start (el mismo) y end de una excepción para que dure `dur` ms (o días completos), en su misma zona.
+ * Va también start: así, si Google no acepta fin = inicio, el transporte puede mandar el respaldo "sin
+ * hora de término" (finIgualInicio mira los dos).
+ */
+function horaConDuracion(x: EvG, dur: number): { start: HoraCuerpo; end: HoraCuerpo } | null {
+  const ini = instanteDeHora(x.start);
+  if (!x.start || !Number.isFinite(ini) || !Number.isFinite(dur) || dur < 0) return null;
+  const ms = ini + dur;
+  if (x.start.date) return { start: horaCuerpo(x.start), end: { date: new Date(ms).toISOString().slice(0, 10), dateTime: null, timeZone: null } };
+  const zona = x.end?.timeZone || x.start.timeZone || null;
+  const dateTime = zonaValida(zona) && !esZonaUTC(zona) ? conDesfase(zona, ms) : new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return { start: horaCuerpo(x.start), end: { date: null, dateTime, timeZone: zona } };
+}
 
 /** Campos de una pieza que difieren entre A y B (null si ninguno). */
 function diferencia(a: VistaPieza, b: VistaPieza, vB: ICAL.Component, base: EvG, conRecurrencia: boolean): Cuerpo | null {
@@ -457,7 +487,7 @@ export function planear(serie: Serie, icsB: string): Plan {
   const proy = proyectar(serie);
   const A = leer(proy.ics);
   // Nada que el panel vea cambió (sólo SEQUENCE, DTSTAMP, VTIMEZONE…): no hay nada que mandar.
-  if (igualesVistas(A.vistas, B.vistas)) return { ops: [], avisoTitulo: T };
+  if (igualesVistas(A.vistas, B.vistas)) return { ops: [], seguir: [], avisoTitulo: T };
   const principal = serie.principal;
   if (serie.soloLectura || !principal) {
     throw new NoSePuedeEscribir(`"${T}" es una invitación o un evento que solo se puede cambiar en Google Calendar.`);
@@ -560,12 +590,44 @@ export function planear(serie: Serie, icsB: string): Plan {
   ajustarFin(m, principal);
   if (cambiaRec) m.recurrence = recurrenceB.length ? recurrenceB : null;
 
+  // Fantasmas: no se sabe si Google les pasa lo que cambia en el principal (y en la pared no se ven). Si no
+  // se lo pasa, quedarían con el valor viejo como días cambiados (también en los iPhone): se les manda lo
+  // mismo. Con la misma duración no se les toca la hora (siguen iguales aunque la serie cambie de inicio,
+  // porque planear ya exigió que la regla nueva genere su día).
+  const seguir: Op[] = [];
+  let sinSeguir = 0;
+  const textos: Cuerpo = {};
+  for (const k of TEXTOS) if (k in m) textos[k] = m[k];
+  const horaB = cambioHorario ? cuerposDeHora(vB, conRecurrencia) : null;
+  const durB = horaB ? instanteDeHora(horaB.end) - instanteDeHora(horaB.start) : NaN;
+  for (const f of serie.fantasmas) {
+    const clave = claveHora(f.originalStartTime);
+    if (canceladas.has(f.id) || !clave) continue;
+    const c: Cuerpo = { ...textos };
+    if (Number.isFinite(durB) && !(f.endTimeUnspecified && durB === 0)) {
+      const durF = f.endTimeUnspecified ? NaN : instanteDeHora(f.end) - instanteDeHora(f.start);
+      const hora = durF === durB ? null : horaConDuracion(f, durB);
+      if (hora) Object.assign(c, hora);
+    }
+    ajustarFin(c, f);
+    if (!Object.keys(c).length) continue;
+    if (seguir.length >= MAX_SEGUIR) sinSeguir++;
+    else seguir.push(op("cambiar", f, clave, c));
+  }
+
   ops.sort((a, b) => (a.tipo !== b.tipo ? (a.tipo === "cambiar" ? -1 : 1) : a.clave < b.clave ? -1 : a.clave > b.clave ? 1 : 0));
   // Un EXDATE que A tenía fuera de su regla (p. ej. más allá del "hasta", después de dividir la serie en
   // la web) no es una excepción en la pared; ics.ts lo conserva al escribir B y, si la regla de B vuelve a
   // generar ese día, Google lo oculta. La pared no lo sabe: que relea (y quede como Google).
   const releer = cambiaRec && EB.some((v) => EA.has(v) && ocurre(vB, horaDeClave(v)) && !ocurre(vA, horaDeClave(v)));
-  return { maestro: Object.keys(m).length ? marcar(principal, m) : undefined, ops, avisoTitulo: T, ...(releer ? { releer } : {}) };
+  return {
+    maestro: Object.keys(m).length ? marcar(principal, m) : undefined,
+    ops,
+    seguir,
+    avisoTitulo: T,
+    ...(sinSeguir ? { sinSeguir } : {}),
+    ...(releer ? { releer } : {}),
+  };
 }
 
 // ---------- Crear ----------

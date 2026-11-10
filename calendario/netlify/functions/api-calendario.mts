@@ -54,6 +54,8 @@ import {
   permisoDeRol,
   permisos,
   quitar,
+  sinReintento,
+  textoSinReintento,
   MAX_PERSONAS,
   type ReglaPersona,
 } from "../../servidor/google/compartir";
@@ -65,6 +67,8 @@ const LIMITE_MS = 6500;
 
 const ID_INVALIDO =
   "Ese ID de calendario no se ve bien. Se copia en Google Calendar → Configuración del calendario → Integrar el calendario → ID de calendario.";
+const ID_ES_PANEL =
+  "Ese es el correo del panel (la cuenta de servicio), no el ID del calendario. Pega el ID del calendario de la familia: en Google Calendar → Configuración del calendario → Integrar el calendario → ID de calendario (suele terminar en @group.calendar.google.com).";
 const OTRA_FAMILIA_GOOGLE = "La cuenta de servicio de Google del panel ya está conectada a otra familia";
 const SIN_GOOGLE = "No hay un calendario de Google Calendar conectado";
 const ROLES: readonly RolAdulto[] = ["madre", "padre", "adulto"];
@@ -74,6 +78,14 @@ const errorCalDAV = (e: unknown, proveedor = "iCloud") =>
   e instanceof ErrorCalDAV
     ? json({ error: e.message, codigo: e.codigo }, e.codigo === "CLAVE" || e.codigo === "CONFIGURACION" ? 400 : 424)
     : json({ error: `No se pudo hablar con ${proveedor}: ` + (e as Error).message }, 424);
+
+/**
+ * ¿Pegaron el correo de la cuenta de servicio (la del panel o cualquier *.gserviceaccount.com) como ID
+ * del calendario? Para Google es el calendario principal de esa cuenta: «Probar» saldría bien y se
+ * conectaría a un calendario que la familia no ve.
+ */
+const esCorreoDeServicio = (id: string, correoPanel: string) =>
+  mismaCuenta(id.toLowerCase(), correoPanel.toLowerCase()) || /(^|[@.])gserviceaccount\.com$/i.test(id);
 
 const esGoogle = (c: ConexionCalendario) => c.proveedor === "google";
 /** Las conexiones guardadas antes de Google no traen otro proveedor que "icloud": todo lo que no es google es iCloud. */
@@ -135,8 +147,16 @@ async function cambiarConexion(familiaId: string, id: string, fn: (c: ConexionCa
   return caja.nueva;
 }
 
+/**
+ * Tope duro de personas guardadas. El máximo (MAX_PERSONAS) se revisa antes de invitar, con lo guardado al
+ * empezar el pedido: invitaciones simultáneas pueden pasarse por tantas como pedidos haya, y a esas ya se
+ * les escribió en Google, así que no se recortan (lo guardado tiene que calzar con la ACL). Esto sólo
+ * acota el tamaño.
+ */
+const TOPE_GUARDADAS = 2 * MAX_PERSONAS;
+
 const cambiarPersonas = (familiaId: string, id: string, fn: (l: PersonaCalendario[]) => PersonaCalendario[]) =>
-  cambiarConexion(familiaId, id, (c) => ({ ...c, personas: fn(c.personas ?? []).slice(0, MAX_PERSONAS) }));
+  cambiarConexion(familiaId, id, (c) => ({ ...c, personas: fn(c.personas ?? []).slice(0, TOPE_GUARDADAS) }));
 
 /** Cómo se ve cada persona: lo guardado en el panel junto con lo que dice la ACL de Google. */
 export interface PersonaVista {
@@ -149,25 +169,37 @@ export interface PersonaVista {
   /** El rol en la ACL (owner, writer, reader, freeBusyReader…), si se pudo leer. */
   rolGoogle: string | null;
   /**
-   * ok: tiene acceso · sinAcceso: se invitó desde el panel y ya no está en Google · pendiente: hay que
-   * compartirlo a mano (el panel no pudo) · google: compartido en Google Calendar, no desde el panel.
+   * ok: tiene acceso · sinAcceso: se invitó desde el panel y ya no está en Google · pendiente: guardada en
+   * modo manual, le falta el acceso pedido (sin regla, o con una de otro permiso: rolGoogle trae el real) y
+   * hay que compartirlo a mano (el panel no puede invitar) · sinInvitar: lo mismo, pero el panel YA puede
+   * invitar («Invitar ahora» → POST /invitar con lo guardado) · google: compartido en Google Calendar, no
+   * desde el panel.
+   * En pendiente y sinInvitar, `permiso` es el pedido (el guardado), no el real.
    */
-  estado: "ok" | "sinAcceso" | "pendiente" | "google";
+  estado: "ok" | "sinAcceso" | "pendiente" | "sinInvitar" | "google";
   guardada: boolean;
   modo?: "panel" | "manual";
   invitada?: string;
 }
 
-function mezclar(guardadas: PersonaCalendario[], reglas: ReglaPersona[] | null, dueno: Adulto | null): PersonaVista[] {
+/**
+ * `puede`: el panel puede invitar (permisos().puede). Una persona guardada en modo manual a la que le falta
+ * el acceso pedido queda «pendiente» (pasos a mano) o, si el panel ya puede, «sinInvitar».
+ */
+function mezclar(guardadas: PersonaCalendario[], reglas: ReglaPersona[] | null, dueno: Adulto | null, puede: boolean): PersonaVista[] {
   const out: PersonaVista[] = [];
   const usadas = new Set<string>();
+  const falta = puede ? "sinInvitar" : "pendiente";
   for (const p of guardadas) {
     const r = reglas?.find((x) => mismaCuenta(x.correo, p.correo));
     if (r) usadas.add(r.correo);
     const base = { correo: p.correo, nombre: p.nombre, rol: p.rol, ...(p.miembroId ? { miembroId: p.miembroId } : {}), guardada: true, modo: p.modo, invitada: p.invitada };
     if (!reglas) out.push({ ...base, permiso: p.permiso, rolGoogle: null, estado: p.modo === "manual" ? "pendiente" : "ok" });
-    else if (r) out.push({ ...base, permiso: permisoDeRol(r.rol), rolGoogle: r.rol, estado: "ok" });
-    else out.push({ ...base, permiso: p.permiso, rolGoogle: null, estado: p.modo === "manual" ? "pendiente" : "sinAcceso" });
+    else if (!r) out.push({ ...base, permiso: p.permiso, rolGoogle: null, estado: p.modo === "manual" ? falta : "sinAcceso" });
+    // Manual con una regla de otro permiso (p. ej. disponible/ocupado, o lectura cuando se pidió editor):
+    // todavía falta lo pedido. Quien administra (owner) ya tiene más que eso.
+    else if (p.modo === "manual" && r.rol !== "owner" && permisoDeRol(r.rol) !== p.permiso) out.push({ ...base, permiso: p.permiso, rolGoogle: r.rol, estado: falta });
+    else out.push({ ...base, permiso: permisoDeRol(r.rol), rolGoogle: r.rol, estado: "ok" });
   }
   for (const r of reglas ?? []) {
     if (usadas.has(r.correo) || (dueno && mismaCuenta(r.correo, dueno.correo))) continue;
@@ -176,8 +208,9 @@ function mezclar(guardadas: PersonaCalendario[], reglas: ReglaPersona[] | null, 
   return out;
 }
 
+// Nada reintenta solo estos pedidos: un límite de uso dice «vuelve a intentarlo en un minuto».
 const respuestaCompartir = (e: unknown) =>
-  e instanceof NoSePuedeCompartir ? json({ error: e.message, codigo: e.codigo }, 400) : errorCalDAV(e, "Google Calendar");
+  e instanceof NoSePuedeCompartir ? json({ error: e.message, codigo: e.codigo }, 400) : errorCalDAV(sinReintento(e), "Google Calendar");
 
 export default async (req: Request, context: Context) => {
   const limite = Date.now() + LIMITE_MS;
@@ -258,7 +291,7 @@ export default async (req: Request, context: Context) => {
       puedeInvitar = p.puede;
       reglas = p.reglas ?? null;
     } catch (e) {
-      aviso = e instanceof ErrorCalDAV ? e.message : "No se pudo ver con quién se comparte en Google Calendar.";
+      aviso = e instanceof ErrorCalDAV ? textoSinReintento(e) : "No se pudo ver con quién se comparte en Google Calendar.";
     }
     const dueno = c.dueno ?? null;
     return json({
@@ -267,7 +300,7 @@ export default async (req: Request, context: Context) => {
       dueno,
       // ¿El Gmail anotado como dueño aparece como dueño en Google? (null: no se pudo leer la lista)
       duenoEnGoogle: dueno && reglas ? reglas.some((r) => r.rol === "owner" && mismaCuenta(r.correo, dueno.correo)) : null,
-      personas: mezclar(c.personas ?? [], reglas, dueno),
+      personas: mezclar(c.personas ?? [], reglas, dueno, puedeInvitar),
       ...(aviso ? { aviso } : {}),
     });
   }
@@ -291,10 +324,11 @@ export default async (req: Request, context: Context) => {
     if (await deOtraFamilia(CLAVE_DUENO_GOOGLE, s.familiaId)) return error(OTRA_FAMILIA_GOOGLE, 409);
     const id = normalizarIdCalendario(body.calendarioId);
     if (!id) return error(ID_INVALIDO, 400);
+    if (esCorreoDeServicio(id, cuenta.correo)) return json({ error: ID_ES_PANEL, codigo: "ES_PANEL" }, 400);
     try {
       return json(await probar(google(), id, s.familiaId));
     } catch (e) {
-      return errorCalDAV(e, "Google Calendar");
+      return errorCalDAV(sinReintento(e), "Google Calendar");
     }
   }
 
@@ -334,13 +368,14 @@ export default async (req: Request, context: Context) => {
       if (typeof dueno === "string") return error(dueno, 400);
       const id = normalizarIdCalendario(body.calendarioId);
       if (!id) return error(ID_INVALIDO, 400);
+      if (esCorreoDeServicio(id, cuenta.correo)) return json({ error: ID_ES_PANEL, codigo: "ES_PANEL" }, 400);
       if (await deOtraFamilia(CLAVE_DUENO_GOOGLE, s.familiaId)) return error(OTRA_FAMILIA_GOOGLE, 409);
       const g = google();
       let info: { nombre: string; zona: string | null; rol: string };
       try {
         info = await g.calendario(id);
       } catch (e) {
-        return errorCalDAV(e, "Google Calendar");
+        return errorCalDAV(sinReintento(e), "Google Calendar");
       }
       // Sólo ver o disponible/ocupado: no sirve para sincronizar (se rechaza antes de que dispare borrados).
       const problema = problemaDeRol(info.rol, info.nombre, g.correo);
@@ -463,16 +498,30 @@ export default async (req: Request, context: Context) => {
       return respuestaCompartir(e);
     }
     const miembroId = idMiembro(body.miembroId);
-    const persona: PersonaCalendario = {
-      correo: correo!, // invitar() ya lo validó
-      nombre,
-      rol: body.rol as RolAdulto,
-      permiso: body.permiso === "editor" ? "editor" : "lectura",
-      ...(miembroId ? { miembroId } : {}),
-      invitada: new Date().toISOString(),
-      modo: r.modo,
+    const modo = r.modo;
+    const nueva = (previa?: PersonaCalendario): PersonaCalendario => {
+      // Un correo ya guardado conserva su miembroId si no viene otro.
+      const mid = miembroId ?? previa?.miembroId;
+      return {
+        correo: correo!, // invitar() ya lo validó
+        nombre,
+        rol: body.rol as RolAdulto,
+        permiso: body.permiso === "editor" ? "editor" : "lectura",
+        ...(mid ? { miembroId: mid } : {}),
+        invitada: new Date().toISOString(),
+        modo,
+      };
     };
-    const guardada = await cambiarPersonas(s.familiaId, c.id, (l) => [...l.filter((p) => p.correo !== persona.correo), persona]);
+    let persona = nueva();
+    // Atómico: un correo ya guardado se actualiza en su lugar (no se duplica); uno nuevo va al final y no
+    // se recorta aunque invitaciones simultáneas pasen del máximo (ya se le escribió en Google).
+    const guardada = await cambiarConexion(s.familiaId, c.id, (x) => {
+      const l = x.personas ?? [];
+      const previa = l.find((p) => p.correo === correo);
+      persona = nueva(previa);
+      const personas = previa ? l.map((p) => (p.correo === correo ? persona : p)) : [...l.slice(0, TOPE_GUARDADAS - 1), persona];
+      return { ...x, personas };
+    });
     if (!guardada) return error(SIN_GOOGLE, 404);
     return json({ modo: r.modo, persona, igual: r.modo === "panel" && r.igual === true, dueno: c.dueno ?? null });
   }

@@ -14,8 +14,13 @@
 //   (calculado con los etag que devolvió Google, igual que el ETag de iCloud), o null si algo no salió
 //   como se planeó (entonces el motor la relee). Con null siempre, un borrado en la pared justo después de
 //   subir se tomaba como "cambió en los dos lados" y el evento volvía a aparecer.
-// - Tabla de errores por motivo: un límite de uso (403 usageLimits o 429) es SERVIDOR (se reintenta),
+// - Tabla de errores por motivo: un límite de uso (403 usageLimits o 429) es SERVIDOR (LimiteDeUso, con
+//   un texto neutro: el motor le agrega que se reintenta solo; invitar, quitar y "Probar" no reintentan),
 //   NUNCA PERMISO (PERMISO revierte la pared). Un 403 desconocido es SERVIDOR.
+// - Orden al cambiar una serie: primero las excepciones (días cambiados que se editan o se borran), después
+//   el principal y al final las "fantasmas" (para que sigan iguales a la serie). Así un cambio del principal
+//   que Google pase a las excepciones no deja viejo el If-Match de una excepción, y si algo se corta a
+//   medias lo escrito es "propio" (marca cfh) y la vuelta siguiente termina el cambio en vez de revertirlo.
 // - El token sólo va a la base aceptada (Google o, para pruebas, http://127.0.0.1 / localhost) y no se
 //   siguen redirecciones (redirect: "error").
 //
@@ -33,7 +38,7 @@
 //   baseApiGoogle(), URL_API_GOOGLE
 //   ID_CALENDARIO, idCalendarioValido(id), normalizarIdCalendario(entrada), rutaCalendario(calId)
 //   problemaDeRol(rol, nombre, correo): string | null   texto de PERMISO según el accessRole
-//   errorTiempo(), NO_EDITABLE
+//   errorTiempo(), NO_EDITABLE, class LimiteDeUso (ErrorCalDAV SERVIDOR de un 429 / 403 usageLimits)
 //
 // servidor/google/* nunca importa servidor/sincronizar.ts.
 
@@ -119,6 +124,17 @@ export function problemaDeRol(rol: string, nombre: string, correo: string): stri
 // ---------- Errores ----------
 
 export const errorTiempo = () => new ErrorCalDAV("Se acabó el tiempo para hablar con Google Calendar", 0, "TIEMPO");
+
+/**
+ * Google pidió esperar (429, o 403 con un motivo de límite de uso): SERVIDOR, nunca PERMISO. El texto es
+ * neutro porque sale también donde nadie reintenta (invitar, quitar, "Probar"); la sincronización le
+ * agrega que se reintenta sola (servidor/sincronizar.ts).
+ */
+export class LimiteDeUso extends ErrorCalDAV {
+  constructor(status: number) {
+    super("Google Calendar pidió esperar un momento (límite de uso).", status, "SERVIDOR");
+  }
+}
 
 const LIMITES = new Set(["rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded"]);
 const SIN_PERMISO = new Set(["requiredAccessLevel", "insufficientPermissions", "forbidden"]);
@@ -304,9 +320,7 @@ export class GoogleCalendar implements Transporte {
       if (status === 403 && a.deshabilitada) {
         throw new ErrorCalDAV("Falta habilitar «Google Calendar API» en el proyecto de Google Cloud de la cuenta de servicio.", 403, "CONFIGURACION");
       }
-      if (status === 429 || (status === 403 && a.limite)) {
-        throw new ErrorCalDAV("Google Calendar pidió esperar (límite de uso): se reintenta solo.", status, "SERVIDOR");
-      }
+      if (status === 429 || (status === 403 && a.limite)) throw new LimiteDeUso(status);
       if (status >= 500) throw new ErrorCalDAV(`Google Calendar respondió ${status}: inténtalo en unos minutos`, status, "SERVIDOR");
       return { status, json, motivo: a.motivo, mensaje: a.mensaje };
     }
@@ -475,9 +489,11 @@ export class GoogleCalendar implements Transporte {
     if (!serie) return "noExiste";
     if (serie.etag !== etag) return "conflicto";
     const plan = planear(serie, ics); // NoSePuedeEscribir antes de escribir nada
-    const n = (plan.maestro ? 1 : 0) + plan.ops.length;
+    const n = plan.ops.length + (plan.maestro ? 1 : 0) + plan.seguir.length;
     if (!n) return { etag: null };
-    // Sin tiempo para todo, no se empieza (el motor lo deja pendiente sin contarlo como falla).
+    // Sin tiempo para todo (las fantasmas incluidas), no se empieza: el motor lo deja pendiente sin contarlo
+    // como falla y lo hace una vuelta con más plazo (la programada). Empezar y cortarse a medias podría dejar
+    // en Google días distintos de la serie que la pared no muestra.
     if (this.queda() < 400 + 700 * n) throw errorTiempo();
     const T = plan.avisoTitulo;
     let escritos = 0;
@@ -492,12 +508,28 @@ export class GoogleCalendar implements Transporte {
       if (!etag || r.sinFin) previsible = false;
       return { ...fusionar(pieza, r.enviado), etag };
     };
+    // 1. Las excepciones, antes que el principal: si Google pasa a las excepciones un título nuevo del
+    //    principal, su If-Match (del listado) ya no serviría y ese cambio del día se perdería. Una excepción
+    //    que ya no está o que cambió es "conflicto" (nunca "noExiste": la serie sigue ahí); la vuelta
+    //    siguiente la relee.
+    for (const op of plan.ops) {
+      const r = await this.parche(url, op.pieza, op.cuerpo, T, escritos === 0);
+      if (r === "conflicto" || r === "noExiste") return "conflicto";
+      if (r === "rechazado") previsible = false;
+      else {
+        escritos++;
+        piezas.set(op.pieza.id, despues(op.pieza, r));
+      }
+    }
+    // 2. El principal ("noExiste" sólo si es el primer pedido: la serie ya no está).
+    let principalEscrito = false;
     if (plan.maestro) {
-      const r = await this.parche(url, serie.principal!, plan.maestro, T, true);
+      const r = await this.parche(url, serie.principal!, plan.maestro, T, escritos === 0);
       if (r === "conflicto" || r === "noExiste") return r;
       if (r === "rechazado") previsible = false;
       else {
         escritos++;
+        principalEscrito = true;
         principal = despues(principal, r);
         if ("recurrence" in plan.maestro) {
           const enviada = Array.isArray(plan.maestro.recurrence) ? (plan.maestro.recurrence as string[]) : [];
@@ -509,16 +541,31 @@ export class GoogleCalendar implements Transporte {
         }
       }
     }
-    for (const op of plan.ops) {
-      const r = await this.parche(url, op.pieza, op.cuerpo, T, escritos === 0);
-      if (r === "noExiste") return "noExiste"; // (sólo si es el primer pedido)
-      if (r === "conflicto") return "conflicto";
-      if (r === "rechazado") previsible = false;
-      else {
-        escritos++;
-        piezas.set(op.pieza.id, despues(op.pieza, r));
+    // 3. Las fantasmas, sólo con el principal ya escrito (antes, una fantasma cambiada sería un día distinto
+    //    de la serie vieja que la pared no tiene). Si una no se puede (Google ya le pasó el cambio y su
+    //    If-Match quedó viejo, o alguien la tocó), no se pisa: la vuelta siguiente relee lo que quedó.
+    //    Si se acaba el plazo o Google falla aquí, lo de la pared ya está en Google: no se lanza (la vuelta
+    //    siguiente revertiría la pared por esos días); se relee y esos días quedan como días cambiados.
+    const faltanDias = () => this.avisar(`"${T}": el cambio no se alcanzó a pasar a todos sus días en Google Calendar; los que faltan quedaron como días cambiados.`);
+    if (principalEscrito) {
+      for (const op of plan.seguir) {
+        const r = await this.parche(url, op.pieza, op.cuerpo, T, false).catch((e: unknown) => {
+          if (e instanceof ErrorCalDAV) return "corte" as const;
+          throw e;
+        });
+        if (r === "corte") {
+          previsible = false;
+          faltanDias();
+          break;
+        }
+        if (r === "conflicto" || r === "noExiste" || r === "rechazado") previsible = false;
+        else piezas.set(op.pieza.id, despues(op.pieza, r));
       }
-    }
+      if (plan.sinSeguir) {
+        previsible = false;
+        faltanDias();
+      }
+    } else if (plan.seguir.length) previsible = false;
     // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
     // queda igual a lo que Google guardó.
     return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null };
@@ -585,30 +632,52 @@ export class GoogleCalendar implements Transporte {
     if (!c.dias.length) return { href: hrefSerie(url, id), etag: creado ? await this.etagPrevisto(url, [creado], c.uid, ics) : null };
 
     // Días cambiados (sólo al recrear una serie que los tenía): cada uno es un PATCH de su instancia.
-    // La serie la acabamos de crear nosotros, así que va sin If-Match. Lo que falle queda como día normal.
+    // La serie la acabamos de crear nosotros, así que va sin If-Match. Un 5xx, un límite de uso o un corte
+    // de red se reintenta una vez si queda plazo; lo que igual falle queda como un día normal (con un aviso
+    // que dice por qué). Ojo: ese día no se vuelve a intentar en otra vuelta (el motor ve la serie igual a
+    // lo que mandó); la familia lo puede volver a cambiar en la pared.
+    const avisoDia = (fecha: string, porque: "rechazo" | "falla" | "noEsta") =>
+      this.avisar(
+        porque === "rechazo"
+          ? `"${T}": Google Calendar no aceptó el cambio del día ${fechaLegible(fecha)}; quedó como un día normal.`
+          : porque === "falla"
+            ? `"${T}": no se alcanzó a pasar a Google Calendar el cambio del día ${fechaLegible(fecha)}; quedó como un día normal.`
+            : `"${T}": el cambio del día ${fechaLegible(fecha)} no se pudo pasar a Google Calendar (no se encontró ese día en la serie).`,
+      );
+    /** Un pedido de un día, con un reintento ante una falla pasajera (SERVIDOR o RED) si queda plazo. */
+    const conReintento = async (f: () => Promise<RespuestaGoogle>): Promise<RespuestaGoogle> => {
+      try {
+        return await f();
+      } catch (e) {
+        if (!(e instanceof ErrorCalDAV) || (e.codigo !== "SERVIDOR" && e.codigo !== "RED") || this.queda() < 1500) throw e;
+        await new Promise((listo) => setTimeout(listo, 300));
+        return f();
+      }
+    };
     for (let i = 0; i < c.dias.length; i++) {
       const d = c.dias[i];
-      const avisoDia = () => this.avisar(`"${T}": el día ${fechaLegible(d.fecha)} ya no es parte de la serie en Google Calendar; quedó como un día normal.`);
       try {
-        const r = await this.pedirJSON("GET", `${ruta}/${encodeURIComponent(id)}/instances`, {
-          query: { timeMin: d.desde, timeMax: d.hasta, maxResults: "50", fields: CAMPOS_INSTANCIAS },
-        });
+        const r = await conReintento(() =>
+          this.pedirJSON("GET", `${ruta}/${encodeURIComponent(id!)}/instances`, {
+            query: { timeMin: d.desde, timeMax: d.hasta, maxResults: "50", fields: CAMPOS_INSTANCIAS },
+          }),
+        );
         const lista = r.status === 200 && Array.isArray(r.json?.items) ? (r.json!.items as unknown[]).filter(esObjeto) : [];
         const inst = lista.find((x) => typeof x.id === "string" && d.calza(x as unknown as EvG)) as unknown as EvG | undefined;
         if (!inst) {
-          avisoDia();
+          avisoDia(d.fecha, r.status === 200 ? "noEsta" : "rechazo");
           continue;
         }
-        const pedir = (x: Cuerpo) => this.pedirJSON("PATCH", `${ruta}/${encodeURIComponent(inst.id)}`, { query: { fields: "id,etag" }, cuerpo: x });
+        const pedir = (x: Cuerpo) => conReintento(() => this.pedirJSON("PATCH", `${ruta}/${encodeURIComponent(inst.id)}`, { query: { fields: "id,etag" }, cuerpo: x }));
         const cuerpo = d.cuerpo(inst);
         let p = await pedir(cuerpo);
         if (p.status === 400 && finIgualInicio(cuerpo)) p = await pedir({ ...sinHoraDeTermino(cuerpo, inst), end: null });
-        if (p.status !== 200) avisoDia();
+        if (p.status !== 200) avisoDia(d.fecha, "rechazo");
       } catch (e) {
         if (!(e instanceof ErrorCalDAV) && !(e instanceof NoSePuedeEscribir)) throw e;
-        avisoDia();
+        avisoDia(d.fecha, e instanceof NoSePuedeEscribir ? "rechazo" : "falla");
         if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") {
-          for (const x of c.dias.slice(i + 1)) this.avisar(`"${T}": el día ${fechaLegible(x.fecha)} ya no es parte de la serie en Google Calendar; quedó como un día normal.`);
+          for (const x of c.dias.slice(i + 1)) avisoDia(x.fecha, "falla");
           break;
         }
       }

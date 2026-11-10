@@ -68,6 +68,13 @@ await caso("probar: validaciones", async () => {
   usarClave(a.clave);
   r = await pedir(fam, "POST", "probar", { calendarioId: "no es un id" });
   ok("ID inválido → 400 con dónde copiarlo", r.status === 400 && /Integrar el calendario/.test(r.datos.error), r);
+  // Revisión, hallazgo 9: el correo de la cuenta de servicio no es el ID del calendario de la familia.
+  const antesApi = sim.contadores.api;
+  for (const id of [a.SA, ` ${a.SA.toUpperCase()} `, "otra-cuenta@otro-proyecto.iam.gserviceaccount.com"]) {
+    r = await pedir(fam, "POST", "probar", { calendarioId: id });
+    ok(`el correo de una cuenta de servicio como ID (${id.trim()}) → 400 ES_PANEL con qué pegar`, r.status === 400 && r.datos.codigo === "ES_PANEL" && /correo del panel/.test(r.datos.error) && /Integrar el calendario → ID de calendario/.test(r.datos.error), r);
+  }
+  ok("…sin pedirle nada a Google", sim.contadores.api === antesApi, sim.contadores);
   await st.setJSON("externos/google", { familiaId: "otra" });
   r = await pedir(fam, "POST", "probar", { calendarioId: cal });
   ok("cuenta de otra familia → 409", r.status === 409, r);
@@ -209,6 +216,8 @@ await caso("probar: errores de Google", async () => {
   sim.inyectar(es.tipo("events.insert"), respuestas.error("rateLimitExceeded"), 1);
   r = await pedir(fam, "POST", "probar", { calendarioId: cal });
   ok("límite de uso al crear → ❌ «pidió esperar» (no PERMISO), sin blob ni evento", pasos(r).escritura === "error" && /esperar/.test(textos(r)) && vivos(cal).length === 0, [r.datos.pasos, vivos(cal)]);
+  // Revisión, hallazgo 7: nada reintenta solo «Probar».
+  ok("…y pide volver a intentarlo en un minuto (no «se reintenta solo»)", /vuelve a intentarlo en un minuto/.test(textos(r)) && !/se reintenta solo/.test(textos(r)), textos(r));
   ok("…sin blob", (await st.get(CLAVE_PRUEBA(fam), { type: "json" })) === null);
 
   cal = a.calendario(nuevoId());
@@ -281,6 +290,13 @@ await caso("conectar: validaciones", async () => {
   ok("sin nombre → 400", r.status === 400, r);
   r = await pedir(fam, "POST", "conectar", { ...base, calendarioId: "https://calendar.google.com/calendar/u/0/r" });
   ok("ID inválido → 400 con dónde copiarlo", r.status === 400 && /Integrar el calendario/.test(r.datos.error), r);
+  for (const id of [a.SA, "otra-cuenta@otro-proyecto.iam.gserviceaccount.com"]) {
+    r = await pedir(fam, "POST", "conectar", { ...base, calendarioId: id });
+    ok(`el correo de una cuenta de servicio como ID (${id}) → 400 ES_PANEL`, r.status === 400 && r.datos.codigo === "ES_PANEL" && /correo del panel/.test(r.datos.error), r);
+  }
+  sim.inyectar(es.tipo("events.list"), respuestas.error("rateLimitExceeded"), 1);
+  r = await pedir(fam, "POST", "conectar", base);
+  ok("límite de uso al conectar → 424 que pide volver a intentarlo en un minuto", r.status === 424 && /vuelve a intentarlo en un minuto/.test(r.datos.error) && !/se reintenta solo/.test(r.datos.error), r);
   const reader = a.calendario(nuevoId(), "reader");
   r = await pedir(fam, "POST", "conectar", { ...base, calendarioId: reader });
   ok("reader → 400 PERMISO «solo para ver»", r.status === 400 && r.datos.codigo === "PERMISO" && /solo para ver/.test(r.datos.error), r);

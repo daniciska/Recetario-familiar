@@ -13,6 +13,7 @@
 
 import { ErrorCalDAV } from "./caldav";
 import { nombreProveedor, textoSinCuenta, transporteDe, type Transporte } from "./proveedores";
+import { LimiteDeUso } from "./google/transporte";
 import {
   NoSePuedeEscribir,
   SUFIJO_UID,
@@ -249,6 +250,33 @@ interface Opciones {
   uids?: string[];
 }
 
+/** Lo que una vuelta le pasa a la siguiente de la misma llamada (interno). */
+interface OpcionesVuelta extends Opciones {
+  /** Los avisos que guardaron las vueltas anteriores de esta llamada (se conservan: ver juntarAvisos). */
+  avisosAntes?: string[];
+}
+
+/** Cuántos avisos se guardan a la vez (los primeros). */
+export const MAX_AVISOS = 5;
+
+/**
+ * Los avisos que quedan a la vista: los de las vueltas anteriores de la misma llamada y después los de
+ * ésta, sin repetir y hasta MAX_AVISOS (undefined si no hay). Así no se pierde el aviso de una vuelta
+ * cuando la siguiente resuelve lo que avisó (p. ej. un evento que no se pudo borrar allá y que la vuelta
+ * siguiente trae de vuelta a la pared).
+ */
+export function juntarAvisos(antes: readonly string[], nuevos: readonly string[]): string[] | undefined {
+  const todos = [...new Set([...antes, ...nuevos])].slice(0, MAX_AVISOS);
+  return todos.length ? todos : undefined;
+}
+
+/**
+ * El texto de un error para la familia. Un límite de uso de Google se reintenta solo (la vuelta siguiente,
+ * o la programada en unos minutos, vuelve a pedir): se dice aquí y no en el transporte, porque invitar,
+ * quitar o "Probar" no reintentan.
+ */
+const textoError = (e: ErrorCalDAV) => (e instanceof LimiteDeUso ? `${e.message} Se reintenta solo.` : e.message);
+
 export async function sincronizar(familiaId: string, conexion: Conexion, op: Opciones): Promise<Resultado> {
   // Con una respuesta de la familia (borrar / traer de vuelta) se espera a que termine la que esté
   // corriendo: si no, la respuesta se perdería.
@@ -256,9 +284,13 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
   const r = await conCandado(familiaId, conexion.id, async () => {
     let resultado: Resultado = { ok: true };
     let respuesta: Resultado["respuesta"];
+    let avisosAntes: string[] = [];
     // Si quedó trabajo o mientras tanto cambió algo en el panel, se da otra vuelta (hasta 3, si alcanza el tiempo).
     for (let vuelta = 0; vuelta < 3; vuelta++) {
-      resultado = await unaVuelta(familiaId, conexion, { ...op, resolver: vuelta ? undefined : op.resolver });
+      const { avisos, ...r } = await unaVuelta(familiaId, conexion, { ...op, resolver: vuelta ? undefined : op.resolver, avisosAntes });
+      resultado = r;
+      // Los avisos de esta llamada siguen a la vista aunque otra vuelta no tenga nada que avisar.
+      if (avisos) avisosAntes = avisos;
       // Una respuesta anotada se aplica en una vuelta siguiente (de ésta o de la programada).
       if (resultado.respuesta && respuesta !== "aplicada") respuesta = resultado.respuesta;
       if (!resultado.ok || op.limite - Date.now() < 4000) break;
@@ -279,7 +311,8 @@ export async function sincronizar(familiaId: string, conexion: Conexion, op: Opc
 
 const MARGEN_BLOBS = 1500; // lo que se reserva al final para guardar en Blobs
 
-async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): Promise<Resultado> {
+/** `avisos`: los que quedaron guardados en el estado al terminar la vuelta (si llegó a guardarlos). */
+async function unaVuelta(familiaId: string, conexion: Conexion, op: OpcionesVuelta): Promise<Resultado & { avisos?: string[] }> {
   const ahora = new Date().toISOString();
   const [leido, enEspera] = await Promise.all([
     leerEstado(familiaId, conexion.id),
@@ -854,13 +887,13 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
     if (!pendiente) delete estado.decision;
     estado.ultima = ahora;
     const fallo = falla as ErrorCalDAV | null; // (se asigna dentro de alFallar)
-    estado.error = fallo ? { mensaje: fallo.message, codigo: fallo.codigo, cuando: ahora } : null;
+    estado.error = fallo ? { mensaje: textoError(fallo), codigo: fallo.codigo, cuando: ahora } : null;
     estado.resumen = resumen;
     avisos.push(...(cal.avisos?.() ?? [])); // los del transporte (Google), después de los del motor
-    estado.avisos = avisos.length ? avisos.slice(0, 5) : undefined;
+    estado.avisos = juntarAvisos(op.avisosAntes ?? [], avisos);
     await guardarEstado(familiaId, conexion.id, estado);
     if (rechazo) throw rechazo.reason;
-    return { ok: !fallo, resumen, pendiente, error: estado.error, respuesta };
+    return { ok: !fallo, resumen, pendiente, error: estado.error, respuesta, avisos: estado.avisos ?? [] };
   } catch (e) {
     if (e instanceof ErrorCalDAV && e.codigo === "TIEMPO") {
       // No alcanzó el tiempo (p. ej. iCloud lento al listar): no es un error, sigue la próxima vuelta.
@@ -869,7 +902,7 @@ async function unaVuelta(familiaId: string, conexion: Conexion, op: Opciones): P
       await guardarEstado(familiaId, conexion.id, estado);
       return { ok: true, pendiente: true, respuesta };
     }
-    if (e instanceof ErrorCalDAV) return fallar(e.message, e.codigo);
+    if (e instanceof ErrorCalDAV) return fallar(textoError(e), e.codigo);
     console.error("sincronizar", e);
     return fallar(`Algo falló al sincronizar con ${nombreProv}: ` + (e as Error).message, "INTERNO");
   }
