@@ -13,7 +13,7 @@
 // - Escrituras condicionales: PATCH y DELETE con If-Match (412 = "conflicto"); crear usa un id que sale
 //   del UID (ids.ts), así un reintento da 409 en vez de un duplicado.
 // - Después de escribir, crear y actualizar devuelven el etag que tendrá la serie en el próximo listado
-//   (calculado con los etag que devolvió Google, igual que el ETag de iCloud), o null si algo no salió
+//   (calculado como en agrupar, con los etag que devolvió Google, igual que el ETag de iCloud), o null si algo no salió
 //   como se planeó (entonces el motor la relee). Con null siempre, un borrado en la pared justo después de
 //   subir se tomaba como "cambió en los dos lados" y el evento volvía a aparecer.
 // - Tabla de errores por motivo: un límite de uso (403 usageLimits o 429) es SERVIDOR (LimiteDeUso, con
@@ -31,7 +31,10 @@
 //   las que faltan no se vean como días cambiados, y como el etag de la serie no cuenta las fantasmas, el
 //   etag se prevé igual. Una que falla (5xx, red) se salta y la reintenta otra vuelta (ver el ctag); con
 //   un límite de uso se deja para la vuelta siguiente. Una que Google rechaza (400, no editable) se avisa
-//   y se excluye de la marca enseguida (pasa a ser un día cambiado, como en Google, y no se reintenta).
+//   y se anota como rechazada en la marca (sigue sin verse en la pared y no se reintenta mientras nadie la
+//   toque). Ese PATCH del principal no cambia lo que ve la pared ni, si el principal está como lo dejó el
+//   panel, el etag de la serie (serie.ts); si no, actualizar devuelve el etag nuevo y pendientes() la
+//   anota sólo si alcanza para que la vuelta siguiente relea el calendario.
 // - Si Google rechaza una parte de un cambio (400) después de escribir otra, el aviso lleva su motivo y la
 //   vuelta siguiente de la misma sincronización relee la serie (pendientes() → true): la pared vuelve a lo
 //   que Google guardó junto con el aviso. Para que esa vuelta alcance, desde ahí se reserva RESERVA_RELEER:
@@ -69,10 +72,12 @@ import {
   MARCA_FANTASMAS,
   agrupar,
   esFantasma,
-  excluirDeMarca,
+  esPropia,
   hrefSerie,
   instanteDeHora,
+  marcaConRechazadas,
   marcaFantasmas,
+  noReintentar,
   normRec,
   serieAIcs,
   textoPlano,
@@ -252,11 +257,11 @@ interface Listado {
 /** Cuántas fantasmas se ponen al día en la misma pasada que el principal (más, al final de la vuelta). */
 const MAX_EN_LINEA = 3;
 /**
- * Lo que necesita sacar de la marca cfv a las rezagadas que Google rechazó (un PATCH del principal por
+ * Lo que necesita anotar en la marca cfv las rezagadas que Google rechazó (un PATCH del principal por
  * serie). Cabe después de un PATCH rechazado (se empezó con 1200 ms o más) y se reserva para las que ya
  * esperan: así el aviso sale una sola vez.
  */
-const PLAZO_EXCLUIR = 700;
+const PLAZO_MARCA = 700;
 /**
  * Lo que se reserva, cuando hay una serie que releer (Google no la dejó como se le mandó), para que la
  * vuelta siguiente de la misma sincronización alcance a hacerlo: el motor da otra vuelta si le quedan 4 s
@@ -271,6 +276,13 @@ interface Pendiente {
   T: string;
   principal: EvG;
 }
+
+/** Lo que devuelve seguirUna (ver ahí). */
+type Seguida =
+  | { pieza: EvG; r?: { json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean }; rechazo?: NoSePuedeEscribir }
+  | "corte"
+  | "otro"
+  | ErrorCalDAV;
 
 /** Primero las de hoy en adelante (las más próximas antes), después las pasadas (las más recientes antes). */
 function prioridad(ops: readonly Op[]): Op[] {
@@ -293,14 +305,15 @@ const tituloDe = (s: Serie) => s.principal?.summary?.trim() || s.vivas[0]?.summa
 
 /**
  * Las fantasmas rezagadas del listado (ver serie.ts) con lo que les falta para quedar como su serie, sin
- * las de las series de `saltar` (las que esta vuelta escribió o borró). Las de sólo lectura no se tocan.
+ * las de las series de `saltar` (las que esta vuelta escribió o borró) ni las que Google ya rechazó tal
+ * como están. Las de sólo lectura no se tocan.
  */
 function rezagadasDe(l: Listado, calId: string, saltar?: ReadonlySet<string>): Pendiente[] {
   const r: Pendiente[] = [];
   for (const s of l.series.values()) {
     if (saltar?.has(s.id) || s.soloLectura || !s.principal) continue;
     for (const f of s.fantasmas) {
-      if (esFantasma(f, s.principal)) continue;
+      if (esFantasma(f, s.principal) || noReintentar(f, s.principal)) continue;
       const op = alcanzarSerie(f, s.principal);
       if (op) r.push({ calId, op, T: tituloDe(s), principal: s.principal });
     }
@@ -321,10 +334,10 @@ export class GoogleCalendar implements Transporte {
   private pendientesAviso: string[] = [];
   /** Fantasmas que no alcanzaron a seguir un cambio de esta vuelta (las pone al día pendientes()). */
   private cola: Pendiente[] = [];
-  /** Fantasmas que Google no aceptó en línea y que no se alcanzaron a excluir de la marca: las excluye pendientes(). */
-  private rechazadas: Pendiente[] = [];
-  /** Cómo quedó el principal (id → pieza) después de excluir rezagadas de su marca en esta vuelta. */
-  private excluidoEn = new Map<string, EvG>();
+  /** Fantasmas que Google no aceptó en línea y que no se alcanzaron a anotar en la marca: las anota pendientes(). */
+  private rechazadas: { calId: string; pieza: EvG; principal: EvG }[] = [];
+  /** Cómo quedó el principal (id → pieza) después de anotar rechazadas en su marca en esta vuelta. */
+  private marcadoEn = new Map<string, EvG>();
   /** Series (id) que esta vuelta empezó a escribir o borró: sus rezagadas del listado ya no valen. */
   private tocadas = new Set<string>();
   /** Calendarios con una serie que Google no dejó como se le mandó: la vuelta siguiente la relee. */
@@ -641,14 +654,10 @@ export class GoogleCalendar implements Transporte {
    * quedó viejo) o que alguien la tocó: se vuelve a leer y se le manda sólo lo que le falte, si eso sigue
    * como estaba en el listado (ver alDia); si no, no se pisa ("otro"). "corte": se acabó el plazo (no
    * alcanza `reserva` para releerla, o TIEMPO). Otro error de Google vuelve como ErrorCalDAV (sin
-   * lanzarlo). En los dos casos queda para después (es una rezagada: ver serie.ts).
+   * lanzarlo). En los dos casos queda para después (es una rezagada: ver serie.ts). Si Google la rechaza,
+   * `rechazo`, con la pieza tal como la rechazó (su etag va a la marca).
    */
-  private async seguirUna(
-    calId: string,
-    op: Op,
-    T: string,
-    reserva: number,
-  ): Promise<{ pieza: EvG; r?: { json: Record<string, unknown>; enviado: Cuerpo; sinFin: boolean } } | "corte" | "otro" | NoSePuedeEscribir | ErrorCalDAV> {
+  private async seguirUna(calId: string, op: Op, T: string, reserva: number): Promise<Seguida> {
     const corte = (e: unknown) => {
       if (e instanceof ErrorCalDAV) return e.codigo === "TIEMPO" ? ("corte" as const) : e;
       throw e;
@@ -665,7 +674,8 @@ export class GoogleCalendar implements Transporte {
       pieza = d.pieza;
       r = await this.parche(calId, pieza, d.cuerpo, T, op.fecha).catch(corte);
     }
-    if (r === "corte" || r instanceof NoSePuedeEscribir || r instanceof ErrorCalDAV) return r;
+    if (r === "corte" || r instanceof ErrorCalDAV) return r;
+    if (r instanceof NoSePuedeEscribir) return { pieza, rechazo: r };
     if (r === "conflicto" || r === "noExiste") return "otro";
     return { pieza, r };
   }
@@ -676,8 +686,10 @@ export class GoogleCalendar implements Transporte {
     if (!serie) return "noExiste";
     if (serie.etag !== etag) return "conflicto";
     const plan = planear(serie, ics); // NoSePuedeEscribir antes de escribir nada
+    // (Las rezagadas que Google ya rechazó tal como están no se reintentan: ver serie.ts.)
+    const seguir = plan.seguir.filter((o) => !noReintentar(o.pieza, serie.principal!));
     const n = plan.ops.length + (plan.maestro ? 1 : 0);
-    if (!n && !plan.seguir.length) return { etag: null };
+    if (!n && !seguir.length) return { etag: null };
     // Sin tiempo para las excepciones y el principal, no se empieza: el motor lo deja pendiente (sin
     // contarlo como falla) y sigue con lo demás que quepa; lo hace una vuelta con más plazo. Las fantasmas no
     // cuentan aquí: si no alcanzan, quedan para el final de la vuelta (pendientes()) o para otra.
@@ -758,33 +770,42 @@ export class GoogleCalendar implements Transporte {
     //    caben: aquí mismo. Si no, quedan para el final de la vuelta (pendientes(), después de lo demás que
     //    tenga que escribir el motor) o para otra: con la marca cfv son rezagadas, no días cambiados, y el
     //    etag de la serie no las cuenta, así que se prevé igual (un borrado en la pared justo después no
-    //    hace volver el evento).
-    if ((principalEscrito || !plan.maestro) && plan.seguir.length) {
-      const cola = prioridad(plan.seguir);
+    //    hace volver el evento). Una que Google rechaza sigue siendo rezagada (la pared no ve nada distinto).
+    let marcado = false;
+    if ((principalEscrito || !plan.maestro) && seguir.length) {
+      const cola = prioridad(seguir);
       let i = 0;
-      const rechazadas: Op[] = [];
+      const rechazadas: EvG[] = [];
       if (cola.length <= MAX_EN_LINEA && !this.sinPlazo(cola.length)) {
         for (; i < cola.length; i++) {
           const r = await this.seguirUna(url, cola[i], T, 400 + 700 * (cola.length - i));
           if (r === "corte" || r instanceof ErrorCalDAV) break;
           if (r === "otro") previsible = false;
-          else if (r instanceof NoSePuedeEscribir) {
-            previsible = false;
-            this.avisar(r.message);
-            rechazadas.push(cola[i]);
+          else if (r.rechazo) {
+            this.avisar(r.rechazo.message);
+            rechazadas.push(r.pieza);
+            piezas.set(r.pieza.id, r.pieza);
           } else piezas.set(r.pieza.id, r.r ? despues(r.pieza, r.r) : r.pieza);
         }
       }
-      // Las que Google rechazó, fuera de la marca enseguida (así no se reintentan ni se vuelve a avisar);
-      // si no alcanza, al final de la vuelta.
-      if (rechazadas.length && (await this.excluir(url, principal, rechazadas.map((o) => o.pieza.id))) === false) {
-        for (const op of rechazadas) this.rechazadas.push({ calId: url, op, T, principal });
+      // Las que Google rechazó, anotadas en la marca enseguida (así no se reintentan ni se vuelve a avisar):
+      // el etag que se devuelve ya cuenta ese PATCH. Si no alcanza o falla, al final de la vuelta.
+      if (rechazadas.length) {
+        const m = await this.marcarRechazadas(url, principal, rechazadas);
+        if (m) {
+          marcado = true;
+          principal = m;
+          if (!m.etag) previsible = false;
+        } else if (m === false) for (const pieza of rechazadas) this.rechazadas.push({ calId: url, pieza, principal });
       }
       for (const op of cola.slice(i)) this.cola.push({ calId: url, op, T, principal });
-    } else if (plan.seguir.length) previsible = false;
+    } else if (seguir.length) previsible = false;
     // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
     // queda igual a lo que Google guardó.
-    return { etag: previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null };
+    const nuevo = previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null;
+    // (Con la marca escrita y sin poder prever el etag, la relee la vuelta siguiente de esta misma sincronización.)
+    if (marcado && !nuevo) this.releer.add(url);
+    return { etag: nuevo };
   }
 
   /**
@@ -795,16 +816,24 @@ export class GoogleCalendar implements Transporte {
    * vuelve atrás en la misma sincronización, con su aviso; para eso se reserva RESERVA_RELEER). Una
    * rezagada que falla por otra cosa (un 5xx, la red) se salta sin dejar la sincronización pendiente: la
    * reintenta la sincronización siguiente (listar deja el ctag sin calzar mientras queden rezagadas). Una
-   * que Google rechaza (400, no editable) se avisa y se excluye de la marca de su serie (un PATCH del
-   * principal por serie, al final, con su plazo reservado: PLAZO_EXCLUIR): no se reintenta, no se vuelve a
-   * avisar y pasa a verse como día cambiado, igual que en Google. Nunca lanza un ErrorCalDAV.
+   * que Google rechaza (400, no editable) se avisa y se anota como rechazada en la marca de su serie (un
+   * PATCH del principal por serie, al final, con su plazo reservado: PLAZO_MARCA): no se reintenta ni se
+   * vuelve a avisar mientras nadie la toque, y la pared no ve nada distinto. Si el principal está como lo
+   * dejó el panel, tampoco cambia el etag de la serie (serie.ts). Si no (o si la marca no cabe y se borra),
+   * sí cambia y el motor ya tiene el de antes (un borrado en la pared antes de releerla haría volver el
+   * evento): entonces se anota sólo si alcanza para que la vuelta siguiente de esta sincronización relea
+   * el calendario (RESERVA_RELEER); si no, la reintenta (y avisa) otra sincronización. Nunca lanza un ErrorCalDAV.
    */
   async pendientes(url: string): Promise<boolean> {
     const trabajo = this.cola.filter((x) => x.calId === url);
     this.cola = this.cola.filter((x) => x.calId !== url);
-    const porExcluir = new Map<string, Pendiente[]>(); // id del principal → rezagadas que Google rechazó
-    const rechazar = (x: Pendiente) => porExcluir.set(x.principal.id, [...(porExcluir.get(x.principal.id) ?? []), x]);
-    for (const x of this.rechazadas.filter((y) => y.calId === url)) rechazar(x);
+    const porMarcar = new Map<string, { principal: EvG; piezas: EvG[] }>(); // id del principal → rezagadas que Google rechazó
+    const rechazar = (principal: EvG, pieza: EvG) => {
+      const g = porMarcar.get(principal.id) ?? { principal, piezas: [] };
+      g.piezas.push(pieza);
+      porMarcar.set(principal.id, g);
+    };
+    for (const x of this.rechazadas.filter((y) => y.calId === url)) rechazar(x.principal, x.pieza);
     this.rechazadas = this.rechazadas.filter((x) => x.calId !== url);
     const l = await this.listados.get(url)?.catch(() => null);
     if (l) trabajo.push(...rezagadasDe(l, url, this.tocadas));
@@ -815,37 +844,42 @@ export class GoogleCalendar implements Transporte {
     trabajo.sort((a, b) => orden.get(a.op)! - orden.get(b.op)!);
     let faltan = false;
     for (const x of trabajo) {
-      // Lo que se necesita para ella y para excluir después a las que Google ya rechazó.
-      const necesita = reserva + PLAZO_EXCLUIR * porExcluir.size;
+      // Lo que se necesita para ella y para anotar después las que Google ya rechazó.
+      const necesita = reserva + PLAZO_MARCA * porMarcar.size;
       const r = this.queda() < necesita ? "corte" : await this.seguirUna(url, x.op, x.T, necesita);
       if (r === "corte" || r instanceof LimiteDeUso) {
         faltan = true;
         break;
       }
-      if (r instanceof NoSePuedeEscribir) {
-        this.avisar(r.message);
-        rechazar(x);
+      if (typeof r === "object" && !(r instanceof ErrorCalDAV) && r.rechazo) {
+        this.avisar(r.rechazo.message);
+        rechazar(x.principal, r.pieza);
       }
     }
-    // Esa serie ahora se ve distinta (un día cambiado más): que la relea la vuelta siguiente.
-    for (const xs of porExcluir.values()) {
-      if ((await this.excluir(url, xs[0].principal, xs.map((x) => x.op.pieza.id))) === true) releer = true;
+    for (const g of porMarcar.values()) {
+      const p = this.marcadoEn.get(g.principal.id) ?? g.principal;
+      const cambiaEtag = !esPropia(p) || marcaConRechazadas(p, g.piezas) === null;
+      if (cambiaEtag && this.queda() < PLAZO_MARCA + RESERVA_RELEER) continue;
+      // (Un PATCH que falló pudo haber quedado hecho: también se relee.)
+      if ((await this.marcarRechazadas(url, p, g.piezas)) !== null && cambiaEtag) releer = true;
     }
     return faltan || releer;
   }
 
   /**
-   * Saca de la marca cfv del principal `p` (como quedó en esta vuelta) esas rezagadas que Google rechazó:
-   * un PATCH sólo de la marca, con If-Match (si no caben, la marca se borra: ver serie.ts). true si quedó
-   * hecho; null si no hacía falta (ya estaban, o la marca no explica a nadie); false si no se pudo (sin
-   * plazo, el principal cambió, Google falló): la vuelta siguiente la vuelve a intentar.
+   * Anota en la marca cfv del principal `p` (como quedó en esta vuelta) esas rezagadas que Google rechazó,
+   * con su etag: un PATCH sólo de la marca, con If-Match (si no caben, la marca se borra: ver serie.ts). El
+   * principal como quedó (con el etag nuevo, si Google lo devolvió); null si no hacía falta (ya estaban,
+   * o la marca no explica a nadie); false si no se pudo (sin plazo, el principal cambió, Google falló):
+   * otra vuelta la vuelve a intentar.
    */
-  private async excluir(url: string, p: EvG, ids: readonly string[]): Promise<boolean | null> {
-    const principal = this.excluidoEn.get(p.id) ?? p;
-    const cfv = excluirDeMarca(principal, ids);
+  private async marcarRechazadas(url: string, p: EvG, rechazadas: readonly EvG[]): Promise<EvG | null | false> {
+    const principal = this.marcadoEn.get(p.id) ?? p;
+    const cfv = marcaConRechazadas(principal, rechazadas);
     if (cfv === undefined) return null;
-    if (this.queda() < PLAZO_EXCLUIR) return false;
-    const cuerpo = { extendedProperties: { private: { [MARCA_FANTASMAS]: cfv } } };
+    if (this.queda() < PLAZO_MARCA) return false;
+    // Con las otras claves privadas que ya tiene (cfh): así no depende de que Google las mezcle.
+    const cuerpo = { extendedProperties: { private: { ...(principal.extendedProperties?.private ?? {}), [MARCA_FANTASMAS]: cfv } } };
     const r = await this.pedirJSON("PATCH", `${rutaCalendario(url)}/events/${encodeURIComponent(principal.id)}`, {
       query: { fields: CAMPOS_PATCH },
       cuerpo,
@@ -855,8 +889,10 @@ export class GoogleCalendar implements Transporte {
       throw e;
     });
     if (r?.status !== 200 || !r.json) return false;
-    this.excluidoEn.set(principal.id, { ...fusionar(principal, cuerpo), etag: texto(r.json.etag) });
-    return true;
+    const updated = texto(r.json.updated);
+    const nuevo: EvG = { ...fusionar(principal, cuerpo), etag: texto(r.json.etag), ...(updated ? { updated } : {}) };
+    this.marcadoEn.set(principal.id, nuevo);
+    return nuevo;
   }
 
   /**

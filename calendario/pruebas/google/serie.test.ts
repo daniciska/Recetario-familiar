@@ -12,7 +12,8 @@ import {
   esPropia,
   esRezagada,
   etagSerie,
-  excluirDeMarca,
+  marcaConRechazadas,
+  noReintentar,
   huellaPieza,
   inst,
   marcaFantasmas,
@@ -310,6 +311,19 @@ caso("etag de la serie", () => {
   ok("no cambia si sólo cambia la fantasma (sigue siendo fantasma)", cambiar(3, { etag: '"30"' }) === a);
   ok("cambia si la fantasma pasa a día cambiado", cambiar(3, { etag: '"30"', summary: "🦄 Natación con aletas" }) !== a);
   ok("cambia si pasa a sólo lectura", cambiar(0, { locked: true }) !== a);
+  // Un principal como lo dejó el panel (cfh) cuenta por lo que se ve, no por su etag de Google: anotar una
+  // rechazada en la marca cfv (un PATCH que la pared no ve) no cambia el etag de la serie.
+  const p0 = natacion()[0];
+  const propio = { ...p0, extendedProperties: { private: { cfh: huellaPieza(p0) } } };
+  const conPropio = (cambio: Partial<EvG>) => cambiar(0, { ...propio, ...cambio });
+  const b = conPropio({});
+  ok("principal propio: no cambia con otro etag ni con otra marca cfv", conPropio({ etag: '"11"', extendedProperties: { private: { cfh: huellaPieza(p0), cfv: "n.aaaaaaaaaaaa.bbbbbbbbbbbb" } } }) === b && b !== a);
+  ok("…pero sí si cambia algo que se ve (deja de ser propio) o si cambia un día cambiado", conPropio({ etag: '"11"', summary: "🦄 Natación libre" }) !== b && (() => {
+    const l = natacion();
+    l[0] = propio;
+    l[1] = { ...l[1], etag: '"21"' };
+    return unaSerie(l).etag !== b;
+  })());
   const s = unaSerie(natacion());
   ok("etagSerie(serie) = serie.etag", etagSerie(s) === s.etag);
 });
@@ -581,28 +595,34 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
     const pM3 = conMarca(tercero, marcaFantasmas(pM2, tercero, [tocada], despues + 600_000) as string);
     return esRezagada({ ...tocada, updated: iso(despues + 605_000) }, pM3);
   })());
-  // Excluir: una rezagada que Google no deja poner al día.
+  // Rechazada: una rezagada que Google no deja poner al día (con su etag).
   const otra = dia("16");
-  const ex = excluirDeMarca(pM, [f0.id]);
+  const f0e = { ...f0, etag: '"e1"' };
+  const ex = marcaConRechazadas(pM, [f0e]);
   const pX = conMarca(nuevo, ex);
   ok(
-    "excluida: deja de ser rezagada (la pared la ve como día cambiado) y las demás siguen siéndolo",
-    typeof ex === "string" && /,x\.[0-9a-f]{12}$/.test(ex) && !esRezagada(f0, pX) && esRezagada(otra, pX) && unaSerie([pX, f0, otra]).vivas.length === 1,
+    "rechazada: sigue siendo rezagada (la pared no ve nada distinto) pero no se reintenta con ese etag; las demás, igual que antes",
+    typeof ex === "string" && /,n\.[0-9a-f]{12}\.[0-9a-f]{12}$/.test(ex) && esRezagada(f0e, pX) && noReintentar(f0e, pX) && esRezagada(otra, pX) && !noReintentar(otra, pX) && !unaSerie([pX, f0e, otra]).vivas.length,
     ex,
   );
-  ok("excluir otra vez la misma, o sin marca: no hay nada que mandar", excluirDeMarca(pX, [f0.id]) === undefined && excluirDeMarca(p0, [f0.id]) === undefined);
-  const m4 = marcaFantasmas(pX, { ...pX, summary: "Otra" }, [f0, otra], ahora + 1000);
-  ok("un cambio posterior conserva la exclusión", typeof m4 === "string" && m4.includes(",x.") && !esRezagada(f0, conMarca({ ...pX, summary: "Otra" }, m4)), m4);
+  ok("con otro etag (alguien la tocó o Google le pasó algo) se vuelve a intentar", esRezagada({ ...f0e, etag: '"e2"' }, pX) && !noReintentar({ ...f0e, etag: '"e2"' }, pX));
+  const ex2 = marcaConRechazadas(pX, [{ ...f0e, etag: '"e2"' }]);
+  ok("…y si la rechaza de nuevo, queda anotada con el etag nuevo (una sola vez)", typeof ex2 === "string" && ex2.split(",").filter((x) => x.startsWith("n.")).length === 1 && noReintentar({ ...f0e, etag: '"e2"' }, conMarca(nuevo, ex2)) && !noReintentar(f0e, conMarca(nuevo, ex2)), ex2);
+  ok("anotarla otra vez igual, o sin marca: no hay nada que mandar", marcaConRechazadas(pX, [f0e]) === undefined && marcaConRechazadas(p0, [f0e]) === undefined);
+  const m4 = marcaFantasmas(pX, { ...pX, summary: "Otra" }, [f0e, otra], ahora + 1000);
+  const pX4 = conMarca({ ...pX, summary: "Otra" }, m4);
+  ok("un cambio posterior la conserva (sigue rezagada y sin reintentar)", typeof m4 === "string" && m4.includes(",n.") && esRezagada(f0e, pX4) && noReintentar(f0e, pX4), m4);
+  ok("…salvo que ya no esté o tenga otro etag", !(marcaFantasmas(pX, { ...pX, summary: "Otra" }, [{ ...f0e, etag: '"e3"' }, otra], ahora + 1000) as string).includes(",n.") && !(marcaFantasmas(pX, { ...pX, summary: "Otra" }, [otra], ahora + 1000) as string).includes(",n."));
   ok("…y cuando la marca ya no explica a nadie se borra entera", marcaFantasmas(pX, { ...pX, summary: "Otra" }, [], ahora) === null);
-  // Muchas excluidas: nunca se descarta una para hacer espacio (volvería a intentarse y a avisar en cada
+  // Muchas rechazadas: nunca se descarta una para hacer espacio (volvería a intentarse y a avisar en cada
   // sincronización); si no caben, se borra la marca entera (todas pasan a días cambiados, como en Google).
   let p = pX;
-  for (let i = 0; i < 40; i++) p = conMarca(p, excluirDeMarca(p, [`${idNat}_x${i}`]) as string);
-  const m40 = p.extendedProperties.private.cfv ?? "";
-  ok("40 excluidas: están todas, con la entrada que explica a las demás, en menos de 1.000 caracteres", m40.split(",").filter((x) => x.startsWith("x.")).length === 41 && /^l\./.test(m40) && m40.length <= 1000 && esRezagada(otra, p) && !esRezagada(f0, p), m40.length);
-  let sinLugar: string | null | undefined = m40;
-  for (let i = 40; i < 100 && typeof sinLugar === "string"; i++) {
-    sinLugar = excluirDeMarca(p, [`${idNat}_x${i}`]);
+  for (let i = 0; i < 30; i++) p = conMarca(p, marcaConRechazadas(p, [{ ...f0e, id: `${idNat}_x${i}` }]) as string);
+  const m30 = p.extendedProperties.private.cfv ?? "";
+  ok("31 rechazadas: están todas, con la entrada que explica a las demás, en menos de 1.000 caracteres", m30.split(",").filter((x) => x.startsWith("n.")).length === 31 && /^l\./.test(m30) && m30.length <= 1000 && esRezagada(otra, p) && noReintentar(f0e, p), m30.length);
+  let sinLugar: string | null | undefined = m30;
+  for (let i = 30; i < 100 && typeof sinLugar === "string"; i++) {
+    sinLugar = marcaConRechazadas(p, [{ ...f0e, id: `${idNat}_x${i}` }]);
     if (typeof sinLugar === "string") p = conMarca(p, sinLugar);
   }
   ok("…y cuando ya no caben, null: la marca se borra (otra deja de ser rezagada)", sinLugar === null && !esRezagada(otra, conMarca(nuevo, null)));

@@ -11,10 +11,13 @@
 //      hace volver el evento, con 1 a 4 fantasmas y latencia de hasta 900 ms (a).
 //   4. Una rezagada que falla siempre (500) no bloquea a las demás ni deja la sincronización pendiente, y
 //      un error pasajero no las deja olvidadas: la sincronización siguiente no toma el atajo (c).
-//   5. Una rezagada que Google rechaza (400) se avisa una vez, no se reintenta y queda como día cambiado,
-//      también con más de 8 en una serie (b) y con el plazo justo (e).
+//   5. Una rezagada que Google rechaza (400) se avisa una vez y no se reintenta mientras su etag no cambie
+//      (marca n.<id>.<etag>), también con más de 8 en una serie (b) y con el plazo justo (e); sigue siendo
+//      rezagada (la pared no ve nada distinto), así que lo que la familia cambie o borre después en esa
+//      serie no se pierde ni vuelve (6).
 //
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/rezagadas.test.ts
+import { createHash } from "node:crypto";
 import * as h from "../h.ts";
 import { respuestas, type PedidoVisto } from "./mock-google.mts";
 import type { Evento } from "../../lib/datos/tipos.ts";
@@ -422,10 +425,17 @@ await caso("(c) un error pasajero en una vuelta que no escribe nada más no deja
   }
 });
 
+/** La marca cfv tiene a esa pieza como rechazada (n.<huella del id>.<huella de su etag>). */
+const rechazadaEnMarca = (cal: string, id: string, x: { id: string; etag?: string }) => {
+  const hv = (v: string) => createHash("sha256").update(v).digest("hex").slice(0, 12);
+  return (sim.evento(cal, gid(id))?.extendedProperties?.private?.cfv ?? "").split(",").includes(`n.${hv(x.id)}.${hv(x.etag ?? "")}`);
+};
+
 await caso("5. Google rechaza (400) el PATCH de una rezagada", async () => {
-  // Antes: se reintentaba y avisaba en cada sincronización que no fuera el atajo, por un día que nadie
-  // tocó y que la pared no mostraba. Ahora: un aviso, se excluye de la marca y pasa a verse como día
-  // cambiado (igual que en Google y en los iPhone); no se reintenta.
+  // 5734981: se reintentaba y avisaba en cada sincronización que no fuera el atajo, por un día que nadie
+  // tocó y que la pared no mostraba. f6411fd: un aviso, pero se excluía de la marca y pasaba a verse como
+  // día cambiado sin que el motor releyera la serie (el cambio siguiente de la familia se perdía). Ahora:
+  // un aviso, se anota como rechazada y sigue sin verse; no se reintenta.
   const { cal, con, fam, viejas, mala } = await tresRezagadas("t5");
   const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 999);
   const h1 = [];
@@ -438,11 +448,31 @@ await caso("5. Google rechaza (400) el PATCH de una rezagada", async () => {
   ok("el aviso sale en una sola sincronización y el PATCH rechazado no se repite", conAviso === 1 && rechazo.disparos === 1, { conAviso, disparos: rechazo.disparos, h1 });
   const dias = await diasEnPared(fam);
   ok(
-    "las otras 2 al día; ese día se ve como cambiado (con el título viejo), igual que en Google; nada pendiente",
-    viejas().length === 1 && dias.length === 1 && dias[0].titulo === "Teatro" && !(await h.comparar(fam, con)).length && h1.every((x) => x.ok && x.pendiente === false),
+    "las otras 2 al día; ese día sigue sin verse como cambiado (es una rezagada); nada pendiente y 1 listado por sincronización",
+    viejas().length === 1 && !dias.length && !(await h.comparar(fam, con)).length && h1.every((x) => x.ok && x.pendiente === false && x.listados === 1),
     { dias: dias.map(h.resumen), dif: await h.comparar(fam, con), h1 },
   );
-  ok("la marca de la serie lo tiene excluido (x.…)", /(^|,)x\.[0-9a-f]{12}($|,)/.test(sim.evento(cal, gid("t5"))?.extendedProperties?.private?.cfv ?? ""), sim.evento(cal, gid("t5"))?.extendedProperties);
+  ok("la marca de la serie la tiene como rechazada, con su etag (n.…)", rechazadaEnMarca(cal, "t5", viejas()[0]), sim.evento(cal, gid("t5"))?.extendedProperties);
+});
+
+await caso("5c. Un día rechazado vuelve a intentarse si su etag cambia", async () => {
+  const { cal, con, fam, viejas, mala } = await tresRezagadas("t5c");
+  const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 999);
+  const h1 = [];
+  const tocar = () => sim.poner(cal, { ...sim.evento(cal, mala.id), etag: undefined }); // otro etag, mismo `updated`
+  try {
+    for (let i = 0; i < 2; i++) h1.push(await otraNormal(fam, con, i));
+    ok("rechazada una vez", rechazo.disparos === 1 && rechazadaEnMarca(cal, "t5c", sim.evento(cal, mala.id)), rechazo.disparos);
+    tocar();
+    for (let i = 2; i < 4; i++) h1.push(await otraNormal(fam, con, i));
+  } finally {
+    rechazo.quitar();
+  }
+  const conAviso = h1.filter((x) => x.avisos.some((a) => /Invalid value/.test(a))).length;
+  ok("con otro etag se intenta una vez más (y se avisa de nuevo), y queda anotada con el etag nuevo", rechazo.disparos === 2 && conAviso === 2 && rechazadaEnMarca(cal, "t5c", sim.evento(cal, mala.id)), { disparos: rechazo.disparos, conAviso, h1 });
+  tocar();
+  await otraNormal(fam, con, 4);
+  ok("si Google la acepta, queda al día; todo calza", viejas().length === 0 && !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length, viejas().length);
 });
 
 await caso("5b. Google rechaza (400) a una fantasma en línea", async () => {
@@ -462,7 +492,7 @@ await caso("5b. Google rechaza (400) a una fantasma en línea", async () => {
     rechazo.quitar();
   }
   const conAviso = h1.filter((x) => x.avisos.some((a) => /Invalid value/.test(a))).length;
-  ok("un aviso, un solo PATCH rechazado; ese día se ve como cambiado, como en Google", conAviso === 1 && rechazo.disparos === 1 && (await diasEnPared(fam)).length === 1 && !(await h.comparar(fam, con)).length, {
+  ok("un aviso, un solo PATCH rechazado; ese día sigue sin verse como cambiado; todo calza", conAviso === 1 && rechazo.disparos === 1 && !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length && rechazadaEnMarca(cal, "t6", f), {
     conAviso,
     disparos: rechazo.disparos,
     h1,
@@ -473,7 +503,7 @@ await caso("5b. Google rechaza (400) a una fantasma en línea", async () => {
 await caso("(b) 10 rezagadas rechazadas en una serie: un aviso, sin reintentos ni bucle", async () => {
   // El primer arreglo guardaba a lo más 8 excluidas: las que sobraban volvían a intentarse, el PATCH de
   // exclusión sacaba a otras y así en cada sincronización (pendiente para siempre, 3 listados, avisos de
-  // nuevo y la pared distinta de Google). Ahora las excluidas no se descartan nunca.
+  // nuevo y la pared distinta de Google). Ahora las rechazadas no se descartan nunca.
   const { cal, con, fam } = await teatro("t9", 10);
   await dejarRezagadas(cal, con, fam, "t9", { titulo: "Teatro de títeres" });
   const viejas = () => excepciones(cal, "t9").filter((e) => e.summary === "🦄 Teatro").length;
@@ -489,8 +519,8 @@ await caso("(b) 10 rezagadas rechazadas en una serie: un aviso, sin reintentos n
   const cfv = sim.evento(cal, gid("t9"))?.extendedProperties?.private?.cfv ?? "";
   ok("cada PATCH rechazado una sola vez y el aviso en una sola sincronización", rechazo.disparos === 10 && h1[0].rechazados === 10 && conAviso === 1, { disparos: rechazo.disparos, conAviso, h1 });
   ok(
-    "las 10 excluidas en la marca; los 10 días se ven como cambiados (como en Google); nada pendiente y 1 listado por sincronización después de la primera",
-    cfv.split(",").filter((x) => x.startsWith("x.")).length === 10 && (await diasEnPared(fam)).length === 10 && !(await h.comparar(fam, con)).length && h1.every((x) => x.ok && x.pendiente === false) && h1.slice(1).every((x) => x.listados === 1),
+    "las 10 rechazadas en la marca; ningún día cambiado en la pared; nada pendiente y 1 listado por sincronización",
+    cfv.split(",").filter((x) => x.startsWith("n.")).length === 10 && !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length && h1.every((x) => x.ok && x.pendiente === false && x.listados === 1),
     { cfv, dias: (await diasEnPared(fam)).length, h1 },
   );
 });
@@ -524,10 +554,109 @@ await caso("(e) con el plazo justo (2 series con 6 fantasmas, latencia 400 ms) e
   }
   ok("los 2 días rechazados: cada uno se intenta una vez y el aviso sale en una sola sincronización", rechazo.disparos === 2 && hist.filter((x) => x.avisos).length === 1, hist);
   ok(
-    "al final, una rezagada vieja por serie (la rechazada) como día cambiado; nada pendiente; todo calza",
-    ids.every((id, k) => exc(id).filter((e) => e.summary === `🦄 Serie ${k}`).length === 1) && (await diasEnPared(fam)).length === 2 && hist.slice(-2).every((x) => x.ok && x.pendiente === false) && !(await h.comparar(fam, con)).length,
+    "al final, una rezagada vieja por serie (la rechazada), sin verse en la pared; nada pendiente; todo calza",
+    ids.every((id, k) => exc(id).filter((e) => e.summary === `🦄 Serie ${k}`).length === 1) && !(await diasEnPared(fam)).length && hist.slice(-2).every((x) => x.ok && x.pendiente === false) && !(await h.comparar(fam, con)).length,
     { hist, dif: await h.comparar(fam, con) },
   );
+});
+
+seccion("6. Lo que la familia cambia o borra después de un rechazo no se pierde ni vuelve");
+// f6411fd excluía la rechazada con un PATCH del principal que la dejaba como día cambiado visible en Google
+// sin que el motor releyera la serie: el cambio siguiente de la familia a esa serie se revertía (planear:
+// «un día cambiado no se puede volver a la normalidad desde la pared») y una serie borrada volvía.
+
+await caso("6a. Google rechaza una fantasma y la familia vuelve a cambiar (o borra) la serie antes de la sincronización siguiente", async () => {
+  // n ≤ 3: en línea; 12: al final de la vuelta.
+  for (const [n, segundo, lat] of [
+    [2, "lugar", 0],
+    [1, "titulo", 400],
+    [3, "borrar", 900],
+    [12, "lugar", 400],
+  ] as const) {
+    const id = `r${n}${segundo[0]}`;
+    const tag = `${n} fantasma(s), latencia ${lat}, ${segundo}`;
+    const { cal, con, fam } = await teatro(id, n);
+    const mala = excepciones(cal, id).sort((a, b) => String(a.originalStartTime?.dateTime).localeCompare(String(b.originalStartTime?.dateTime)))[0];
+    const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 9999);
+    try {
+      await h.cambiarEvento(fam, id, { titulo: "Teatro v2" });
+      await conLatencia(lat, () => h.sync(fam, con, 6500));
+      if (segundo === "borrar") await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== id));
+      else await h.cambiarEvento(fam, id, segundo === "lugar" ? { lugar: "Sala 9" } : { titulo: "Teatro v3" });
+      await conLatencia(lat, () => h.sync(fam, con, 6500));
+      for (let i = 0; i < 2; i++) await h.sync(fam, con, 24_000);
+    } finally {
+      rechazo.quitar();
+    }
+    const pared = (await h.leerEventos(fam)).find((e) => e.id === id);
+    const g = sim.evento(cal, gid(id));
+    if (segundo === "borrar") ok(`${tag}: lo que la familia borró no vuelve y se borra en Google`, !pared && g?.status === "cancelled", { pared: pared && h.resumen(pared), g: g?.status });
+    else {
+      const [titulo, lugar] = segundo === "lugar" ? ["Teatro v2", "Sala 9"] : ["Teatro v3", "Sala 1"];
+      ok(`${tag}: el segundo cambio sigue en la pared y llegó a Google`, pared?.titulo === titulo && pared?.lugar === lugar && g?.summary === `🦄 ${titulo}` && g?.location === lugar, {
+        pared: pared && h.resumen(pared),
+        g: `${g?.summary}|${g?.location}`,
+      });
+    }
+    ok(`${tag}: el PATCH rechazado no se repite y todo calza`, rechazo.disparos === 1 && !(await h.comparar(fam, con)).length, { disparos: rechazo.disparos, dif: await h.comparar(fam, con) });
+  }
+});
+
+await caso("6b. La familia cambia la serie justo cuando Google rechaza una rezagada", async () => {
+  // Otro equipo guarda mientras corre la sincronización, en el momento en que llega el PATCH rechazado
+  // (pendientes(), o en línea con un cambio de la nota que se sube en la misma vuelta).
+  for (const enLinea of [false, true]) {
+    const id = enLinea ? "cbl" : "cbp";
+    const { cal, con, fam } = await teatro(id, 2);
+    await dejarRezagadas(cal, con, fam, id, { titulo: "Teatro de títeres" });
+    const mala = excepciones(cal, id).filter((e) => e.summary === "🦄 Teatro")[0];
+    const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 9999);
+    let hecho = false;
+    h.hookFetch(async (m: string, u: string) => {
+      if (!hecho && m === "PATCH" && u.includes(encodeURIComponent(mala.id))) {
+        hecho = true;
+        await h.cambiarEvento(fam, id, { lugar: "Sala 9" });
+      }
+    });
+    try {
+      if (enLinea) await h.cambiarEvento(fam, id, { nota: "Traer abrigo" });
+      await h.sync(fam, con, 6500);
+      h.hookFetch(null);
+      for (let i = 0; i < 2; i++) await h.sync(fam, con, 24_000);
+    } finally {
+      h.hookFetch(null);
+      rechazo.quitar();
+    }
+    const pared = (await h.leerEventos(fam)).find((e) => e.id === id);
+    const g = sim.evento(cal, gid(id));
+    ok(
+      `${enLinea ? "en línea" : "al final de la vuelta"}: el cambio hecho durante la sincronización llega a Google${enLinea ? " (y la nota sigue)" : ""}; todo calza`,
+      hecho && pared?.lugar === "Sala 9" && g?.location === "Sala 9" && (!enLinea || (pared?.nota === "Traer abrigo" && /Traer abrigo/.test(g?.description ?? ""))) && !(await h.comparar(fam, con)).length,
+      { hecho, pared: pared && h.resumen(pared), g: `${g?.location}|${g?.description}`, dif: await h.comparar(fam, con) },
+    );
+  }
+});
+
+await caso("6c. Google rechaza una rezagada en una sincronización corta y después la familia borra la serie", async () => {
+  // Sin plazo para una segunda vuelta (4 s): si la anotación cambiara el etag de la serie, el motor quedaría
+  // con el viejo y el borrado se tomaría como «cambió en los dos lados» (el evento volvería).
+  for (const ms of [4000, 6500]) {
+    const id = `cb${ms}`;
+    const { cal, con, fam } = await teatro(id, 1);
+    await dejarRezagadas(cal, con, fam, id, { titulo: "Teatro de títeres" });
+    const mala = excepciones(cal, id)[0];
+    const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 9999);
+    try {
+      await h.sync(fam, con, ms);
+      await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== id));
+      await h.sync(fam, con, 6500);
+      await h.sync(fam, con, 24_000);
+    } finally {
+      rechazo.quitar();
+    }
+    const pared = (await h.leerEventos(fam)).filter((e) => e.id === id || e.externo?.uid.startsWith(id));
+    ok(`${ms} ms: lo que la familia borró no vuelve y se borra en Google`, !pared.length && sim.evento(cal, gid(id))?.status === "cancelled", { pared: pared.map(h.resumen), g: sim.evento(cal, gid(id))?.status });
+  }
 });
 
 seccion("Al final");

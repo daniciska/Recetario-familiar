@@ -873,16 +873,19 @@ function regla(ev: Evento): string | null {
     partesRegla.push(`BYMONTHDAY=${Array.from({ length: ini.dia - 27 }, (_, k) => 28 + k).join(",")}`, "BYSETPOS=-1");
   }
   if (ev.repeticion === "anual" && ini.mes === 2 && ini.dia === 29) partesRegla.push("BYMONTH=2", "BYMONTHDAY=28,29", "BYSETPOS=-1");
-  if (ev.repetirHasta) {
-    if (ev.todoElDia) partesRegla.push(`UNTIL=${ev.repetirHasta.replace(/-/g, "")}`);
-    else {
-      // Hasta el final de ese día en Santiago, escrito en UTC (así lo pide el estándar).
-      const p = partes(ev.repetirHasta);
-      const t = instanteLocal(ZONA, p.anio, p.mes, p.dia, 23, 59, 59);
-      partesRegla.push(`UNTIL=${new Date(t).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")}`);
-    }
-  }
+  const u = untilDe(ev);
+  if (u) partesRegla.push(`UNTIL=${u}`);
   return partesRegla.join(";");
+}
+
+/** El UNTIL del "hasta" del panel (null si no tiene). */
+function untilDe(ev: Evento): string | null {
+  if (!ev.repetirHasta) return null;
+  if (ev.todoElDia) return ev.repetirHasta.replace(/-/g, "");
+  // Hasta el final de ese día en Santiago, escrito en UTC (así lo pide el estándar).
+  const p = partes(ev.repetirHasta);
+  const t = instanteLocal(ZONA, p.anio, p.mes, p.dia, 23, 59, 59);
+  return new Date(t).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 }
 
 function ponerTexto(v: ICAL.Component, nombre: string, valor: string | undefined) {
@@ -1149,7 +1152,12 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
       cambio = true;
     }
     const horario = (e: Evento) => [e.fecha, e.fechaFin, e.todoElDia, e.horaInicio, e.horaFin];
-    const cambioHorario = !antes || !mismo(horario(ev), horario(antes));
+    let cambioHorario = !antes || !mismo(horario(ev), horario(antes));
+    // Una serie de afuera que empieza un día que su regla no tiene ("cada 2 semanas los viernes" con inicio
+    // un miércoles): el panel la lee desde su primer día. Una regla escrita por el panel cuenta desde su
+    // fecha: con el inicio de antes, los días se correrían (a los miércoles).
+    const ini = !rec && antes && !antes.fechas ? valorDe(v.getFirstProperty("dtstart")) : null;
+    const desfasada = !!ini && aPanel(ini.t, ini.tzid).fecha !== antes!.fecha;
     // Repetición que el panel no sabe escribir: su regla se conserva tal cual (ver moverSerieDeAfuera).
     const deAfuera = !rec && !!ev.fechas && !!antes;
     if (deAfuera) serieAntes = clonar(v);
@@ -1161,10 +1169,22 @@ export function escribirRecurso(grupo: Evento[], ctx: Contexto, uid: string, ant
     if (!rec) {
       const rep = (e: Evento) => [e.repeticion, e.intervalo, e.diasSemana, e.repetirHasta];
       if (!ev.fechas && (!antes || antes.fechas || !mismo(rep(ev), rep(antes)) || cambioHorario)) {
-        v.removeAllProperties("rrule");
-        v.removeAllProperties("rdate");
-        const r = regla(ev);
-        if (r) v.addPropertyWithValue("rrule", ICAL.Recur.fromString(r));
+        const rrules = v.getAllProperties("rrule");
+        if (desfasada && !cambioHorario && rrules.length === 1 && !v.getFirstProperty("rdate") && mismo(rep(ev).slice(0, 3), rep(antes!).slice(0, 3))) {
+          // Sólo cambió el "hasta": la misma regla (sus días, su intervalo, su WKST) y el mismo inicio, con otro fin.
+          const partesRegla = String(rrules[0].getFirstValue()).split(";").filter((x: string) => !/^(UNTIL|COUNT)=/i.test(x));
+          const u = untilDe(ev);
+          rrules[0].setValue(ICAL.Recur.fromString([...partesRegla, ...(u ? [`UNTIL=${u}`] : [])].join(";")));
+        } else {
+          v.removeAllProperties("rrule");
+          v.removeAllProperties("rdate");
+          const r = regla(ev);
+          if (r) v.addPropertyWithValue("rrule", ICAL.Recur.fromString(r));
+          if (desfasada && !cambioHorario) {
+            ponerHorario(v, ev); // la regla nueva cuenta desde la fecha del panel: el inicio también
+            cambioHorario = true;
+          }
+        }
         cambio = true;
       }
       if (!antes || cambioHorario || !mismo(ev.excepciones, antes.excepciones) || !mismo([...fechasCambiadas].sort(), [...cambiadasAntes].sort())) {

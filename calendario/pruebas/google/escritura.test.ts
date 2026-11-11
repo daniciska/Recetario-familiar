@@ -494,6 +494,76 @@ caso("vista", () => {
   ok("DURATION = DTEND equivalente", vista(dur)[""].end === v[""].end, [vista(dur)[""].end, v[""].end]);
 });
 
+caso("una serie que empieza un día que su regla no tiene: cambiar el «hasta» o el intervalo no corre los días", () => {
+  // Creada en Google web (o en otro programa): cada 2 semanas los viernes, con inicio un miércoles. La
+  // pared la lee desde su primer viernes (13-nov). Antes, al cambiar el «hasta» se mandaba la regla del
+  // panel (sin BYDAY) con el inicio de siempre: en Google los días pasaban a los miércoles (fuzz 7316, 8422).
+  const conHora = (extra: Partial<EvG> = {}): EvG => ({
+    id: "cada2vie",
+    etag: '"1"',
+    status: "confirmed",
+    summary: "🦄 Clase",
+    start: h("2026-11-11T19:00:00-03:00"),
+    end: h("2026-11-11T20:30:00-03:00"),
+    recurrence: ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR"],
+    organizer: yo,
+    ...extra,
+  });
+  const variantes: [string, EvG][] = [
+    ["con hora", conHora()],
+    ["de día completo", conHora({ start: { date: "2026-11-11" }, end: { date: "2026-11-12" } })],
+    ["con WKST=SU", conHora({ recurrence: ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;WKST=SU"] })],
+    ["con COUNT", conHora({ recurrence: ["RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=6;BYDAY=FR"] })],
+  ];
+  const leido = (p: EvG) => leerRecurso(serieAIcs(unaSerie([p])), ctx)!.eventos[0];
+  const repe = (e: Evento) => JSON.stringify([e.fecha, e.repeticion, e.intervalo ?? 1, e.diasSemana ?? null, e.repetirHasta ?? null, !!e.fechas]);
+  for (const [nombre, p0] of variantes) {
+    const antes = leido(p0);
+    ok(`${nombre}: la pared la lee desde el viernes 13, cada 2 semanas`, antes.fecha === "2026-11-13" && antes.repeticion === "semanal" && antes.intervalo === 2 && !antes.fechas, repe(antes));
+    for (const [que, cambio] of [
+      ["«hasta»", { repetirHasta: "2027-01-31" }],
+      ["intervalo", { intervalo: 3 }],
+    ] as const) {
+      const p = plan([p0], enPrincipal((e) => ({ ...e, ...cambio })));
+      if (p instanceof Error || !p.maestro) {
+        ok(`${nombre}, ${que}: se puede`, false, sinPieza(p));
+        continue;
+      }
+      guardar(p);
+      const queda = leido(fusionar(p0, p.maestro));
+      ok(`${nombre}, ${que}: en Google quedan los mismos días que en la pared`, repe(queda) === repe({ ...antes, ...cambio }), { queda: repe(queda), pared: repe({ ...antes, ...cambio }), maestro: sinPieza(p) });
+      if (que === "«hasta»") {
+        // Sólo cambia el fin: la misma regla (BYDAY, INTERVAL, WKST) y el inicio de siempre.
+        const rr = (p.maestro.recurrence as string[] | undefined)?.find((l) => l.startsWith("RRULE:")) ?? "";
+        const original = p0.recurrence![0];
+        ok(
+          `${nombre}, ${que}: sólo cambia el UNTIL (sin tocar el inicio)`,
+          !("start" in p.maestro) && /BYDAY=FR/.test(rr) && /INTERVAL=2/.test(rr) && /UNTIL=/.test(rr) && !/COUNT=/.test(rr) && /WKST=SU/.test(rr) === /WKST=SU/.test(original),
+          sinPieza(p),
+        );
+      }
+    }
+  }
+  // Lo mismo en un .ics de iCloud (escribirRecurso es el mismo para los dos).
+  const ics = (rrule: string) =>
+    `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Apple Inc.//iPhone//EN\r\nBEGIN:VEVENT\r\nUID:cada2@icloud\r\nDTSTAMP:20261101T000000Z\r\nSUMMARY:Clase\r\nDTSTART;TZID=America/Santiago:20261111T190000\r\nDTEND;TZID=America/Santiago:20261111T203000\r\n${rrule}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`;
+  for (const rrule of ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR", "RRULE:FREQ=WEEKLY;BYDAY=FR;UNTIL=20270301T025959Z"]) {
+    const A = ics(rrule);
+    const g = leerRecurso(A, ctx)!;
+    for (const cambio of [{ repetirHasta: "2027-01-31" }, { intervalo: 3 }]) {
+      const local = g.eventos.map((e) => ({ ...e, ...cambio, actualizado: "2026-11-09T12:00:00.000Z" }));
+      const B = escribirRecurso(local, ctx, g.uid, A);
+      const vb = B.slice(B.indexOf("BEGIN:VEVENT"));
+      const queda = leerRecurso(B, ctx)!.eventos[0];
+      ok(
+        `iCloud ${rrule.slice(6)}, ${JSON.stringify(cambio)}: los mismos días que en la pared${"repetirHasta" in cambio ? " (y el mismo inicio)" : ""}`,
+        repe(queda) === repe(local[0]) && (!("repetirHasta" in cambio) || /DTSTART;TZID=America\/Santiago:20261111T190000/.test(vb)),
+        { queda: repe(queda), pared: repe(local[0]), vb: vb.split("\r\n").filter((l) => /^(DTSTART|RRULE)/.test(l)) },
+      );
+    }
+  }
+});
+
 caso("crear", () => {
   const uid = "e1@calendario-familiar";
   const local: Evento[] = [
