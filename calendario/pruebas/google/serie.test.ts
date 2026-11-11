@@ -609,10 +609,21 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
   const ex2 = marcaConRechazadas(pX, [{ ...f0e, etag: '"e2"' }]);
   ok("…y si la rechaza de nuevo, queda anotada con el etag nuevo (una sola vez)", typeof ex2 === "string" && ex2.split(",").filter((x) => x.startsWith("n.")).length === 1 && noReintentar({ ...f0e, etag: '"e2"' }, conMarca(nuevo, ex2)) && !noReintentar(f0e, conMarca(nuevo, ex2)), ex2);
   ok("anotarla otra vez igual, o sin marca: no hay nada que mandar", marcaConRechazadas(pX, [f0e]) === undefined && marcaConRechazadas(p0, [f0e]) === undefined);
-  const m4 = marcaFantasmas(pX, { ...pX, summary: "Otra" }, [f0e, otra], ahora + 1000);
-  const pX4 = conMarca({ ...pX, summary: "Otra" }, m4);
-  ok("un cambio posterior la conserva (sigue rezagada y sin reintentar)", typeof m4 === "string" && m4.includes(",n.") && esRezagada(f0e, pX4) && noReintentar(f0e, pX4), m4);
-  ok("…salvo que ya no esté o tenga otro etag", !(marcaFantasmas(pX, { ...pX, summary: "Otra" }, [{ ...f0e, etag: '"e3"' }, otra], ahora + 1000) as string).includes(",n.") && !(marcaFantasmas(pX, { ...pX, summary: "Otra" }, [otra], ahora + 1000) as string).includes(",n."));
+  // Un cambio posterior de otra cosa (la repetición) la conserva; uno de lo que siguen las fantasmas
+  // (título, nota, lugar, duración) es un cambio nuevo de la familia que Google quizás sí acepte: se reintenta.
+  const rep = { ...pX, recurrence: ["RRULE:FREQ=WEEKLY;COUNT=20"] };
+  const m4 = marcaFantasmas(pX, rep, [f0e, otra], ahora + 1000);
+  const pX4 = conMarca(rep, m4);
+  ok("un cambio posterior de la repetición la conserva (sigue rezagada y sin reintentar)", typeof m4 === "string" && m4.includes(",n.") && esRezagada(f0e, pX4) && noReintentar(f0e, pX4), m4);
+  ok("…salvo que ya no esté o tenga otro etag", !(marcaFantasmas(pX, rep, [{ ...f0e, etag: '"e3"' }, otra], ahora + 1000) as string).includes(",n.") && !(marcaFantasmas(pX, rep, [otra], ahora + 1000) as string).includes(",n."));
+  ok("un cambio del título, la nota, el lugar o la duración la vuelve a intentar (sigue rezagada, sin la anotación)", (() => {
+    const cambios: EvG[] = [{ ...pX, summary: "Otra" }, { ...pX, description: "Llevar gorro" }, { ...pX, location: "Piscina 3" }, { ...pX, end: h("2026-11-04T10:30:00-03:00") }];
+    return cambios.every((q) => {
+      const m = marcaFantasmas(pX, q, [f0e, otra], ahora + 1000);
+      const pq = conMarca(q, m);
+      return typeof m === "string" && !m.includes("n.") && esRezagada(f0e, pq) && !noReintentar(f0e, pq) && esRezagada(otra, pq);
+    });
+  })());
   ok("…y cuando la marca ya no explica a nadie se borra entera", marcaFantasmas(pX, { ...pX, summary: "Otra" }, [], ahora) === null);
   // Muchas rechazadas: nunca se descarta una para hacer espacio (volvería a intentarse y a avisar en cada
   // sincronización); si no caben, se borra la marca entera (todas pasan a días cambiados, como en Google).
@@ -626,6 +637,22 @@ caso("marca cfv: un cambio posterior y las rezagadas que Google no acepta", () =
     if (typeof sinLugar === "string") p = conMarca(p, sinLugar);
   }
   ok("…y cuando ya no caben, null: la marca se borra (otra deja de ser rezagada)", sinLugar === null && !esRezagada(otra, conMarca(nuevo, null)));
+  // Todo o nada: con la marca casi llena, la rechazada no deja fuera la entrada (ni la extensión por id) que
+  // explica a otra rezagada; si no cabe todo, null (se borra la marca y el transporte relee). Antes devolvía
+  // una marca sin esa entrada: la otra pasaba a verse como día cambiado sin que nadie releyera la serie.
+  let lleno = pM2.extendedProperties.private.cfv ?? "";
+  for (let i = 0; lleno.length + 22 <= 1000; i++) lleno += `,d.${String(i).padStart(12, "0")}.zzzzzz`; // (más recientes: van primero)
+  const pL = conMarca(pM2, lleno);
+  const conLleno = marcaConRechazadas(pL, [f0e]);
+  ok(
+    "marca casi llena: anotar una rechazada da null en vez de dejar fuera lo que explica a otra rezagada",
+    lleno.length > 1000 - 28 && lleno.length <= 1000 && esRezagada(f0, pL) && conLleno === null,
+    { largo: lleno.length, conLleno },
+  );
+  ok("…y si cabe todo, la marca lo conserva entero", (() => {
+    const m = marcaConRechazadas(pM2, [f0e]);
+    return typeof m === "string" && (pM2.extendedProperties.private.cfv ?? "").split(",").every((x) => m.split(",").includes(x));
+  })());
 });
 
 for (const r of resultados) console.log(r);

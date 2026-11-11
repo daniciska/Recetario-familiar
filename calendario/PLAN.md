@@ -4,7 +4,8 @@ Estado al 10 de noviembre de 2026. Hecho y publicado: calendario, menú con cola
 inteligente, quehaceres con estrellas y premios, cuentas regresivas (y repetición anual), PIN para la pared, datos
 compartidos entre equipos y calendario de iCloud en ambos sentidos.
 Publicado el 10 de noviembre (falta que la familia lo pruebe): menú por ítems, recetas dictadas con Gemini (Fase 4) y
-Google Calendar (Fase 2b; se activa cuando la familia ponga `GOOGLE_CUENTA_SERVICIO` y se vuelva a publicar).
+Google Calendar (Fase 2b; la familia puso `GOOGLE_CUENTA_SERVICIO` y se volvió a publicar el 11 nov con 55acb33: falta
+conectarlo desde el panel).
 Publicado en https://calendario-familiar-pared.netlify.app (Netlify, proyecto `calendario-familiar-pared`).
 
 ## Decisiones de la familia

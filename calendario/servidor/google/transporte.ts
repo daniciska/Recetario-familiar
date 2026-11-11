@@ -32,9 +32,10 @@
 //   etag se prevé igual. Una que falla (5xx, red) se salta y la reintenta otra vuelta (ver el ctag); con
 //   un límite de uso se deja para la vuelta siguiente. Una que Google rechaza (400, no editable) se avisa
 //   y se anota como rechazada en la marca (sigue sin verse en la pared y no se reintenta mientras nadie la
-//   toque). Ese PATCH del principal no cambia lo que ve la pared ni, si el principal está como lo dejó el
-//   panel, el etag de la serie (serie.ts); si no, actualizar devuelve el etag nuevo y pendientes() la
-//   anota sólo si alcanza para que la vuelta siguiente relea el calendario.
+//   toque ni la familia vuelva a cambiar lo que siguen las fantasmas). Ese PATCH del principal no cambia
+//   lo que ve la pared ni, si el principal está como lo dejó el panel, el etag de la serie (serie.ts); si
+//   no (o si la marca no cabe y se borra), actualizar devuelve el etag nuevo y pendientes() la anota sólo
+//   si alcanza para que la vuelta siguiente relea el calendario.
 // - Si Google rechaza una parte de un cambio (400) después de escribir otra, el aviso lleva su motivo y la
 //   vuelta siguiente de la misma sincronización relee la serie (pendientes() → true): la pared vuelve a lo
 //   que Google guardó junto con el aviso. Para que esa vuelta alcance, desde ahí se reserva RESERVA_RELEER:
@@ -686,10 +687,11 @@ export class GoogleCalendar implements Transporte {
     if (!serie) return "noExiste";
     if (serie.etag !== etag) return "conflicto";
     const plan = planear(serie, ics); // NoSePuedeEscribir antes de escribir nada
-    // (Las rezagadas que Google ya rechazó tal como están no se reintentan: ver serie.ts.)
-    const seguir = plan.seguir.filter((o) => !noReintentar(o.pieza, serie.principal!));
+    // Las rezagadas que Google ya rechazó tal como están no se reintentan, según la marca del principal como
+    // quede (un cambio nuevo del título, la nota, el lugar o la duración las vuelve a intentar: ver serie.ts).
+    const seguir = (p: EvG) => plan.seguir.filter((o) => !noReintentar(o.pieza, p));
     const n = plan.ops.length + (plan.maestro ? 1 : 0);
-    if (!n && !seguir.length) return { etag: null };
+    if (!n && !seguir(serie.principal!).length) return { etag: null };
     // Sin tiempo para las excepciones y el principal, no se empieza: el motor lo deja pendiente (sin
     // contarlo como falla) y sigue con lo demás que quepa; lo hace una vuelta con más plazo. Las fantasmas no
     // cuentan aquí: si no alcanzan, quedan para el final de la vuelta (pendientes()) o para otra.
@@ -772,8 +774,9 @@ export class GoogleCalendar implements Transporte {
     //    etag de la serie no las cuenta, así que se prevé igual (un borrado en la pared justo después no
     //    hace volver el evento). Una que Google rechaza sigue siendo rezagada (la pared no ve nada distinto).
     let marcado = false;
-    if ((principalEscrito || !plan.maestro) && seguir.length) {
-      const cola = prioridad(seguir);
+    const siguen = seguir(principal);
+    if ((principalEscrito || !plan.maestro) && siguen.length) {
+      const cola = prioridad(siguen);
       let i = 0;
       const rechazadas: EvG[] = [];
       if (cola.length <= MAX_EN_LINEA && !this.sinPlazo(cola.length)) {
@@ -799,7 +802,7 @@ export class GoogleCalendar implements Transporte {
         } else if (m === false) for (const pieza of rechazadas) this.rechazadas.push({ calId: url, pieza, principal });
       }
       for (const op of cola.slice(i)) this.cola.push({ calId: url, op, T, principal });
-    } else if (seguir.length) previsible = false;
+    } else if (siguen.length) previsible = false;
     // Si algo no salió como se planeó, null: la vuelta siguiente relee (gratis, del listado) y la pared
     // queda igual a lo que Google guardó.
     const nuevo = previsible ? await this.etagPrevisto(url, [principal, ...piezas.values()], serie.uid, ics) : null;

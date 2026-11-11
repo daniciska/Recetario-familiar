@@ -15,7 +15,7 @@
 //   esFantasma(x, p), esRezagada(x, p)            (una rezagada está en serie.fantasmas pero no es esFantasma)
 //   marcaFantasmas(antes, despues, fantasmas, ahora)   la marca cfv para el PATCH del principal (MARCA_FANTASMAS)
 //   marcaConRechazadas(p, rezagadas)              la marca de p con esas rezagadas rechazadas (Google no las acepta)
-//                                                 (null: no caben, se borra la marca)
+//                                                 (null: no cabe todo, se borra la marca)
 //   noReintentar(x, p)                            ¿x es una rezagada que Google ya rechazó tal como está?
 //   hrefSerie(calId, id): string                  el href de una serie (el mismo que arma agrupar)
 //   proyectar(serie): { ics, p2, porClave }        (con memo por serie; determinista)
@@ -352,10 +352,11 @@ export function esFantasma(x: EvG, p: EvG): boolean {
 // valor de antes sigue siendo un día cambiado.
 // Una rezagada que Google no deja poner al día (400, evento no editable) se anota como rechazada
 // (n.<huella del id>.<huella de su etag>): sigue siendo rezagada (la pared no la ve: nada cambia para el
-// motor), pero no se reintenta ni se vuelve a avisar mientras su etag sea ése; si cambia (alguien la tocó,
-// o Google le pasó algo), vuelve a intentarse. Las rechazadas no se descartan nunca para hacer espacio:
-// si no caben, la marca se borra entera (todas las rezagadas de la serie pasan a verse como días
-// cambiados, igual que en Google).
+// motor), pero no se reintenta ni se vuelve a avisar mientras su etag sea ése y la familia no vuelva a
+// cambiar lo que siguen las fantasmas (título, nota, lugar o duración de la serie); si cambia su etag
+// (alguien la tocó, o Google le pasó algo) o hay un cambio así, vuelve a intentarse (una vez por cambio).
+// Al anotarla no se descarta nada para hacer espacio: si no cabe todo, la marca se borra entera (todas las
+// rezagadas de la serie pasan a verse como días cambiados, igual que en Google, y el transporte relee).
 
 /** Clave de la marca en extendedProperties.private del principal. */
 export const MARCA_FANTASMAS = "cfv";
@@ -413,17 +414,18 @@ function leerMarca(p: EvG | undefined): Marca {
 
 /**
  * La marca como texto, dentro de LARGO_MARCA: todas las rechazadas, las entradas (las más recientes
- * primero) y las extensiones por id que quepan. null si no cabe ninguna entrada después de las rechazadas:
- * entonces no queda marca (nunca se deja fuera una rechazada: volvería a intentarse y a avisar).
+ * primero) y las extensiones por id que quepan. null si no cabe ninguna entrada después de las rechazadas
+ * (o, con `todo`, si queda fuera cualquier cosa): entonces no queda marca (nunca se deja fuera una
+ * rechazada: volvería a intentarse y a avisar).
  */
-function escribirMarca(entradas: readonly Rezago[], porId: ReadonlyMap<string, number>, rechazadas: ReadonlyMap<string, string>): string | null {
+function escribirMarca(entradas: readonly Rezago[], porId: ReadonlyMap<string, number>, rechazadas: ReadonlyMap<string, string>, todo = false): string | null {
   let largo = -1;
   const cabe = (s: string) => largo + 1 + s.length <= LARGO_MARCA && ((largo += 1 + s.length), true);
   const n = [...rechazadas].sort().map(([h, e]) => `n.${h}.${e}`);
   if (!n.every(cabe)) return null;
   const e = [...entradas].sort((a, b) => b.hasta - a.hasta).map((y) => `${y.campo}.${y.huella}.${enB36(y.hasta)}`).filter(cabe);
-  if (!e.length) return null;
   const i = [...porId].sort((a, b) => b[1] - a[1]).map(([h, hasta]) => `i.${h}.${enB36(hasta)}`).filter(cabe);
+  if (!e.length || (todo && e.length + i.length < entradas.length + porId.size)) return null;
   return [...e, ...i, ...n].join(",");
 }
 
@@ -465,8 +467,9 @@ export function noReintentar(x: EvG, p: EvG): boolean {
  * sin ninguna, no hace falta. Por cada campo que cambia, la huella del valor de `antes` (hasta `ahora` más
  * MARGEN_MARCA); las entradas de la marca de antes que todavía explican alguna rezagada, con su hasta, y
  * esas rezagadas por id con el hasta nuevo (ver arriba). Las rechazadas siguen mientras sigan ahí con el
- * mismo etag y la marca tenga entradas. undefined: no hay que mandar nada (queda la que está); null: hay
- * que borrarla.
+ * mismo etag y la marca tenga entradas, salvo que cambie alguno de esos campos: un cambio nuevo de la
+ * familia que Google quizás sí acepte, así que se vuelven a intentar (una vez por cambio). undefined: no
+ * hay que mandar nada (queda la que está); null: hay que borrarla.
  */
 export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG[], ahora: number): string | null | undefined {
   const r: Rezago[] = [];
@@ -477,9 +480,10 @@ export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG
     else y.hasta = Math.max(y.hasta, e.hasta);
   };
   const vieja = leerMarca(antes);
+  const cambian = CAMPOS_FANTASMA.filter(([, valor]) => valor(antes) !== valor(despues));
   if (fantasmas.length) {
     const hasta = Math.ceil((ahora + MARGEN_MARCA) / 1000) * 1000;
-    for (const [campo, valor] of CAMPOS_FANTASMA) if (valor(antes) !== valor(despues)) poner({ campo, huella: huellaValor(valor(antes)), hasta });
+    for (const [campo, valor] of cambian) poner({ campo, huella: huellaValor(valor(antes)), hasta });
     for (const x of fantasmas) {
       const usa = rezagadaCon(x, antes, vieja);
       if (!usa) continue;
@@ -488,7 +492,7 @@ export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG
     }
   }
   const previa = antes.extendedProperties?.private?.[MARCA_FANTASMAS];
-  const siguen = new Map([...vieja.rechazadas].filter(([h, e]) => fantasmas.some((f) => huellaValor(f.id) === h && huellaEtag(f) === e)));
+  const siguen = new Map(cambian.length ? [] : [...vieja.rechazadas].filter(([h, e]) => fantasmas.some((f) => huellaValor(f.id) === h && huellaEtag(f) === e)));
   const texto = r.length ? escribirMarca(r, porId, siguen) : null;
   if (texto === null) return previa === undefined ? undefined : null;
   return texto === previa ? undefined : texto;
@@ -498,14 +502,16 @@ export function marcaFantasmas(antes: EvG, despues: EvG, fantasmas: readonly EvG
  * La marca de `p` con esas rezagadas anotadas como rechazadas (con el etag que tienen): Google no las
  * deja poner al día, así que no se reintentan; siguen siendo rezagadas (la pared no ve nada distinto).
  * undefined si no cambia nada (ya estaban así, o la marca no tiene entradas: entonces no hay rezagadas);
- * null si no caben: se borra la marca (todas las rezagadas de la serie pasan a días cambiados, como en Google).
+ * null si no cabe todo: se borra la marca (todas las rezagadas de la serie pasan a días cambiados, como en
+ * Google). Todo o nada: dejar fuera una entrada o una extensión por id haría visible a la rezagada que
+ * explicaba, y el etag de la serie cambiaría sin que el transporte lo sepa (con null, relee).
  */
 export function marcaConRechazadas(p: EvG, rechazadas: readonly EvG[]): string | null | undefined {
   const m = leerMarca(p);
   const nuevas = rechazadas.filter((x) => m.rechazadas.get(huellaValor(x.id)) !== huellaEtag(x));
   if (!nuevas.length || !m.entradas.length) return undefined;
   for (const x of nuevas) m.rechazadas.set(huellaValor(x.id), huellaEtag(x));
-  return escribirMarca(m.entradas, m.porId, m.rechazadas);
+  return escribirMarca(m.entradas, m.porId, m.rechazadas, true);
 }
 
 const NOMBRES_REC = new Set(["rrule", "exrule", "rdate", "exdate"]);

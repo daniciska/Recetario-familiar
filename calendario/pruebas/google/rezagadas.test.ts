@@ -15,6 +15,10 @@
 //      (marca n.<id>.<etag>), también con más de 8 en una serie (b) y con el plazo justo (e); sigue siendo
 //      rezagada (la pared no ve nada distinto), así que lo que la familia cambie o borre después en esa
 //      serie no se pierde ni vuelve (6).
+//   7. …pero un cambio nuevo de la familia al título, la nota, el lugar o la duración la vuelve a intentar
+//      una vez (con un aviso si Google la rechaza otra vez): ese día sigue a la serie si Google ya lo acepta.
+//   8. Anotar una rechazada con la marca casi llena es todo o nada: si no cabe todo, la marca se borra y
+//      se relee, en vez de dejar fuera la entrada que explica a otra rezagada sin que nadie relea.
 //
 //   cd calendario && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/google/rezagadas.test.ts
 import { createHash } from "node:crypto";
@@ -32,6 +36,9 @@ const limite = () => respuestas.status(429, { error: { code: 429, message: "Rate
 /** Jueves desde el 19-nov-2026 (días de la serie «Teatro»). */
 const jueves = (i: number) => new Date(Date.parse("2026-11-19T12:00:00Z") + i * 7 * 86_400_000).toISOString().slice(0, 10);
 const excepciones = (cal: string, id: string) => h.vivos(cal).filter((e) => e.recurringEventId === gid(id));
+/** Por día (originalStartTime). */
+const porDia = <T extends { originalStartTime?: { dateTime?: string } }>(l: T[]) => l.sort((a, b) => String(a.originalStartTime?.dateTime).localeCompare(String(b.originalStartTime?.dateTime)));
+const hv = (v: string) => createHash("sha256").update(v).digest("hex").slice(0, 12);
 const diasEnPared = async (fam: string) => (await h.leerEventos(fam)).filter((e) => e.externo?.recurrencia);
 const conLatencia = async <T>(ms: number, f: () => Promise<T>): Promise<T> => {
   sim.latenciaMs = ms;
@@ -598,7 +605,9 @@ await caso("6a. Google rechaza una fantasma y la familia vuelve a cambiar (o bor
         g: `${g?.summary}|${g?.location}`,
       });
     }
-    ok(`${tag}: el PATCH rechazado no se repite y todo calza`, rechazo.disparos === 1 && !(await h.comparar(fam, con)).length, { disparos: rechazo.disparos, dif: await h.comparar(fam, con) });
+    // (El segundo cambio de título o de lugar es un cambio nuevo: se reintenta una vez, ver 7.)
+    const veces = segundo === "borrar" ? 1 : 2;
+    ok(`${tag}: el PATCH rechazado se intenta ${veces === 1 ? "una sola vez" : "una vez más por el cambio nuevo, no más"} y todo calza`, rechazo.disparos === veces && !(await h.comparar(fam, con)).length, { disparos: rechazo.disparos, dif: await h.comparar(fam, con) });
   }
 });
 
@@ -656,6 +665,107 @@ await caso("6c. Google rechaza una rezagada en una sincronización corta y despu
     }
     const pared = (await h.leerEventos(fam)).filter((e) => e.id === id || e.externo?.uid.startsWith(id));
     ok(`${ms} ms: lo que la familia borró no vuelve y se borra en Google`, !pared.length && sim.evento(cal, gid(id))?.status === "cancelled", { pared: pared.map(h.resumen), g: sim.evento(cal, gid(id))?.status });
+  }
+});
+
+seccion("7. Un día rechazado y anotado sigue los cambios siguientes de la familia");
+// 55acb33: la anotación n.* seguía en la marca después de otro cambio de la serie y ese día no se volvía a
+// intentar: quedaba en Google y en los iPhone con el valor de dos cambios atrás (la pared, al día), sin
+// aviso, aunque Google ya lo aceptara. Ahora un cambio nuevo del título, la nota, el lugar o la duración
+// lo vuelve a intentar una vez (si Google lo rechaza de nuevo, un aviso por ese cambio); un cambio de otra
+// cosa (borrar un día) no.
+
+await caso("7. Google rechaza un día; la familia borra otro día, cambia el lugar y después el título", async () => {
+  // 1 fantasma: en línea; 5: al final de la vuelta.
+  for (const n of [1, 5]) {
+    const id = `s7n${n}`;
+    const { cal, con, fam } = await teatro(id, n);
+    const mala = porDia(excepciones(cal, id))[0];
+    const rechazo = sim.inyectar((p: PedidoVisto) => p.tipo === "events.patch" && p.eventoId === mala.id, invalido(), 9999);
+    const hist: { ok: boolean; intentos: number; avisos: number }[] = [];
+    const sincronizar = async () => {
+      const r = await h.sync(fam, con, 24_000);
+      hist.push({ ok: r.ok, intentos: rechazo.disparos, avisos: (await avisosDe(fam, con)).filter((a) => /Invalid value/.test(a)).length });
+    };
+    try {
+      await h.cambiarEvento(fam, id, { titulo: "Teatro v2" });
+      await sincronizar();
+      await h.cambiarEvento(fam, id, (e) => ({ ...e, excepciones: [...(e.excepciones ?? []), jueves(n + 2)] }));
+      await sincronizar();
+      await h.cambiarEvento(fam, id, { lugar: "Sala 9" });
+      await sincronizar();
+      await sincronizar();
+    } finally {
+      rechazo.quitar();
+    }
+    ok(
+      `${n} fantasma(s): rechazada con el título v2; borrar otro día no la reintenta; el lugar nuevo sí, una vez, con un aviso en esa sincronización`,
+      hist.every((x) => x.ok) && hist.map((x) => x.intentos).join() === "1,1,2,2" && hist.map((x) => x.avisos).join() === "1,0,1,0",
+      hist,
+    );
+    ok(
+      `${n} fantasma(s): …ese día sigue sin verse como cambiado y queda anotado otra vez; todo calza`,
+      !(await diasEnPared(fam)).length && rechazadaEnMarca(cal, id, sim.evento(cal, mala.id)) && !(await h.comparar(fam, con)).length,
+      { dias: (await diasEnPared(fam)).map(h.resumen), dif: await h.comparar(fam, con) },
+    );
+    await h.cambiarEvento(fam, id, { titulo: "Teatro v3" });
+    const r = await h.sync(fam, con, 24_000);
+    const m = sim.evento(cal, mala.id);
+    const pared = (await h.leerEventos(fam)).find((e) => e.id === id);
+    ok(
+      `${n} fantasma(s): con Google ya aceptando, el título v3 le llega a ese día (con el lugar), sin aviso; todo calza`,
+      r.ok && m?.summary === "🦄 Teatro v3" && m?.location === "Sala 9" && pared?.titulo === "Teatro v3" && !(await avisosDe(fam, con)).length && !(await diasEnPared(fam)).length && !(await h.comparar(fam, con)).length,
+      { dia: `${m?.summary}|${m?.location}`, pared: pared && h.resumen(pared), avisos: await avisosDe(fam, con), dif: await h.comparar(fam, con) },
+    );
+  }
+});
+
+seccion("8. Anotar una rechazada con la marca casi llena");
+// 55acb33: la anotación iba primero y, sin espacio, quedaba fuera la entrada más vieja de la marca: las
+// rezagadas que explicaba pasaban a verse como días cambiados en Google (el etag de la serie cambiaba) pero
+// pendientes() no pedía releer, porque el principal seguía «propio». El motor quedaba con el etag viejo:
+// la pared no mostraba esos días y lo siguiente que hacía la familia en la serie era «cambió en los dos
+// lados» (un borrado hacía volver el evento). Ahora es todo o nada: si no cabe todo, la marca se borra y se
+// relee en la misma sincronización (si no alcanza el plazo, no se anota: la reintenta otra).
+
+await caso("8. Con la marca casi llena Google rechaza una rezagada (al final de la vuelta) y después la familia borra la serie", async () => {
+  for (const ms of [24_000, 6500, 4000]) {
+    const id = `s8m${ms}`;
+    const { cal, con, fam } = await teatro(id, 2);
+    await dejarRezagadas(cal, con, fam, id, { titulo: "Teatro de títeres" });
+    const [mala, otra] = porDia(excepciones(cal, id).filter((e) => e.summary === "🦄 Teatro"));
+    // Relleno: entradas de cambios más recientes (van primero) que no explican a nadie, hasta casi 1.000 caracteres.
+    const p = sim.evento(cal, gid(id))!;
+    const priv = (p.extendedProperties as { private: Record<string, string> }).private;
+    let cfv = priv.cfv;
+    const hasta = Math.max(...cfv.split(",").map((x) => parseInt(x.split(".")[2], 36)));
+    for (let i = 1; cfv.length + 22 <= 1000; i++) cfv = `l.${hv(`relleno ${i}`)}.${(hasta + i).toString(36)},${cfv}`;
+    sim.poner(cal, { ...p, extendedProperties: { ...p.extendedProperties, private: { ...priv, cfv } } });
+    ok(`${ms} ms: 2 rezagadas y la marca casi llena`, !!otra && cfv.length > 1000 - 28 && !(await diasEnPared(fam)).length, cfv.length);
+    const rechazo = sim.inyectar((q: PedidoVisto) => q.tipo === "events.patch" && q.eventoId === mala.id, invalido(), 9999);
+    const falla = sim.inyectar((q: PedidoVisto) => q.tipo === "events.patch" && q.eventoId === otra.id, caido(), 9999);
+    let r;
+    try {
+      r = await h.sync(fam, con, ms);
+    } finally {
+      rechazo.quitar();
+      falla.quitar();
+    }
+    const dif = await h.comparar(fam, con);
+    ok(`${ms} ms: rechazada una vez, con su aviso; al terminar esa sincronización la pared calza con Google`, r.ok && rechazo.disparos === 1 && (await avisosDe(fam, con)).some((a) => /Invalid value/.test(a)) && !dif.length, { r, disparos: rechazo.disparos, dif });
+    // O se borró la marca y los 2 días se ven como cambiados (como en Google), o no alcanzó el plazo y quedó como estaba.
+    const queda = (sim.evento(cal, gid(id))?.extendedProperties as { private?: Record<string, string> } | undefined)?.private?.cfv;
+    const dias = (await diasEnPared(fam)).length;
+    ok(`${ms} ms: …sin marca a medias: ${queda === undefined ? "se borró y los 2 días se ven" : "no se tocó"}`, (queda === undefined && dias === 2) || (queda === cfv && dias === 0), { queda: queda?.length, dias });
+    await h.guardarEventos(fam, (l) => l.filter((e) => e.id !== id && !e.externo?.uid.startsWith(id)));
+    await h.sync(fam, con, 6500);
+    await h.sync(fam, con, 24_000);
+    const pared = (await h.leerEventos(fam)).filter((e) => e.id === id || e.externo?.uid.startsWith(id));
+    ok(`${ms} ms: lo que la familia borró no vuelve y se borra en Google; todo calza`, !pared.length && sim.evento(cal, gid(id))?.status === "cancelled" && !(await h.comparar(fam, con)).length, {
+      pared: pared.map(h.resumen),
+      g: sim.evento(cal, gid(id))?.status,
+      dif: await h.comparar(fam, con),
+    });
   }
 });
 
