@@ -169,9 +169,18 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
   - Una nota escrita en la pared que parezca HTML (p. ej. «<b>») queda tal cual en Google y vuelve a la pared sin las
     marcas. Opción: escaparla en `servidor/google/escritura.ts` (decidir antes qué se ve en el iPhone).
   - Los días «fantasma» (copias idénticas que Google a veces crea) reciben el cambio de título, nota, lugar u hora de
-    término de su serie (un PATCH cada uno, hasta 10). Si una serie tiene más, o se acaba el plazo, los que faltan
-    quedan como días cambiados con el valor anterior (con aviso). Un cambio con muchos PATCH espera a la
-    sincronización programada, que tiene más tiempo.
+    término de su serie; los que no alcanzan quedan «rezagados» (marca `cfv`, README → Calendario de Google) y se ponen
+    al día después. Casos raros que quedan (revisión del 11 nov, ninguno pierde lo que la familia ve en la pared):
+    - Con una serie de más de ~40 rezagadas la marca se llena; si además Google rechaza una y responde 429/500 a otra
+      en la misma vuelta, se borra la marca y esas quedan como días cambiados con el valor viejo. Arreglo probado por
+      el verificador (no aplicado): en `pendientes()`, no borrar la marca de una serie que aún tiene rezagadas sin
+      poner al día en esa vuelta (scratchpad `revision-google/verif6-0/arbolfix`).
+    - Lo mismo en línea (en `actualizar`) con la marca casi llena y poco plazo: antes de anotar, si
+      `marcaConRechazadas` daría null y no queda `PLAZO_MARCA + RESERVA_RELEER`, dejarla para `pendientes()`.
+    - Con fantasmas en la serie, cambiar la hora, mover la serie, pasarla a «no se repite» o acortar el «hasta» antes
+      de ellas se rehúsa con «tiene días cambiados uno por uno», aunque la pared no muestra ninguno (regla G1 de
+      `planear`, ya estaba antes). Arreglar junto con «cambiar sólo un día» (mover las fantasmas con la serie, o al
+      menos otro texto).
   - Al volver a crear una serie con días cambiados (borrada en Google y cambiada en la pared), un día cuyo cambio no se
     pudo pasar (Google lo rechazó o falló dos veces) queda como un día normal, con aviso, y no se vuelve a intentar:
     habría que permitir en `planear` el PATCH de una instancia que todavía no es excepción.
