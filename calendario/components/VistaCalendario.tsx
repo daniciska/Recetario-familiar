@@ -79,8 +79,8 @@ export default function VistaCalendario({
   return (
     <section className="flex h-full flex-col gap-3 cel:gap-2">
       {/* Controles. Celular (2 filas): ‹ título › ＋ y debajo Día | Semana | Mes a todo el ancho; tocar el
-          título vuelve a hoy (reemplaza al botón «Hoy»). */}
-      <div className="flex flex-wrap items-center gap-2 cel:grid cel:grid-cols-[auto_minmax(0,1fr)_auto_auto] cel:gap-x-1">
+          título vuelve a hoy (reemplaza al botón «Hoy»). Teléfono en horizontal (sm): todo en una fila. */}
+      <div className="flex flex-wrap items-center gap-2 cel:grid cel:grid-cols-[auto_minmax(0,1fr)_auto_auto] cel:gap-x-1 cel:sm:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto]">
         <BotonIcono etiqueta="Anterior" onClick={() => mover(-1)} className="cel:col-start-1 cel:row-start-1">
           ‹
         </BotonIcono>
@@ -127,7 +127,7 @@ export default function VistaCalendario({
             valor={modo}
             alCambiar={setModo}
             lleno
-            className="cel:col-span-4 cel:row-start-2"
+            className="cel:col-span-4 cel:row-start-2 cel:sm:col-span-1 cel:sm:col-start-4 cel:sm:row-start-1 cel:sm:ml-1 cel:sm:w-auto"
             opciones={[
               { valor: "dia", texto: "Día" },
               { valor: "semana", texto: "Semana" },
@@ -137,7 +137,7 @@ export default function VistaCalendario({
           <Boton
             variante="primario"
             aria-label="Nuevo evento"
-            className="cel:col-start-4 cel:row-start-1 cel:ml-1 cel:min-w-11"
+            className="cel:col-start-4 cel:row-start-1 cel:ml-1 cel:min-w-11 cel:sm:col-start-5"
             onClick={() => proteger(() => setEditando({ fecha: a }))}
           >
             ＋<span className="max-sm:hidden">Evento</span>
