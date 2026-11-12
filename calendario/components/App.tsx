@@ -14,6 +14,7 @@ import VistaTareas from "./VistaTareas";
 import VistaAjustes from "./VistaAjustes";
 import { cx } from "./ui";
 import { UnirseModal } from "./Nube";
+import { AvisoRecienUnido, AvisoSinFamilia } from "./AvisoEquipo";
 
 export type Pestana = "calendario" | "comidas" | "recetas" | "compras" | "tareas" | "ajustes";
 
@@ -147,6 +148,9 @@ function Panel() {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <BarraSuperior ahora={ahora} clima={clima} alIrAMenu={() => ir("comidas")} />
+        {/* Sin unir a la familia en la nube se ve la familia de ejemplo: que nadie crea que es otra familia. */}
+        <AvisoSinFamilia compacto={modoPared} />
+        <AvisoRecienUnido />
         {errorGuardado && (
           <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4">
             <span className="flex-1">{errorGuardado}</span>

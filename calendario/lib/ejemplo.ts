@@ -172,6 +172,17 @@ function recetasEjemplo(): Receta[] {
   ];
 }
 
+/** Los integrantes inventados de `estadoEjemplo` (id → nombre). */
+const MIEMBROS_EJEMPLO: Record<string, string> = { mie_mama: "Carolina", mie_papa: "Felipe", mie_sofi: "Sofía", mie_tomi: "Tomás" };
+
+/**
+ * ¿Lo que se ve sigue siendo la familia de ejemplo? Sí mientras quede alguno de sus integrantes con su
+ * nombre de fábrica (la familia que usa el panel sin nube ya los cambió por los suyos).
+ */
+export function esFamiliaDeEjemplo(estado: Pick<EstadoApp, "miembros">): boolean {
+  return estado.miembros.some((m) => MIEMBROS_EJEMPLO[m.id] === m.nombre);
+}
+
 export function estadoEjemplo(): EstadoApp {
   const lunes = lunesDe(hoy());
   const d = (i: number) => sumarDias(lunes, i);

@@ -506,9 +506,9 @@ try {
     await dialogo(p).locator('input[type="file"]').setInputFiles(OPUS);
     await ver(dialogo(p).getByText("✅ Guardado en la nube"), 20_000);
   };
-  await caso("cuota del día agotada (429 diario en los dos modelos)", async () => {
+  await caso("cuota del día agotada (429 diario en los cuatro modelos)", async () => {
     const p = tablet.p;
-    await subirConGuion(["429dia", "429dia"]);
+    await subirConGuion(["429dia", "429dia", "429dia", "429dia"]);
     const t = dialogo(p).getByText(/Se usó la cuota gratis de Gemini de hoy\. El audio está guardado y se procesa solo después de las \d{2}:\d{2}\./);
     ok("mensaje de cuota con la hora de Chile", await ver(t, 25_000), await texto(dialogo(p)));
     ok("…título «😕 No se pudo pasar en limpio» y botones Intentar de nuevo y Descartar", (await texto(dialogo(p))).includes("😕 No se pudo pasar en limpio") && (await ver(dialogo(p).getByRole("button", { name: "Intentar de nuevo" }), 1000)) && (await ver(dialogo(p).getByRole("button", { name: "🗑 Descartar" }), 1000)));
@@ -827,8 +827,8 @@ try {
     const d = dialogo(p);
     ok("parte de un borrador de rescate con «Pedir otra versión»", (await ver(d.getByText(/Gemini no alcanzó a ordenar esta receta/), 30_000)) && (await ver(d.getByRole("button", { name: "Pedir otra versión" }), 1000)), await texto(d));
     const id = await nuevoEnNube(antes);
-    // 1) Se acabó la cuota del día en los dos modelos: vuelve el borrador de antes, con el error.
-    sim.guion("*", ["429dia", "429dia"]);
+    // 1) Se acabó la cuota del día en los cuatro modelos: vuelve el borrador de antes, con el error.
+    sim.guion("*", ["429dia", "429dia", "429dia", "429dia"]);
     await d.getByRole("button", { name: "Pedir otra versión" }).click();
     const avisoCuota = /No se pudo hacer otra versión: Se usó la cuota gratis de Gemini de hoy\. Puedes pedirla de nuevo después de las \d{2}:\d{2}\. Quedó la versión de antes\./;
     ok("ventana: «No se pudo hacer otra versión: Se usó la cuota… Puedes pedirla de nuevo después de las HH:MM…»", await ver(d.getByText(avisoCuota), 30_000), await texto(d));

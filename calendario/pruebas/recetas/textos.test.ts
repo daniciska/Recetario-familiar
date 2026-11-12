@@ -5,6 +5,7 @@ import {
   CHIPS,
   DA_LO_MISMO,
   MENSAJES,
+  OCUPADO_SIN_REINTENTO,
   TEXTOS,
   TEXTOS_GEMINI,
   botonesDictado,
@@ -103,7 +104,20 @@ await caso("errores", () => {
   }
   const p = reinicioCuota(Date.parse("2026-11-09T20:00:00Z"));
   igual("cuota_dia: hasta la medianoche del Pacífico + 5 min, en hora de Chile", MENSAJES.cuota_dia(p), "Se usó la cuota gratis de Gemini de hoy. El audio está guardado y se procesa solo después de las 05:05.");
-  igual("ocupado con hora", MENSAJES.ocupado(Date.parse("2026-11-09T17:15:00Z")), "Gemini está ocupado. Se vuelve a intentar solo cerca de las 14:15, o toca «Intentar de nuevo».");
+  igual(
+    "ocupado con hora: Google saturado, no es el panel, y se reintenta solo",
+    MENSAJES.ocupado(Date.parse("2026-11-09T17:15:00Z")),
+    "Gemini (Google) está saturado en este momento: no es un error del panel. El audio está guardado y se vuelve a intentar solo cerca de las 14:15, o toca «Intentar de nuevo».",
+  );
+  igual("mensajeError de un ocupado que se reintenta solo", mensajeError(conError("ocupado", { intentos: 1, error: { codigo: "ocupado", reintentable: true, proximo: Date.parse("2026-11-09T17:15:00Z") } })), MENSAJES.ocupado(Date.parse("2026-11-09T17:15:00Z")));
+  ok(
+    "mensajeError de un ocupado que ya no se reintenta solo (llegó al tope): no lo promete",
+    mensajeError(conError("ocupado", { intentos: MAX_INTENTOS_SOLOS.ocupado })) === OCUPADO_SIN_REINTENTO &&
+      /saturado/.test(OCUPADO_SIN_REINTENTO) && /no es un error del panel/.test(OCUPADO_SIN_REINTENTO) && !/solo|sola/.test(OCUPADO_SIN_REINTENTO) && textoBueno(OCUPADO_SIN_REINTENTO),
+    mensajeError(conError("ocupado", { intentos: MAX_INTENTOS_SOLOS.ocupado })),
+  );
+  ok("…y de verdad la app ya no lo pide sola", !debeReintentar(conError("ocupado", { intentos: MAX_INTENTOS_SOLOS.ocupado, error: { codigo: "ocupado", reintentable: true, proximo: 1 } }), 2, "ok"));
+  ok("mensajeError sin intentos (sólo el error) → el de siempre", mensajeError({ error: { codigo: "ocupado", reintentable: true } }) === MENSAJES.ocupado());
   ok("cuota_dia y ocupado sin hora siguen siendo frases", MENSAJES.cuota_dia().endsWith("solo mañana.") && MENSAJES.ocupado().includes("en unos minutos"));
   igual(
     "sin_clave dice dónde va la clave (sin pedirla)",
@@ -193,6 +207,7 @@ await caso("pantallas", () => {
   ok("sin_clave: los 3 pasos, sin pedir la clave en el chat", mensajeProbar({ gemini: "sin_clave" }) === TEXTOS_GEMINI.faltaClave && /GEMINI_API_KEY/.test(TEXTOS_GEMINI.faltaClave) && /Nunca la pegues/.test(TEXTOS_GEMINI.faltaClave));
   igual("solo_ai_gateway", mensajeProbar({ gemini: "solo_ai_gateway" }), TEXTOS_GEMINI.soloAiGateway);
   igual("los demás usan MENSAJES", mensajeProbar({ gemini: "clave_invalida" }), MENSAJES.clave_invalida());
+  ok("ocupado al probar: Google saturado, sin hablar de un audio ni de una hora", mensajeProbar({ gemini: "ocupado" }) === TEXTOS_GEMINI.ocupado && /saturado/.test(TEXTOS_GEMINI.ocupado) && /no es un error del panel/.test(TEXTOS_GEMINI.ocupado) && !/audio|las \d/.test(TEXTOS_GEMINI.ocupado), mensajeProbar({ gemini: "ocupado" }));
   const malos: string[] = [];
   for (const [k, v] of Object.entries({ ...TEXTOS, ...TEXTOS_GEMINI })) {
     const t = typeof v === "function" ? (v as (x: unknown) => string)(k === "conectado" ? "gemini-3.8-flash" : k === "guardadoEquipo" ? 154 : "un puñadito") : v;
@@ -315,11 +330,15 @@ await caso("otra versión fallida", () => {
     textoOtraVersionFallo(fallida("cuota_dia", {}, reinicioCuota(Date.parse("2026-11-09T20:00:00Z")))),
     "No se pudo hacer otra versión: Se usó la cuota gratis de Gemini de hoy. Puedes pedirla de nuevo después de las 05:05. Quedó la versión de antes.",
   );
-  igual("ocupado con hora", textoOtraVersionFallo(fallida("ocupado", {}, p)), "No se pudo hacer otra versión: Gemini está ocupado. Puedes pedirla de nuevo cerca de las 14:15. Quedó la versión de antes.");
+  igual(
+    "ocupado con hora",
+    textoOtraVersionFallo(fallida("ocupado", {}, p)),
+    "No se pudo hacer otra versión: Gemini (Google) está saturado en este momento (no es un error del panel). Puedes pedirla de nuevo cerca de las 14:15. Quedó la versión de antes.",
+  );
   igual("sin la clave (la nube lo responde al tiro)", textoOtraVersionFallo(fallida("sin_clave")), "No se pudo hacer otra versión: Falta conectar Gemini (la clave GEMINI_API_KEY en Netlify). Quedó la versión de antes.");
   ok("la clave inválida usa el mensaje de siempre (dice qué hacer)", textoOtraVersionFallo(fallida("clave_invalida")) === `No se pudo hacer otra versión: ${MENSAJES.clave_invalida()} Quedó la versión de antes.`);
   ok("en un «no parece receta» también", textoOtraVersionFallo(fallida("ocupado", { esReceta: false, rescate: undefined }))?.startsWith("No se pudo hacer otra versión: "));
-  // Con un error del audio mismo, otra versión da lo mismo: se advierte antes de pedirla (gasta hasta 8 pedidos a Gemini).
+  // Con un error del audio mismo, otra versión da lo mismo: se advierte antes de pedirla (gasta hasta 12 pedidos a Gemini).
   igual("los que dan lo mismo: formato, bloqueado y audio perdido", [...DA_LO_MISMO].sort(), ["audio_perdido", "bloqueado", "formato"]);
   ok("…ninguno es reintentable", DA_LO_MISMO.every((c) => !esReintentable(c)));
   for (const c of CODIGOS) ok(`${c}: ${DA_LO_MISMO.includes(c) ? "se advierte" : "no se advierte"} antes de pedirla de nuevo`, otraVersionDaLoMismo(fallida(c)) === DA_LO_MISMO.includes(c));

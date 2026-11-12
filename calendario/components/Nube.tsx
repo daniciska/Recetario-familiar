@@ -3,13 +3,23 @@
 // Compartir los datos entre equipos: crear la familia en la nube, invitar con un código (o un QR que
 // se escanea con la cámara del iPhone) y unirse.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import qrcode from "qrcode-generator";
 import { useDatos } from "@/lib/store";
-import { AccesoRevocado, SinConexion, api, borrarSesion, guardarSesion, leerSesion, nombreDeEsteEquipo } from "@/lib/datos/nube";
+import {
+  AccesoRevocado,
+  SinConexion,
+  anotarRecienUnido,
+  api,
+  borrarSesion,
+  esIconoDeInicioIOS,
+  guardarSesion,
+  leerSesion,
+  nombreDeEsteEquipo,
+} from "@/lib/datos/nube";
 import { descargarRespaldo } from "@/lib/respaldo";
 import { TEXTOS } from "@/lib/dictados/textos";
-import { Boton, Entrada, Modal, cx } from "./ui";
+import { Boton, Entrada, Modal, claseInput, cx } from "./ui";
 
 const SIN_RED = "No hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.";
 const formatoCodigo = (c: string) => (c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c);
@@ -19,6 +29,89 @@ function mensajeDe(e: unknown, def: string) {
   if (e instanceof SinConexion) return SIN_RED;
   if (e instanceof AccesoRevocado) return e.message;
   return def;
+}
+
+/** Dónde se pide un código nuevo (en un equipo que ya está unido). */
+export const DONDE_INVITAR = "⚙️ Familia → Compartir entre equipos → Invitar otro equipo";
+
+/**
+ * Para la app abierta desde el ícono de la pantalla de inicio del iPhone o iPad (esIconoDeInicioIOS):
+ * guarda sus datos aparte de Safari, así que unirse con el QR de la Cámara (que abre Safari) no la une.
+ */
+export function textoIconoIOS(): string {
+  const equipo = nombreDeEsteEquipo() === "iPad" ? "iPad" : "iPhone";
+  return `En el ${equipo}, el ícono de la pantalla de inicio no comparte lo de Safari: aunque te hayas unido en Safari, aquí hay que unirse de nuevo. Pide un código nuevo en otro equipo (${DONDE_INVITAR}) y escríbelo aquí.`;
+}
+
+/** El campo del código de invitación (ABCD-2345) con su botón. */
+function FormularioCodigo({
+  valor,
+  alCambiar,
+  alEnviar,
+  etiqueta,
+  enfocar,
+}: {
+  valor: string;
+  alCambiar: (v: string) => void;
+  alEnviar: (codigo: string) => void;
+  etiqueta: string;
+  enfocar?: boolean;
+}) {
+  const limpio = limpiarCodigo(valor);
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (limpio.length === 8) alEnviar(limpio);
+      }}
+    >
+      <span className="w-full text-base font-bold text-tinta-suave">{etiqueta}</span>
+      <Entrada
+        value={formatoCodigo(limpio)}
+        onChange={(e) => alCambiar(e.target.value)}
+        placeholder="ABCD-2345"
+        aria-label="Código de invitación"
+        autoCapitalize="characters"
+        autoComplete="off"
+        autoFocus={enfocar}
+        className="num max-w-56 text-center text-2xl tracking-widest"
+      />
+      <Boton type="submit" variante={enfocar ? "primario" : "suave"} disabled={limpio.length !== 8}>
+        Unirme
+      </Boton>
+    </form>
+  );
+}
+
+/** «Unirme con un código» del aviso de arriba: escribir el código y después confirmar (UnirseModal). */
+export function UnirseConCodigoModal({ alCerrar }: { alCerrar: () => void }) {
+  const [escrito, setEscrito] = useState("");
+  const [codigo, setCodigo] = useState<string | null>(null);
+  const [icono] = useState(esIconoDeInicioIOS);
+  // Con «Cancelar» (p. ej. el código estaba mal escrito) se vuelve a este paso con lo escrito.
+  if (codigo) return <UnirseModal codigo={codigo} alCerrar={() => setCodigo(null)} />;
+  return (
+    <Modal titulo="Unirme a la familia" alCerrar={alCerrar} ancho="max-w-lg">
+      <div className="space-y-4 text-lg">
+        {icono ? (
+          <>
+            <p className="rounded-2xl bg-acento-suave px-4 py-3">{textoIconoIOS()}</p>
+            <p className="text-base text-tinta-suave">
+              Si ya te uniste en Safari en este {nombreDeEsteEquipo() === "iPad" ? "iPad" : "iPhone"}, el código lo puedes pedir ahí
+              mismo y volver al ícono a escribirlo.
+            </p>
+          </>
+        ) : (
+          <p>
+            Pide el código en un equipo que ya esté unido a la familia: <strong>{DONDE_INVITAR}</strong>. Sirve una vez y vence en
+            24 horas.
+          </p>
+        )}
+        <FormularioCodigo valor={escrito} alCambiar={setEscrito} alEnviar={setCodigo} etiqueta="El código que muestra el otro equipo:" enfocar />
+      </div>
+    </Modal>
+  );
 }
 
 /** Sección de Familia → "Compartir entre equipos". */
@@ -39,6 +132,7 @@ function Conectar() {
   const [uniendo, setUniendo] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
+  const [icono] = useState(esIconoDeInicioIOS);
 
   const crear = async () => {
     setOcupado(true);
@@ -54,6 +148,7 @@ function Conectar() {
       }
       // Se guarda la conexión al tiro (si se corta, al volver a abrir termina de subir los datos).
       guardarSesion({ token: datos.token, equipoId: datos.equipoId!, familia: datos.familia!, pendienteSubir: true });
+      anotarRecienUnido("creada");
       location.reload();
     } catch (e) {
       setMsg(mensajeDe(e, "No se pudo crear la familia."));
@@ -68,32 +163,20 @@ function Conectar() {
         Hoy los datos viven sólo en este equipo. Conéctalo a la nube para que el iPhone, el iPad y la pantalla de la pared
         vean y cambien lo mismo.
       </p>
+      {icono && <p className="mb-3 rounded-2xl bg-acento-suave px-4 py-3 text-lg">{textoIconoIOS()}</p>}
       <div className="flex flex-wrap gap-3">
         <Boton variante="primario" onClick={() => setCreando(true)}>
           ☁️ Crear la familia en la nube
         </Boton>
       </div>
-      <form
-        className="mt-4 flex flex-wrap items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (limpiarCodigo(codigo).length === 8) setUniendo(limpiarCodigo(codigo));
-        }}
-      >
-        <span className="w-full text-base font-bold text-tinta-suave">¿Ya hay una familia? Únete con el código que muestra otro equipo:</span>
-        <Entrada
-          value={formatoCodigo(limpiarCodigo(codigo))}
-          onChange={(e) => setCodigo(e.target.value)}
-          placeholder="ABCD-2345"
-          aria-label="Código de invitación"
-          autoCapitalize="characters"
-          autoComplete="off"
-          className="num max-w-56 text-center text-2xl tracking-widest"
+      <div className="mt-4">
+        <FormularioCodigo
+          valor={codigo}
+          alCambiar={setCodigo}
+          alEnviar={setUniendo}
+          etiqueta="¿Ya hay una familia? Únete con el código que muestra otro equipo:"
         />
-        <Boton type="submit" disabled={limpiarCodigo(codigo).length !== 8}>
-          Unirme
-        </Boton>
-      </form>
+      </div>
       {msg && <p className="mt-3 text-lg font-bold">{msg}</p>}
 
       {creando && (
@@ -153,6 +236,7 @@ export function UnirseModal({ codigo, alCerrar }: { codigo: string; alCerrar: ()
       );
       if (status !== 201 || !datos.token) return setMsg(datos.error ?? "No se pudo unir este equipo.");
       guardarSesion({ token: datos.token, equipoId: datos.equipoId!, familia: datos.familia! });
+      anotarRecienUnido("unido");
       location.reload();
     } catch (e) {
       setMsg(mensajeDe(e, "No se pudo unir este equipo."));
@@ -319,6 +403,26 @@ function FamiliaConectada() {
 function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void }) {
   const [inv, setInv] = useState<{ codigo: string; expira: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [copiada, setCopiada] = useState<boolean | null>(null);
+  const campoDireccion = useRef<HTMLInputElement>(null);
+  const direccion = location.origin;
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(direccion);
+      setCopiada(true);
+    } catch {
+      // Sin permiso para copiar: queda marcada, para copiarla a mano (mantener apretado → Copiar).
+      campoDireccion.current?.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        /* nada */
+      }
+      setCopiada(ok);
+    }
+  };
 
   useEffect(() => {
     let vivo = true;
@@ -353,9 +457,31 @@ function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void
           <p className="text-lg">
             En el iPhone o iPad, abre la <strong>Cámara</strong> y apunta al código.
           </p>
-          <p className="text-base text-tinta-suave">O en el otro equipo: Familia → Compartir entre equipos → escribe</p>
+          <p className="text-base text-tinta-suave">
+            O en el otro equipo: toca «Unirme con un código» (arriba) o ve a Familia → Compartir entre equipos, y escribe
+          </p>
           <p className="num font-display text-4xl font-semibold tracking-widest">{formatoCodigo(inv.codigo)}</p>
           <p className="text-base text-tinta-suave">Sirve una vez y vence en 24 horas.</p>
+          {/* La Cámara abre Safari, y en el iPhone el ícono de la pantalla de inicio guarda sus datos aparte. */}
+          <div className="space-y-3 rounded-2xl bg-acento-suave px-4 py-3 text-left text-base">
+            <p>
+              <strong>¿La quieren como app en el iPhone?</strong> Primero abran la dirección en Safari → Compartir → Agregar a
+              pantalla de inicio, ábranla desde el ícono y escriban este código ahí (la cámara abre Safari, y lo que se hace en
+              Safari no pasa al ícono).
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={campoDireccion}
+                readOnly
+                value={direccion}
+                aria-label="Dirección del panel"
+                onFocus={(e) => e.currentTarget.select()}
+                className={cx(claseInput, "min-w-0 flex-1 basis-56 text-base")}
+              />
+              <Boton onClick={copiar}>{copiada ? "✓ Copiada" : "📋 Copiar"}</Boton>
+            </div>
+            {copiada === false && <p className="text-tinta-suave">No se pudo copiar sola: mantén apretada la dirección y elige Copiar.</p>}
+          </div>
         </div>
       )}
     </Modal>

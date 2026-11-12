@@ -79,13 +79,21 @@ export const MENSAJES: Record<CodigoError, (proximo?: number) => string> = {
   interno: () => "Algo falló en el panel al pedir la receta. El audio sigue guardado: toca «Intentar de nuevo».",
 };
 
-/** El mensaje del error de un dictado (o "" si no tiene). */
-export const mensajeError = (d: Pick<DictadoPublico, "error">) => (d.error ? MENSAJES[d.error.codigo](d.error.proximo) : "");
+/** Un «ocupado» que la app ya no reintenta sola (llegó a MAX_INTENTOS_SOLOS.ocupado): no promete otro intento. */
+export const OCUPADO_SIN_REINTENTO =
+  "Gemini (Google) siguió saturado todas las veces que se intentó: no es un error del panel. El audio está guardado: toca «Intentar de nuevo» más tarde.";
+
+/** El mensaje del error de un dictado (o "" si no tiene). Con `intentos`, un «ocupado» sin más reintentos solos no los promete. */
+export function mensajeError(d: Pick<DictadoPublico, "error"> & { intentos?: number }): string {
+  if (!d.error) return "";
+  if (d.error.codigo === "ocupado" && (d.intentos ?? 0) >= MAX_INTENTOS_SOLOS.ocupado) return OCUPADO_SIN_REINTENTO;
+  return MENSAJES[d.error.codigo](d.error.proximo);
+}
 
 // ---------- «Pedir otra versión» que falló ----------
 
 /**
- * Errores que vienen del audio mismo: otra versión da lo mismo (y cada corrida gasta hasta 8 pedidos a
+ * Errores que vienen del audio mismo: otra versión da lo mismo (y cada corrida gasta hasta 12 pedidos a
  * Gemini). Antes de pedirla de nuevo se advierte (TEXTOS.confirmarOtraIgual).
  */
 export const DA_LO_MISMO: readonly CodigoError[] = ["formato", "bloqueado", "audio_perdido"];
@@ -107,7 +115,7 @@ export const otraVersionDaLoMismo = (d: Pick<DictadoPublico, "estado" | "error">
 const OTRA_VERSION: Partial<Record<CodigoError, (proximo?: number) => string>> = {
   sin_clave: () => "Falta conectar Gemini (la clave GEMINI_API_KEY en Netlify).",
   cuota_dia: (p) => `Se usó la cuota gratis de Gemini de hoy. Puedes pedirla de nuevo ${despuesDe(p)}.`,
-  ocupado: (p) => `Gemini está ocupado. Puedes pedirla de nuevo ${cercaDe(p)}.`,
+  ocupado: (p) => `Gemini (Google) está saturado en este momento (no es un error del panel). Puedes pedirla de nuevo ${cercaDe(p)}.`,
   se_corto: () => "Se cortó mientras Gemini escuchaba. Puedes pedirla de nuevo.",
   incompleta: () => "La respuesta de Gemini llegó incompleta. Puedes pedirla de nuevo; si vuelve a pasar, dicta la receta en dos audios más cortos.",
   interno: () => "Algo falló en el panel al pedir la receta. Puedes pedirla de nuevo.",
@@ -297,6 +305,7 @@ export const TEXTOS_GEMINI = {
   soloAiGateway:
     "Netlify está ofreciendo su propia IA (cobra créditos). Para usar el plan gratis de Google, pon la clave de la familia en Netlify.",
   sinRed: "No hay conexión con la nube. Revisa el wifi e inténtalo de nuevo.",
+  ocupado: "Gemini (Google) está saturado en este momento: no es un error del panel. Prueba de nuevo en unos minutos; las recetas dictadas se reintentan solas.",
 };
 
 /** El resultado de «Probar conexión» (no gasta cuota). */
@@ -304,6 +313,7 @@ export function mensajeProbar(r: RespuestaProbar): string {
   if (r.gemini === "ok") return TEXTOS_GEMINI.conectado(r.modelo);
   if (r.gemini === "sin_clave") return TEXTOS_GEMINI.faltaClave;
   if (r.gemini === "solo_ai_gateway") return TEXTOS_GEMINI.soloAiGateway;
+  if (r.gemini === "ocupado") return TEXTOS_GEMINI.ocupado; // no hay audio ni hora de reintento que nombrar
   return MENSAJES[r.gemini]();
 }
 

@@ -8,8 +8,8 @@
 //   sin x-goog-api-key → 403 PERMISSION_DENIED "unregistered callers"; clave mala → 400 API_KEY_INVALID
 //   (cuerpos copiados de SP/gemini-api/prueba-host.txt); ?key= en la URL → falta; cuerpo > 20 MB → 400;
 //   inlineData.mimeType fuera de los 13 documentados (+ mimesExtra) → 400 "Unsupported MIME type: x";
-//   base64 inválido → 400 (y se anota el SHA-256 del audio decodificado); thinkingLevel "minimal" en
-//   gemini-3.8-flash → 400; thinkingBudget junto con thinkingLevel → 400; temperature/topP/topK → falta
+//   base64 inválido → 400 (y se anota el SHA-256 del audio decodificado); un thinkingLevel que el modelo
+//   no acepta (NIVELES: "minimal" en gemini-3.8-flash) → 400; thinkingBudget junto con thinkingLevel → 400; temperature/topP/topK → falta
 //   ("silently ignored"); último part del turno que no sea texto no vacío → 400; salida estructurada:
 //   responseFormat.text {mimeType "APPLICATION_JSON", schema} o responseMimeType "application/json" +
 //   responseJsonSchema (con `sinResponseFormat`, responseFormat da el 400 'Unknown name "responseFormat"');
@@ -22,6 +22,8 @@
 //   "429min" "429dia"         QuotaFailure PerMinute (retryDelay "1s") / PerDay (retryDelay "40s")
 //   "503" "500" "504"         "high demand" / INTERNAL / DEADLINE_EXCEEDED
 //   "clave" "verificacion" "region" "402" "404" "rechaza_mime"
+//   "400"                     400 INVALID_ARGUMENT genérico (p. ej. un modelo que no acepta algún campo)
+//   "400_eco"                 lo mismo, pero el mensaje repite la clave (para probar que el registro la sanea)
 //   "max_tokens"              finishReason MAX_TOKENS con el JSON cortado (empieza por la transcripción)
 //   "safety" "bloqueo_prompt" finishReason SAFETY sin texto / promptFeedback.blockReason PROHIBITED_CONTENT
 //   "json_malo"               JSON roto que trae la transcripción · "texto_basura": texto sin JSON
@@ -54,6 +56,8 @@ export type Accion =
   | "region"
   | "402"
   | "404"
+  | "400"
+  | "400_eco"
   | "max_tokens"
   | "safety"
   | "bloqueo_prompt"
@@ -112,7 +116,18 @@ export const MIMES_DOCUMENTADOS = [
   "audio/mulaw",
   "audio/webm",
 ];
-const MODELOS = new Set(["gemini-3.8-flash", "gemini-3.5-flash-lite"]);
+/**
+ * Los modelos que "existen" (los 4 por omisión de servidor/gemini.ts; cualquier otro da 404) con los
+ * thinkingLevel que aceptan según la tabla de aistudio.google.com/docs/thinking (leída el 9 nov 2026): "minimal"
+ * da error en 3.8 Flash; 3.6 Flash y 3.5/3.1 Flash-Lite aceptan los cuatro.
+ */
+const NIVELES: Record<string, string[]> = {
+  "gemini-3.8-flash": ["low", "medium", "high"],
+  "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.5-flash-lite": ["minimal", "low", "medium", "high"],
+  "gemini-3.1-flash-lite": ["minimal", "low", "medium", "high"],
+};
+const MODELOS = new Set(Object.keys(NIVELES));
 const NO_RECETA = CASOS.find((c) => c.id.startsWith("07"))!.esperado;
 
 const errorGoogle = (code: number, status: string, message: string, details?: unknown[]) => ({
@@ -241,8 +256,8 @@ export async function simuladorGemini(op: OpcionesSimulador) {
       return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", "The last content of the user turn must contain non-empty text."));
     if (gc.thinkingConfig?.thinkingBudget !== undefined && gc.thinkingConfig?.thinkingLevel !== undefined)
       return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", "You can only set either thinking_budget or thinking_level, not both."));
-    if (modelo === "gemini-3.8-flash" && p.thinkingLevel === "minimal")
-      return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", "Thinking level minimal is not supported for this model."));
+    if (p.thinkingLevel !== undefined && !NIVELES[modelo]?.includes(String(p.thinkingLevel)))
+      return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", `Thinking level ${p.thinkingLevel} is not supported for this model.`));
     if (!audio) return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", "Request contains an invalid argument."));
     p.mime = audio.mimeType;
     const datos = String(audio.data ?? "");
@@ -335,6 +350,10 @@ export async function simuladorGemini(op: OpcionesSimulador) {
         return enviar(res, p, 402, errorGoogle(402, "RESOURCE_EXHAUSTED", "Your Prepay credit balance is depleted. Please add credits in Google AI Studio."));
       case "404":
         return enviar(res, p, 404, errorGoogle(404, "NOT_FOUND", `models/${modelo} is not found for API version v1beta, or is not supported for generateContent.`));
+      case "400":
+        return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", "Request contains an invalid argument."));
+      case "400_eco":
+        return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", `Request contains an invalid argument (sent by ${op.clave}, key=${op.clave}).`));
       case "rechaza_mime":
         return enviar(res, p, 400, errorGoogle(400, "INVALID_ARGUMENT", `Unsupported MIME type: ${audio.mimeType}`));
       case "max_tokens":

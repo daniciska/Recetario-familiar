@@ -4,6 +4,8 @@
 //   node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/gemini.test.ts
 import { createHash } from "node:crypto";
 import {
+  ESPERAS_VUELTA_MS,
+  MAX_PEDIDOS_CORRIDA,
   MODELOS_POR_OMISION,
   TIMEOUT_PEDIDO_MS,
   URL_GOOGLE,
@@ -19,6 +21,7 @@ import {
   type Reloj,
 } from "../../servidor/gemini.ts";
 import { ESQUEMA_JSON } from "../../servidor/receta-ia/esquema.ts";
+import { esperaOcupadoMs } from "../../lib/dictados/tipos.ts";
 import { INSTRUCCION_SISTEMA, partesGenerateContent } from "../../servidor/receta-ia/instruccion.ts";
 import { simuladorGemini } from "./mock-gemini.mts";
 import { cabecera } from "./audios.ts";
@@ -26,6 +29,7 @@ import { CASOS } from "./casos.ts";
 import { caso, ok, seccion, terminar } from "./arnes.ts";
 
 type O = Record<string, any>;
+const igual = (n: string, a: unknown, b: unknown) => ok(n, JSON.stringify(a) === JSON.stringify(b), { obtenido: a, esperado: b });
 // Clave falsa con forma de clave de Google (para probar que nunca se filtra). No es real; se arma en partes
 // para que `grep -rn` de claves pegadas por error no marque las pruebas.
 const AI = "AI" + "za";
@@ -38,7 +42,12 @@ seccion("configGemini");
   ok("clave en blanco → sin_clave", c({ GEMINI_API_KEY: "   " }).motivo === "sin_clave");
   const g = c({ GEMINI_API_KEY: ` ${CLAVE} ` });
   ok("clave normal → google, clave sin espacios", g.ok && g.via === "google" && g.base === URL_GOOGLE && g.clave === CLAVE, g.via);
-  ok("modelos por omisión: 3.8 Flash y 3.5 Flash-Lite", JSON.stringify(g.modelos) === JSON.stringify(MODELOS_POR_OMISION) && MODELOS_POR_OMISION[0] === "gemini-3.8-flash");
+  ok(
+    "modelos por omisión: 3.8 Flash y de respaldo 3.6 Flash, 3.5 Flash-Lite y 3.1 Flash-Lite (los 4 que caben)",
+    JSON.stringify(g.modelos) === JSON.stringify(MODELOS_POR_OMISION) &&
+      JSON.stringify(MODELOS_POR_OMISION) === JSON.stringify(["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]),
+    MODELOS_POR_OMISION,
+  );
   ok("timeout por omisión 180 s", g.timeoutMs === TIMEOUT_PEDIDO_MS && TIMEOUT_PEDIDO_MS === 180_000);
   const l = c({ GEMINI_API_KEY: "x", GEMINI_API_URL: "http://127.0.0.1:9999/" });
   ok("GEMINI_API_URL http://127.0.0.1:x → local (sin / final)", l.via === "local" && l.base === "http://127.0.0.1:9999", l);
@@ -177,7 +186,14 @@ seccion("reinicioCuota (medianoche del Pacífico + 5 min)");
 // ---------- pedirReceta y probarClave contra el simulador ----------
 const sim = await simuladorGemini({ clave: CLAVE });
 let desfase = 0;
-const reloj: Reloj = { ahora: () => Date.now() + desfase, dormir: async (ms) => void (desfase += ms) };
+const dormidas: number[] = [];
+const reloj: Reloj = {
+  ahora: () => Date.now() + desfase,
+  dormir: async (ms) => {
+    dormidas.push(ms);
+    desfase += ms;
+  },
+};
 const cfg = (extra: Record<string, string> = {}) => configGemini({ GEMINI_API_KEY: CLAVE, GEMINI_API_URL: sim.url, ...extra }) as ConfigLista;
 const audio = { datos: cabecera("webm", 8000, 3), mime: "audio/webm", fecha: "9 de noviembre de 2026" };
 const hasta = () => reloj.ahora() + 12 * 60_000;
@@ -206,19 +222,19 @@ await caso("rescate sólo si Gemini cortó todas las veces", async () => {
   let r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
   ok("dos MAX_TOKENS → rescate con la transcripción", r.tipo === "rescate" && r.transcripcion.length > 100, r);
   sim.reiniciar();
-  sim.guion("gemini-3.8-flash", ["json_malo", "503", "503", "503"]);
-  sim.guion("gemini-3.5-flash-lite", ["503", "503", "503"]);
+  sim.guion("gemini-3.8-flash", ["json_malo"]);
+  sim.guion("*", Array.from({ length: 20 }, () => "503" as const));
   r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
   ok("JSON dañado y después 503 en todo → error ocupado reintentable (no rescate)", r.tipo === "error" && r.codigo === "ocupado" && r.reintentable && !!r.proximo, r);
   sim.reiniciar();
-  sim.guion("gemini-3.8-flash", ["max_tokens", "429dia"]);
-  sim.guion("gemini-3.5-flash-lite", ["429dia"]);
+  sim.guion("gemini-3.8-flash", ["max_tokens"]);
+  sim.guion("*", ["429dia", "429dia", "429dia", "429dia"]);
   r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
-  ok("MAX_TOKENS y después la cuota del día en los dos → error cuota_dia (no rescate)", r.tipo === "error" && r.codigo === "cuota_dia", r);
+  ok("MAX_TOKENS y después la cuota del día en los cuatro → error cuota_dia (no rescate)", r.tipo === "error" && r.codigo === "cuota_dia", r);
   sim.reiniciar();
-  sim.guion("gemini-3.8-flash", ["json_malo", "503", "json_malo"]);
+  sim.guion("*", ["json_malo", "503", "json_malo"]);
   r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
-  ok("JSON dañado, 503 y otra vez JSON dañado → rescate", r.tipo === "rescate", r);
+  ok("JSON dañado, 503 (pasa al siguiente modelo) y otra vez JSON dañado → rescate", r.tipo === "rescate" && sim.generar().map((p) => p.modelo).join() === "gemini-3.8-flash,gemini-3.8-flash,gemini-3.6-flash", [r, sim.generar().map((p) => p.modelo)]);
 });
 await caso("se acabó el presupuesto", async () => {
   sim.reiniciar();
@@ -227,15 +243,123 @@ await caso("se acabó el presupuesto", async () => {
 });
 await caso("Gemini no responde (plazo de la base local)", async () => {
   sim.reiniciar();
-  sim.guion("*", Array.from({ length: 8 }, () => ({ lento: 600 })));
+  sim.guion("*", Array.from({ length: 16 }, () => ({ lento: 600 })));
   desfase = 0;
   const r = await pedirReceta(cfg({ GEMINI_TIMEOUT_MS: "200" }), audio, { hasta: hasta(), reloj });
   ok("todo lento → ocupado reintentable con próximo", r.tipo === "error" && r.codigo === "ocupado" && r.reintentable && !!r.proximo, r);
-  ok("nunca más de 8 pedidos", sim.generar().length <= 8, sim.generar().length);
+  ok(`nunca más de ${MAX_PEDIDOS_CORRIDA} pedidos`, MAX_PEDIDOS_CORRIDA === 12 && sim.generar().length === MAX_PEDIDOS_CORRIDA, sim.generar().length);
 });
 await caso("servidor caído", async () => {
   const r = await pedirReceta(configGemini({ GEMINI_API_KEY: CLAVE, GEMINI_API_URL: "http://127.0.0.1:9" }) as ConfigLista, audio, { hasta: hasta(), reloj });
   ok("sin conexión → ocupado", r.tipo === "error" && r.codigo === "ocupado", r);
+});
+
+seccion("Los cuatro modelos por omisión aceptan el mismo pedido");
+await caso("cada modelo", async () => {
+  ok("son 4 (el máximo de configGemini)", MODELOS_POR_OMISION.length === 4 && cfg().modelos.length === 4, MODELOS_POR_OMISION);
+  for (const m of MODELOS_POR_OMISION) {
+    sim.reiniciar();
+    const r = await pedirReceta(cfg({ GEMINI_MODELOS: m }), audio, { hasta: hasta(), reloj });
+    const p = sim.generar()[0];
+    ok(`${m}: listo al primer pedido`, r.tipo === "ok" && r.modelo === m && r.pedidos === 1, r);
+    ok(`${m}: thinkingLevel low, responseFormat con el esquema exacto, audio en línea y texto al final`, p?.thinkingLevel === "low" && p.forma === "responseFormat" && p.esquemaExacto === true && p.mime === "audio/webm" && p.ultimoTextoNoVacio === true, p);
+    ok(`${m}: sin faltas en el simulador`, sim.faltas.length === 0, sim.faltas);
+  }
+});
+
+seccion("Google saturado (503 «high demand»): rotar de modelo antes de esperar");
+const modelosPedidos = () => sim.generar().map((p) => (p.modelo ?? "").replace("gemini-", ""));
+await caso("503 en los dos primeros y ok en el tercero", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("gemini-3.8-flash", ["503"]);
+  sim.guion("gemini-3.6-flash", ["503"]);
+  const lineas: string[] = [];
+  const r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj, log: (l) => lineas.push(l) });
+  ok("listo con 3.5 Flash-Lite en la primera vuelta (3 pedidos)", r.tipo === "ok" && r.modelo === "gemini-3.5-flash-lite" && r.pedidos === 3, r);
+  igual("en orden, sin repetir el ocupado", modelosPedidos(), ["3.8-flash", "3.6-flash", "3.5-flash-lite"]);
+  ok("sin esperas", dormidas.length === 0, dormidas);
+  ok("el registro dice qué pasó con cada modelo", lineas.some((l) => /resumen \(3 pedidos → ok con gemini-3\.5-flash-lite\): gemini-3\.8-flash: ocupado 503 · gemini-3\.6-flash: ocupado 503 · gemini-3\.5-flash-lite: ok · gemini-3\.1-flash-lite: sin probar/.test(l)), lineas);
+});
+await caso("503 en todos", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const lineas: string[] = [];
+  const t0 = reloj.ahora();
+  const tope = t0 + 12 * 60_000;
+  const r = await pedirReceta(cfg(), audio, { hasta: tope, reloj, log: (l) => lineas.push(l) });
+  ok("error ocupado reintentable", r.tipo === "error" && r.codigo === "ocupado" && r.reintentable, r);
+  ok(`${MAX_PEDIDOS_CORRIDA} pedidos (el tope): 3 vueltas por los 4 modelos`, r.pedidos === MAX_PEDIDOS_CORRIDA && sim.generar().length === MAX_PEDIDOS_CORRIDA, sim.generar().length);
+  igual("cada vuelta, los 4 en orden", modelosPedidos(), Array.from({ length: 3 }, () => ["3.8-flash", "3.6-flash", "3.5-flash-lite", "3.1-flash-lite"]).flat());
+  const cerca = (ms: number, x: number) => ms >= x * 0.8 && ms <= x * 1.2;
+  ok("sólo se espera entre vueltas: ≈ 10 s y ≈ 30 s (±20 %)", dormidas.length === 2 && cerca(dormidas[0], ESPERAS_VUELTA_MS[0]) && cerca(dormidas[1], ESPERAS_VUELTA_MS[1]), dormidas);
+  ok("dentro del presupuesto", reloj.ahora() < tope - 20_000, reloj.ahora() - t0);
+  ok("proximo: 3 min (primera corrida)", r.tipo === "error" && !!r.proximo && Math.abs(r.proximo - (reloj.ahora() + esperaOcupadoMs(1))) < 1_000 && esperaOcupadoMs(1) === 180_000, r);
+  const resumen = lineas.find((l) => l.includes("resumen")) ?? "";
+  ok("el resumen nombra los 4 modelos con sus 3 503", ["3.8-flash", "3.6-flash", "3.5-flash-lite", "3.1-flash-lite"].every((m) => resumen.includes(`gemini-${m}: ocupado 503, ocupado 503, ocupado 503`)) && resumen.includes("12 pedidos → ocupado"), resumen);
+  ok("…y es el detalle del error", r.tipo === "error" && r.detalle === resumen.replace(/^gemini /, ""), r.tipo === "error" ? r.detalle : r);
+  sim.reiniciar();
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj, corrida: 2 });
+  ok("en la segunda corrida, proximo a los 10 min", r2.tipo === "error" && r2.codigo === "ocupado" && !!r2.proximo && Math.abs(r2.proximo - (reloj.ahora() + 10 * 60_000)) < 1_000, r2);
+});
+await caso("503 en todos con poco presupuesto", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const t0 = reloj.ahora();
+  // 45 s: alcanza la espera de ≈ 10 s (máx. 12 s + 20 s de margen), no la de ≈ 30 s (mín. 8 + 24 + 20 = 52 s).
+  const r = await pedirReceta(cfg(), audio, { hasta: t0 + 45_000, reloj });
+  ok("ocupado sin pasarse: 2 vueltas (8 pedidos) y no espera los 30 s que no alcanzan", r.tipo === "error" && r.codigo === "ocupado" && r.pedidos === 8 && dormidas.length === 1, [r.pedidos, dormidas]);
+  ok("…y terminó antes del plazo menos el margen", reloj.ahora() <= t0 + 45_000 - 20_000, reloj.ahora() - t0);
+});
+await caso("429 por minuto", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("*", ["429min", "429min", "429min", "429min"]);
+  const r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("429 por minuto en los 4 → otra vuelta y listo con 3.8 Flash (5 pedidos)", r.tipo === "ok" && r.modelo === "gemini-3.8-flash" && r.pedidos === 5, r);
+  ok("una sola espera, no antes del retryDelay de Google (2 s mínimo, +20 %)", dormidas.length === 1 && dormidas[0] >= 1_900 && dormidas[0] <= 2_400, dormidas);
+});
+await caso("400 en un modelo de respaldo", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("gemini-3.8-flash", ["503"]);
+  sim.guion("gemini-3.6-flash", ["400_eco"]);
+  const lineas: string[] = [];
+  const r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj, log: (l) => lineas.push(l) });
+  ok("sigue con el siguiente y queda listo con 3.5 Flash-Lite", r.tipo === "ok" && r.modelo === "gemini-3.5-flash-lite" && r.pedidos === 3 && dormidas.length === 0, r);
+  ok("el registro dice que 3.6 rechazó el pedido", lineas.some((l) => l.includes("gemini-3.6-flash: peticion 400 → fuera (rechazó el pedido)")), lineas);
+  ok("…sin la clave que venía en el mensaje de Google", lineas.length > 0 && !lineas.some((l) => l.includes(CLAVE) || l.includes(AI)), lineas);
+  sim.reiniciar();
+  sim.guion("gemini-3.6-flash", ["400"]);
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("el que dio 400 no se vuelve a pedir en las otras vueltas", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === MAX_PEDIDOS_CORRIDA, [r2, modelosPedidos()]);
+  sim.reiniciar();
+  sim.guion("*", ["400", "400", "400", "400", "ok"]);
+  const r3 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("400 en los 4 → recién ahí «interno» (4 pedidos)", r3.tipo === "error" && r3.codigo === "interno" && r3.pedidos === 4, r3);
+});
+await caso("404 en uno", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("gemini-3.8-flash", ["404"]);
+  const r = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("se salta y queda listo con 3.6 Flash (2 pedidos, sin esperar)", r.tipo === "ok" && r.modelo === "gemini-3.6-flash" && r.pedidos === 2 && dormidas.length === 0, r);
+  sim.reiniciar();
+  sim.guion("gemini-3.6-flash", ["404"]);
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("con los demás ocupados: el 404 no se vuelve a pedir y los otros 3 usan el tope", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === MAX_PEDIDOS_CORRIDA, [r2, modelosPedidos()]);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", ["404"]);
+  sim.guion("gemini-3.6-flash", ["429dia"]);
+  sim.guion("gemini-3.5-flash-lite", ["400"]);
+  sim.guion("gemini-3.1-flash-lite", ["429dia"]);
+  const r3 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("404, cuota del día y 400: sin modelos → cuota_dia (los sin cuota sirven mañana)", r3.tipo === "error" && r3.codigo === "cuota_dia" && r3.pedidos === 4, r3);
 });
 
 seccion("probarClave");

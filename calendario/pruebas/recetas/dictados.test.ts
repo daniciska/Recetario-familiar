@@ -18,9 +18,10 @@ import {
   manejarProceso,
   type DepsDictados,
 } from "../../servidor/dictados.ts";
-import { reinicioCuota } from "../../servidor/gemini.ts";
+import { MAX_PEDIDOS_CORRIDA, reinicioCuota } from "../../servidor/gemini.ts";
 import { AVISO_RESCATE } from "../../servidor/receta-ia/normalizar-receta.ts";
-import { MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, RECETA_NO_GUARDADA } from "../../lib/dictados/tipos.ts";
+import { MAX_AUDIO_SIN_DURACION, MAX_PENDIENTES, RECETA_NO_GUARDADA, esperaOcupadoMs } from "../../lib/dictados/tipos.ts";
+import { mensajeError } from "../../lib/dictados/textos.ts";
 import { simuladorGemini, type Simulador } from "./mock-gemini.mts";
 import { cabecera, conDuracion, conFfmpeg, conFfmpegDesplazados, grabadoChrome } from "./audios.ts";
 import { CASOS } from "./casos.ts";
@@ -317,40 +318,44 @@ seccion("D9–D13 Cuotas y Gemini ocupado");
 await caso("D9", async () => {
   antes();
   sim.guion("*", ["429min", "429min"]);
-  const t0 = reloj.ahora();
   const r = await dictarYEsperar(token, WEBM);
-  ok("D9 429 por minuto dos veces → listo con 3.8 en 3 pedidos", r.d?.estado === "listo" && r.d.modelo === "gemini-3.8-flash" && sim.generar().length === 3, [r.d?.estado, sim.generar().length]);
-  ok("D9 el reloj avanzó al menos 2 × 2 s", reloj.ahora() - t0 >= 4_000 && dormidas.length === 2 && dormidas.every((ms) => ms >= 2_000 && ms <= 2_400), dormidas);
+  ok("D9 429 por minuto en 3.8 y 3.6 → listo con 3.5 Flash-Lite en 3 pedidos (el cupo por minuto es de cada modelo)", r.d?.estado === "listo" && r.d.modelo === "gemini-3.5-flash-lite" && sim.generar().length === 3, [r.d?.estado, r.d?.modelo, sim.generar().length]);
+  ok("D9 … sin esperar", dormidas.length === 0, dormidas);
+  antes();
+  sim.guion("*", ["429min", "429min", "429min", "429min"]);
+  const t0 = reloj.ahora();
+  const r2 = await dictarYEsperar(token, cabecera("webm", 3000, 30));
+  ok("D9 429 por minuto en los 4 → otra vuelta y listo con 3.8 en 5 pedidos", r2.d?.estado === "listo" && r2.d.modelo === "gemini-3.8-flash" && sim.generar().length === 5, [r2.d?.estado, r2.d?.modelo, sim.generar().length]);
+  ok("D9 … después de lo que dijo Google (2 s mínimo, +20 %), una sola espera", reloj.ahora() - t0 >= 2_000 && dormidas.length === 1 && dormidas[0] >= 1_900 && dormidas[0] <= 2_400, dormidas);
   await limpiar(token);
 });
 await caso("D10", async () => {
   antes();
   sim.guion("gemini-3.8-flash", ["429dia"]);
   const r = await dictarYEsperar(token, WEBM);
-  ok("D10 cuota del día en 3.8 → listo con Flash-Lite", r.d?.estado === "listo" && r.d.modelo === "gemini-3.5-flash-lite", r.d?.modelo);
+  ok("D10 cuota del día en 3.8 → listo con 3.6 Flash", r.d?.estado === "listo" && r.d.modelo === "gemini-3.6-flash", r.d?.modelo);
   ok("D10 sin esperar y en 2 pedidos", dormidas.length === 0 && sim.generar().length === 2, [dormidas, sim.generar().length]);
   await limpiar(token);
 });
 await caso("D11", async () => {
   antes();
-  sim.guion("gemini-3.8-flash", ["429dia"]);
-  sim.guion("gemini-3.5-flash-lite", ["429dia"]);
+  sim.guion("*", ["429dia", "429dia", "429dia", "429dia"]);
   const r = await dictarYEsperar(token, WEBM);
   const e = r.d?.error;
-  ok("D11 cuota del día en los dos → error cuota_dia reintentable", r.d?.estado === "error" && e?.codigo === "cuota_dia" && e.reintentable === true, e);
+  ok("D11 cuota del día en los cuatro → error cuota_dia reintentable", r.d?.estado === "error" && e?.codigo === "cuota_dia" && e.reintentable === true, e);
   ok("D11 proximo = medianoche del Pacífico + 5 min", e?.proximo === reinicioCuota(reloj.ahora()), [e?.proximo, reinicioCuota(reloj.ahora())]);
-  ok("D11 en 2 pedidos, sin esperar", sim.generar().length === 2 && dormidas.length === 0);
+  ok("D11 en 4 pedidos, sin esperar", sim.generar().length === 4 && dormidas.length === 0);
   await limpiar(token);
 });
 await caso("D12", async () => {
   antes();
-  sim.guion("*", ["503", "503", "503", "503", "503", "503"]);
+  sim.guion("*", Array.from({ length: 20 }, () => "503" as const));
   const r = await dictarYEsperar(token, WEBM);
   const e = r.d?.error;
-  ok("D12 503 en todo → 6 pedidos", sim.generar().length === 6, sim.generar().length);
+  ok("D12 503 en todo → 12 pedidos (3 vueltas por los 4 modelos)", sim.generar().length === 12 && MAX_PEDIDOS_CORRIDA === 12, sim.generar().length);
   const cerca = (ms: number, x: number) => ms >= x * 0.8 && ms <= x * 1.2;
-  ok("D12 esperas de ≈ 10 s y ≈ 30 s por modelo (±20 %)", dormidas.length === 4 && cerca(dormidas[0], 10_000) && cerca(dormidas[1], 30_000) && cerca(dormidas[2], 10_000) && cerca(dormidas[3], 30_000), dormidas);
-  ok("D12 error ocupado reintentable con proximo ≈ +10 min", e?.codigo === "ocupado" && e.reintentable && Math.abs(e.proximo - (reloj.ahora() + 600_000)) < 5_000, e);
+  ok("D12 esperas de ≈ 10 s y ≈ 30 s entre vueltas (±20 %)", dormidas.length === 2 && cerca(dormidas[0], 10_000) && cerca(dormidas[1], 30_000), dormidas);
+  ok("D12 error ocupado reintentable con proximo ≈ +3 min (primera corrida)", e?.codigo === "ocupado" && e.reintentable && Math.abs(e.proximo - (reloj.ahora() + 180_000)) < 5_000, e);
   await limpiar(token);
 });
 await caso("D13", async () => {
@@ -678,10 +683,10 @@ await caso("D34", async () => {
 seccion("D35 Plazo por pedido y tope de pedidos");
 await caso("D35", async () => {
   antes(sim, { GEMINI_TIMEOUT_MS: "300" });
-  sim.guion("*", Array.from({ length: 10 }, () => ({ lento: 1000 })));
+  sim.guion("*", Array.from({ length: 14 }, () => ({ lento: 1000 })));
   const r = await dictarYEsperar(token, WEBM);
   ok("D35 Gemini demora más que el plazo → ocupado", r.d?.error?.codigo === "ocupado" && r.d.error.reintentable, r.d?.error);
-  ok("D35 nunca más de 8 pedidos por corrida", sim.generar().length <= 8, sim.generar().length);
+  ok("D35 nunca más de 12 pedidos por corrida", sim.generar().length === 12, sim.generar().length);
   await limpiar(token);
 });
 
@@ -745,8 +750,8 @@ await caso("D38", async () => {
   const d2 = await detalle(token, r.id);
   ok("D38 otra versión que sale entera → sin rescate y con ingredientes", d2?.estado === "listo" && !("rescate" in d2) && d2.borrador.ingredientes.length > 0, d2);
   antes();
-  sim.guion("gemini-3.8-flash", ["json_malo", "503", "503", "503"]);
-  sim.guion("gemini-3.5-flash-lite", ["503", "503", "503"]);
+  sim.guion("gemini-3.8-flash", ["json_malo"]);
+  sim.guion("*", Array.from({ length: 20 }, () => "503" as const));
   const r2 = await dictarYEsperar(token, cabecera("webm", 3000, 13));
   ok(
     "D38 JSON dañado y después 503 → error ocupado reintentable, no un borrador vacío",
@@ -754,8 +759,8 @@ await caso("D38", async () => {
     r2.d,
   );
   antes();
-  sim.guion("gemini-3.8-flash", ["json_malo", "429dia"]);
-  sim.guion("gemini-3.5-flash-lite", ["429dia"]);
+  sim.guion("gemini-3.8-flash", ["json_malo"]);
+  sim.guion("*", ["429dia", "429dia", "429dia", "429dia"]);
   const r3 = await dictarYEsperar(token, cabecera("webm", 3000, 14));
   ok("D38 JSON dañado y después la cuota del día → error cuota_dia", r3.d?.estado === "error" && r3.d.error?.codigo === "cuota_dia" && !r3.d.borrador, r3.d);
   await limpiar(token);
@@ -767,7 +772,7 @@ await caso("D39", async () => {
   const r0 = await dictarYEsperar(token, WEBM);
   const ids = (d: O | undefined) => (d?.borrador?.ingredientes ?? []).map((i: O) => i.id).join();
   const antesIds = ids(r0.d);
-  sim.guion("*", [{ lento: 300, luego: "429dia" }, "429dia"]);
+  sim.guion("*", [{ lento: 300, luego: "429dia" }, "429dia", "429dia", "429dia"]);
   const p = await pedir("POST", `/api/dictados/${r0.id}/procesar`, { token, cuerpo: { otraVez: true } });
   ok("D39 otra versión → 202 sin el borrador en la respuesta", p.status === 202 && !p.datos.dictado.borrador, p.datos);
   await new Promise((x) => setTimeout(x, 80));
@@ -942,6 +947,77 @@ await caso("D44", async () => {
   for (const x of [id, b.id]) await pedir("DELETE", `/api/dictados/${x}`, { token });
   ok("D44 sin ?borrador=1 → borra el audio y el texto", !(await existe(claveAudio("fam1", id))) && !(await existe(claveTexto("fam1", id))) && !(await existe(claveAudio("fam1", b.id))));
   await ponerRecetas("fam1", []);
+  await limpiar(token);
+});
+
+seccion("D45–D48 Google saturado (503 «high demand»): rotar de modelo antes de esperar");
+const modelosPedidos = () => sim.generar().map((p) => p.modelo);
+await caso("D45", async () => {
+  antes();
+  sim.guion("gemini-3.8-flash", ["503"]);
+  sim.guion("gemini-3.6-flash", ["503"]);
+  const n0 = registros.length;
+  const r = await dictarYEsperar(token, WEBM);
+  ok("D45 503 en 3.8 y 3.6 → listo con 3.5 Flash-Lite en la primera corrida", r.d?.estado === "listo" && r.d.modelo === "gemini-3.5-flash-lite" && r.d.intentos === 1, [r.d?.estado, r.d?.modelo, r.d?.intentos]);
+  ok("D45 … en 3 pedidos, uno por modelo y en orden", JSON.stringify(modelosPedidos()) === JSON.stringify(["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]), modelosPedidos());
+  ok("D45 … sin esperar", dormidas.length === 0, dormidas);
+  const nuevos = registros.slice(n0);
+  ok("D45 el registro dice qué pasó con cada modelo", nuevos.some((l) => l.startsWith(`dictado ${r.id}: gemini resumen (3 pedidos → ok con gemini-3.5-flash-lite): gemini-3.8-flash: ocupado 503 · gemini-3.6-flash: ocupado 503 · gemini-3.5-flash-lite: ok`)), nuevos);
+  await limpiar(token);
+});
+await caso("D46", async () => {
+  antes();
+  sim.guion("*", Array.from({ length: 40 }, () => "503" as const));
+  const n0 = registros.length;
+  const t0 = reloj.ahora();
+  const s = await subir(token, WEBM);
+  await esperar();
+  let d = await detalle(token, s.id);
+  ok("D46 503 en los 4 modelos → error ocupado reintentable", d?.estado === "error" && d.error?.codigo === "ocupado" && d.error.reintentable === true, d?.error);
+  ok("D46 … sin pasar del tope de pedidos ni del presupuesto (12 min)", sim.generar().length === MAX_PEDIDOS_CORRIDA && reloj.ahora() - t0 < 12 * 60_000 && dormidas.length === 2, [sim.generar().length, reloj.ahora() - t0, dormidas]);
+  ok("D46 la primera corrida se reintenta sola a los 3 min", Math.abs(d!.error.proximo - (reloj.ahora() + esperaOcupadoMs(1))) < 5_000 && esperaOcupadoMs(1) === 3 * 60_000, d?.error);
+  const linea = registros.slice(n0).find((l) => l.includes("gemini resumen")) ?? "";
+  ok("D46 el registro nombra los 4 modelos con sus 503", ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"].every((m) => linea.includes(`${m}: ocupado 503, ocupado 503, ocupado 503`)) && linea.includes("12 pedidos → ocupado"), linea);
+  ok("D46 la familia lee que Google está saturado, que no es el panel y que se reintenta solo", /Google\) está saturado.*no es un error del panel.*se vuelve a intentar solo cerca de las \d{2}:\d{2}/.test(mensajeError(d!)), mensajeError(d!));
+  // La app lo vuelve a pedir (como «Intentar de nuevo» o el reintento solo): la segunda corrida espera más.
+  dormidas.length = 0;
+  sim.reiniciar();
+  sim.guion("*", Array.from({ length: 40 }, () => "503" as const));
+  let p = await pedir("POST", `/api/dictados/${s.id}/procesar`, { token, cuerpo: {} });
+  await esperar();
+  d = await detalle(token, s.id);
+  ok("D46 segunda corrida también ocupada → proximo a los 10 min", p.status === 202 && d?.error?.codigo === "ocupado" && d.intentos === 2 && Math.abs(d.error.proximo - (reloj.ahora() + 10 * 60_000)) < 5_000, d?.error);
+  // Google se recupera: la tercera corrida sale con el primer modelo.
+  sim.reiniciar();
+  p = await pedir("POST", `/api/dictados/${s.id}/procesar`, { token, cuerpo: {} });
+  await esperar();
+  d = await detalle(token, s.id);
+  ok("D46 cuando Google se recupera → listo con 3.8 Flash en 1 pedido", d?.estado === "listo" && d.modelo === "gemini-3.8-flash" && d.intentos === 3 && sim.generar().length === 1, [d?.estado, d?.modelo, d?.intentos]);
+  await limpiar(token);
+});
+await caso("D47", async () => {
+  antes();
+  sim.guion("gemini-3.8-flash", ["503"]);
+  sim.guion("gemini-3.6-flash", ["400"]);
+  const n0 = registros.length;
+  const r = await dictarYEsperar(token, WEBM);
+  ok("D47 400 en un modelo de respaldo → sigue con el siguiente y queda listo (3.5 Flash-Lite)", r.d?.estado === "listo" && r.d.modelo === "gemini-3.5-flash-lite" && sim.generar().length === 3 && dormidas.length === 0, [r.d?.estado, r.d?.error, modelosPedidos()]);
+  ok("D47 el registro dice que 3.6 rechazó el pedido", registros.slice(n0).some((l) => l.includes("gemini-3.6-flash: peticion 400 → fuera (rechazó el pedido)")), registros.slice(n0));
+  antes();
+  sim.guion("*", ["400", "400", "400", "400"]);
+  const r2 = await dictarYEsperar(token, cabecera("webm", 3000, 31));
+  ok("D47 400 en los cuatro → recién ahí error interno (4 pedidos)", r2.d?.estado === "error" && r2.d.error?.codigo === "interno" && sim.generar().length === 4, [r2.d?.error, sim.generar().length]);
+  await limpiar(token);
+});
+await caso("D48", async () => {
+  antes();
+  sim.guion("gemini-3.8-flash", ["404"]);
+  let r = await dictarYEsperar(token, WEBM);
+  ok("D48 404 en 3.8 → se salta y queda listo con 3.6 Flash en 2 pedidos", r.d?.estado === "listo" && r.d.modelo === "gemini-3.6-flash" && sim.generar().length === 2 && dormidas.length === 0, [r.d?.modelo, modelosPedidos()]);
+  antes(sim, { GEMINI_MODELOS: "gemini-3.8-flash,gemini-9-nada,gemini-3.5-flash-lite" });
+  sim.guion("gemini-3.8-flash", ["503"]);
+  r = await dictarYEsperar(token, cabecera("webm", 3000, 32));
+  ok("D48 503, un modelo que no existe y ok → listo con el tercero, sin esperar", r.d?.estado === "listo" && r.d.modelo === "gemini-3.5-flash-lite" && JSON.stringify(modelosPedidos()) === JSON.stringify(["gemini-3.8-flash", "gemini-9-nada", "gemini-3.5-flash-lite"]) && dormidas.length === 0, [r.d?.modelo, modelosPedidos(), dormidas]);
   await limpiar(token);
 });
 

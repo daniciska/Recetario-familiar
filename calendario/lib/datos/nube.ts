@@ -96,6 +96,71 @@ export async function api<T = Record<string, unknown>>(
   return { status: r.status, datos };
 }
 
+// ---------- Equipo sin familia, recién unido y el ícono del iPhone ----------
+
+const CLAVE_UNIDO = "calendario-familiar:nube:recien";
+const CLAVE_SIN_NUBE = "calendario-familiar:equipo:solo-aqui";
+
+/** Antes de recargar tras unirse ("unido") o crear la familia ("creada"): el panel lo celebra al abrir. */
+export function anotarRecienUnido(como: "unido" | "creada") {
+  try {
+    localStorage.setItem(CLAVE_UNIDO, como);
+  } catch {
+    /* sin almacenamiento: no hay mensaje, nada más */
+  }
+}
+export function leerRecienUnido(): "unido" | "creada" | null {
+  try {
+    const v = localStorage.getItem(CLAVE_UNIDO);
+    return v === "unido" || v === "creada" ? v : null;
+  } catch {
+    return null;
+  }
+}
+export function olvidarRecienUnido() {
+  try {
+    localStorage.removeItem(CLAVE_UNIDO);
+  } catch {
+    /* nada */
+  }
+}
+
+/** «Usar sólo en este equipo»: no mostrar el aviso de equipo sin familia (sólo en este equipo). */
+export function avisoSinFamiliaOculto(): boolean {
+  try {
+    return localStorage.getItem(CLAVE_SIN_NUBE) === "1";
+  } catch {
+    return false;
+  }
+}
+export function ocultarAvisoSinFamilia() {
+  try {
+    localStorage.setItem(CLAVE_SIN_NUBE, "1");
+  } catch {
+    /* sin almacenamiento: queda oculto hasta recargar */
+  }
+}
+
+/** iPhone o iPad (el iPad se presenta como Mac con pantalla táctil). */
+export function esIPhoneOIPad(): boolean {
+  const ua = navigator.userAgent;
+  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * Abierto desde el ícono de la pantalla de inicio del iPhone o iPad. Ahí la app guarda sus datos aparte
+ * de Safari: lo que se hizo en Safari (unirse con el QR de la Cámara) no está en el ícono.
+ */
+export function esIconoDeInicioIOS(): boolean {
+  try {
+    if (!esIPhoneOIPad()) return false;
+    if ((navigator as Navigator & { standalone?: boolean }).standalone === true) return true;
+    return matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches;
+  } catch {
+    return false;
+  }
+}
+
 /** Nombre para reconocer este equipo en la lista ("iPad", "iPhone", "Fire"…). */
 export function nombreDeEsteEquipo(): string {
   const ua = navigator.userAgent;

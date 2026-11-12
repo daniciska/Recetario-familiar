@@ -17,7 +17,7 @@ import { crearMotor } from "../../lib/dictados/motor.ts";
 import { otraVersionDaLoMismo, otraVersionFallo, revisarSinRed, textoOtraVersionFallo } from "../../lib/dictados/textos.ts";
 import { RepositorioNube } from "../../lib/datos/repositorioNube.ts";
 import type { Receta } from "../../lib/datos/tipos.ts";
-import { ID_DICTADO, MAX_PENDIENTES, MAX_SEGUNDOS, type CodigoError, type DictadoPublico } from "../../lib/dictados/tipos.ts";
+import { ESPERAS_OCUPADO_MIN, ID_DICTADO, MAX_PENDIENTES, MAX_SEGUNDOS, esperaOcupadoMs, type CodigoError, type DictadoPublico } from "../../lib/dictados/tipos.ts";
 import { simuladorGemini } from "./mock-gemini.mts";
 import { cabecera, grabadoChrome } from "./audios.ts";
 import { instalarIDBFalso } from "./idb-falso.ts";
@@ -453,8 +453,8 @@ await caso("otra versión fallida", async () => {
   const rescate = await cliente.leerDictado(p.id);
   ok("borrador de rescate, listo y sin aviso de otra versión", rescate?.estado === "listo" && rescate.rescate === true && !!rescate.borrador && !otraVersionFallo(rescate) && textoOtraVersionFallo(rescate) === null, rescate);
 
-  // La cuota del día se acaba en los dos modelos: vuelve el borrador de antes, con el error (servidor/dictados.ts, conError).
-  sim.guion("*", ["429dia", "429dia"]);
+  // La cuota del día se acaba en los cuatro modelos: vuelve el borrador de antes, con el error (servidor/dictados.ts, conError).
+  sim.guion("*", ["429dia", "429dia", "429dia", "429dia"]);
   const enCola = await cliente.procesarDictado(p.id, true);
   ok("pedir otra versión → en cola (202)", enCola?.estado === "subido" && !enCola.error, enCola);
   await esperar();
@@ -678,6 +678,15 @@ await caso("reglas", () => {
   ok("sin_clave: sólo cuando la lista dice gemini ok", !debeReintentar(err("sin_clave"), ahora, "sin_clave") && !debeReintentar(err("solo_ai_gateway"), ahora, null) && debeReintentar(err("solo_ai_gateway"), ahora, "ok"));
   ok("cuota_dia: sólo pasada la hora", !debeReintentar(err("cuota_dia", {}, ahora + 1000), ahora, "ok") && debeReintentar(err("cuota_dia", { intentos: 50 }, ahora - 1), ahora, "ok"));
   ok("ocupado: pasada la hora y hasta el tope", debeReintentar(err("ocupado", { intentos: 2 }, ahora), ahora, "ok") && !debeReintentar(err("ocupado", { intentos: MAX_INTENTOS_SOLOS.ocupado }, ahora - 1), ahora, "ok"));
+  // «ocupado» (Google saturado): la primera corrida vuelve a los 3 min, después cada vez más espaciado (tipos.ts).
+  igual("esperaOcupadoMs: 3, 10, 20 y después 30 min", [1, 2, 3, 4, 5, 8, 20].map((n) => esperaOcupadoMs(n) / 60_000), [3, 10, 20, 30, 30, 30, 30]);
+  igual("esperaOcupadoMs con algo raro (0, NaN) → como la primera", [esperaOcupadoMs(0), esperaOcupadoMs(Number.NaN), esperaOcupadoMs(-2)], [180_000, 180_000, 180_000]);
+  const cubre = Array.from({ length: MAX_INTENTOS_SOLOS.ocupado - 1 }, (_, i) => esperaOcupadoMs(i + 1)).reduce((a, b) => a + b, 0);
+  ok("las 8 corridas solas cubren entre 2 y 3 horas de Google saturado", ESPERAS_OCUPADO_MIN[0] === 3 && cubre >= 2 * 3600_000 && cubre <= 3 * 3600_000, cubre / 60_000);
+  ok("ocupado de la primera corrida: no antes de los 3 min, sí después", (() => {
+    const p = ahora + esperaOcupadoMs(1);
+    return !debeReintentar(err("ocupado", { intentos: 1 }, p), p - 1, "ok") && debeReintentar(err("ocupado", { intentos: 1 }, p), p, "ok");
+  })());
   ok("incompleta / interno sin hora → no (los pide la familia)", !debeReintentar(err("incompleta"), ahora, "ok") && !debeReintentar(err("interno"), ahora, "ok"));
   ok("los que no son reintentables nunca, aunque traigan hora", (["clave_invalida", "formato", "bloqueado", "audio_perdido", "verificacion"] as CodigoError[]).every((c) => !debeReintentar(err(c, {}, ahora - 1), ahora, "ok")));
   const recetas = new Set([`rec_${"a".repeat(24)}`]);
