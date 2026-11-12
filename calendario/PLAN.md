@@ -204,7 +204,8 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
 - En vez de la Edge Function `receta-audio` del plan original: una **Background Function** de Netlify
   (`dictados-proceso-background.mts`, hasta 15 min) le manda el audio a Gemini por REST con el esquema JSON (nombre,
   porciones, tiempo, ingredientes con `comoLoDijo`, `estimado` y nota, pasos, dudas). Modelos en `GEMINI_MODELOS`
-  (por omisión `gemini-3.8-flash` y `gemini-3.5-flash-lite`), con reintentos ante 429/5xx, cambio de modelo si se
+  (por omisión 4: `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite` y `gemini-3.1-flash-lite`; ante un 503
+  «high demand» o un 429 se pasa al siguiente al tiro, y la app reintenta sola a los 3, 10, 20 y luego cada 30 min), con reintentos ante 429/5xx, cambio de modelo si se
   acaba la cuota del día y espera hasta la medianoche del Pacífico si se acaban todos. Un error de Gemini no borra el
   audio: espera en la nube y la app lo vuelve a pedir sola cuando corresponde.
 - Las cantidades vagas se convierten en cantidades medibles marcadas como **estimadas** («≈» en la receta y en la vista

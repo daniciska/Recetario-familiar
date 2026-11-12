@@ -18,7 +18,10 @@ import {
 } from "@/lib/datos/nube";
 import { esFamiliaDeEjemplo } from "@/lib/ejemplo";
 import { DONDE_INVITAR, UnirseConCodigoModal, textoIconoIOS } from "./Nube";
-import { Boton, cx } from "./ui";
+import { cx } from "./ui";
+
+const claseBoton =
+  "inline-flex items-center justify-center rounded-2xl px-3 py-1 text-center text-base font-bold leading-tight transition active:scale-[0.97]";
 
 /** Franja de "este equipo no está unido a la familia". En la pared, lo más baja posible. */
 export function AvisoSinFamilia({ compacto }: { compacto: boolean }) {
@@ -39,26 +42,28 @@ export function AvisoSinFamilia({ compacto }: { compacto: boolean }) {
       )}
     >
       <div className="min-w-0 flex-[1_1_20rem] space-y-1">
-        <p className={cx("font-extrabold", compacto ? "text-base" : "text-lg")}>
+        <p className={cx("font-extrabold", compacto ? "text-base" : "text-base md:text-lg")}>
           {ejemplo
             ? "👋 Este equipo todavía no está unido a tu familia: lo que ves es una familia de ejemplo (inventada)."
             : "☁️ Este equipo no está unido a la familia en la nube: los cambios quedan sólo aquí."}
         </p>
         {icono && <p className="text-base">{textoIconoIOS()}</p>}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <Boton variante="primario" onClick={() => setUniendo(true)} className={cx(compacto && "min-h-11 text-base")}>
+      {/* En el teléfono, los dos botones lado a lado (el texto baja a dos líneas) para que la franja sea más baja. */}
+      <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+        <button type="button" onClick={() => setUniendo(true)} className={cx(claseBoton, compacto ? "min-h-11" : "min-h-12", "bg-acento text-acento-tinta shadow-sm")}>
           Unirme con un código
-        </Boton>
-        <Boton
+        </button>
+        <button
+          type="button"
           onClick={() => {
             ocultarAvisoSinFamilia();
             setOculto(true);
           }}
-          className={cx("bg-superficie", compacto && "min-h-11 text-base")}
+          className={cx(claseBoton, compacto ? "min-h-11" : "min-h-12", "bg-superficie text-tinta")}
         >
           Usar sólo en este equipo
-        </Boton>
+        </button>
       </div>
       {uniendo && <UnirseConCodigoModal alCerrar={() => setUniendo(false)} />}
     </section>

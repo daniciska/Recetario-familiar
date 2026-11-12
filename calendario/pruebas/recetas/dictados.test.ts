@@ -1006,7 +1006,7 @@ await caso("D47", async () => {
   antes();
   sim.guion("*", ["400", "400", "400", "400"]);
   const r2 = await dictarYEsperar(token, cabecera("webm", 3000, 31));
-  ok("D47 400 en los cuatro → recién ahí error interno (4 pedidos)", r2.d?.estado === "error" && r2.d.error?.codigo === "interno" && sim.generar().length === 4, [r2.d?.error, sim.generar().length]);
+  ok("D47 el mismo 400 en dos modelos seguidos (pedido mal armado) → error interno sin probar los demás (2 pedidos)", r2.d?.estado === "error" && r2.d.error?.codigo === "interno" && sim.generar().length === 2, [r2.d?.error, sim.generar().length]);
   await limpiar(token);
 });
 await caso("D48", async () => {

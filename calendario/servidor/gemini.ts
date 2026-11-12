@@ -34,6 +34,9 @@ export const TIMEOUT_PEDIDO_MS = 180_000;
  * el plan gratis tiene ≈ 20 pedidos al día por modelo.
  */
 export const MAX_PEDIDOS_CORRIDA = 12;
+/** Pedidos por modelo y por corrida cuando Google está ocupado (503) o pide esperar (429): con menos modelos vivos
+ *  no se insiste más en el mismo (con los 4 vivos, 4 × 3 = el tope de 12). */
+export const MAX_PASAJEROS_POR_MODELO = 3;
 /** Espera antes de otra vuelta si algún modelo estaba ocupado: ≈ 10 s después de la 1.ª y ≈ 30 s después de las demás (± 20 %). */
 export const ESPERAS_VUELTA_MS = [10_000, 30_000] as const;
 const MAX_TOKENS = 16_384; // incluye el pensamiento ("max_output_tokens … including thought tokens")
@@ -872,7 +875,11 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
   let incompleta = false;
   let rescate: { transcripcion: string; modelo: string } | undefined;
   let detalle = "";
-  const modelos = new Map(cfg.modelos.map((m) => [m, { fuera: undefined as Fuera | undefined, noAntesDe: 0, pasos: [] as string[] }]));
+  const modelos = new Map(cfg.modelos.map((m) => [m, { fuera: undefined as Fuera | undefined, noAntesDe: 0, pasajeros: 0, pasos: [] as string[] }]));
+  const vivo = (m: { fuera?: Fuera; pasajeros: number }) => !m.fuera && m.pasajeros < MAX_PASAJEROS_POR_MODELO;
+  // Un 400 genérico con el mismo mensaje en dos modelos es un pedido mal armado (audio dañado, error del panel):
+  // no se recorren los demás.
+  let ultimoRechazo: string | undefined;
   const resumen = () =>
     [...modelos].map(([m, x]) => `${m}: ${x.pasos.join(", ") || "sin probar"}${x.fuera ? ` → fuera (${FUERA[x.fuera]})` : ""}`).join(" · ");
   /** Lo que se devuelve, con una línea de registro que dice qué pasó con cada modelo (si no salió al primer pedido). */
@@ -889,7 +896,7 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
     todo: for (let vuelta = 1; ; vuelta++) {
       let algunoOcupado = false;
       for (const [modelo, m] of modelos) {
-        if (m.fuera) continue;
+        if (!vivo(m)) continue;
         // Mismo modelo otra vez sólo por el pedido (otra forma de salida, el MIME alterno, más tokens, JSON
         // dañado); por Google ocupado, se pasa al siguiente.
         for (;;) {
@@ -944,9 +951,11 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
             case "ocupado":
               pasajero = true;
               algunoOcupado = true;
+              m.pasajeros++;
               break;
             case "cuota_minuto":
               pasajero = true;
+              m.pasajeros++;
               // Nunca antes de lo que dijo Google (y un poco más, para no llegar justo).
               m.noAntesDe = reloj.ahora() + Math.round(acotar(f.esperaMs ?? 20_000, 2_000, 60_000) * (1 + Math.random() * 0.2));
               break;
@@ -957,6 +966,8 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
               m.fuera = "no_existe";
               break;
             case "peticion":
+              if (ultimoRechazo !== undefined && ultimoRechazo === f.detalle) return error("interno");
+              ultimoRechazo = f.detalle;
               m.fuera = "rechazo";
               break;
             case "bloqueo":
@@ -975,7 +986,7 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
         }
       }
       // Se probaron todos los que quedan: otra vuelta, si hay a quién y alcanza.
-      const quedan = [...modelos.values()].filter((m) => !m.fuera);
+      const quedan = [...modelos.values()].filter(vivo);
       if (!quedan.length) break;
       const ahora = reloj.ahora();
       const espera = Math.max(

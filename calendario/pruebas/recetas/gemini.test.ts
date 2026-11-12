@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import {
   ESPERAS_VUELTA_MS,
   MAX_PEDIDOS_CORRIDA,
+  MAX_PASAJEROS_POR_MODELO,
   MODELOS_POR_OMISION,
   TIMEOUT_PEDIDO_MS,
   URL_GOOGLE,
@@ -336,11 +337,16 @@ await caso("400 en un modelo de respaldo", async () => {
   sim.guion("gemini-3.6-flash", ["400"]);
   sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
   const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
-  ok("el que dio 400 no se vuelve a pedir en las otras vueltas", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === MAX_PEDIDOS_CORRIDA, [r2, modelosPedidos()]);
+  ok("el que dio 400 no se vuelve a pedir en las otras vueltas (los otros 3, hasta 3 veces cada uno: 1 + 9 pedidos)", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === 1 + 3 * MAX_PASAJEROS_POR_MODELO, [r2, modelosPedidos()]);
   sim.reiniciar();
   sim.guion("*", ["400", "400", "400", "400", "ok"]);
   const r3 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
-  ok("400 en los 4 → recién ahí «interno» (4 pedidos)", r3.tipo === "error" && r3.codigo === "interno" && r3.pedidos === 4, r3);
+  ok("el mismo 400 en dos modelos seguidos es un pedido mal armado → «interno» sin probar los demás (2 pedidos)", r3.tipo === "error" && r3.codigo === "interno" && r3.pedidos === 2, r3);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", ["400"]);
+  sim.guion("gemini-3.6-flash", ["400_eco"]);
+  const r4 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("400 distintos en dos modelos → sigue con el siguiente y queda listo con 3.5 Flash-Lite", r4.tipo === "ok" && r4.modelo === "gemini-3.5-flash-lite" && r4.pedidos === 3, r4);
 });
 await caso("404 en uno", async () => {
   sim.reiniciar();
@@ -352,7 +358,7 @@ await caso("404 en uno", async () => {
   sim.guion("gemini-3.6-flash", ["404"]);
   sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
   const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
-  ok("con los demás ocupados: el 404 no se vuelve a pedir y los otros 3 usan el tope", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === MAX_PEDIDOS_CORRIDA, [r2, modelosPedidos()]);
+  ok("con los demás ocupados: el 404 no se vuelve a pedir y los otros 3 van hasta 3 veces cada uno (1 + 9)", r2.tipo === "error" && r2.codigo === "ocupado" && modelosPedidos().filter((m) => m === "3.6-flash").length === 1 && r2.pedidos === 1 + 3 * MAX_PASAJEROS_POR_MODELO, [r2, modelosPedidos()]);
   sim.reiniciar();
   sim.guion("gemini-3.8-flash", ["404"]);
   sim.guion("gemini-3.6-flash", ["429dia"]);
@@ -360,6 +366,21 @@ await caso("404 en uno", async () => {
   sim.guion("gemini-3.1-flash-lite", ["429dia"]);
   const r3 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
   ok("404, cuota del día y 400: sin modelos → cuota_dia (los sin cuota sirven mañana)", r3.tipo === "error" && r3.codigo === "cuota_dia" && r3.pedidos === 4, r3);
+});
+
+await caso("un solo modelo vivo y ocupado", async () => {
+  sim.reiniciar();
+  dormidas.length = 0;
+  sim.guion("*", Array.from({ length: 30 }, () => "503" as const));
+  const r = await pedirReceta(cfg({ GEMINI_MODELOS: "gemini-3.8-flash" }), audio, { hasta: hasta(), reloj });
+  ok("no se insiste más en el mismo: 3 pedidos y «ocupado» (antes eran 12)", r.tipo === "error" && r.codigo === "ocupado" && r.pedidos === MAX_PASAJEROS_POR_MODELO, r);
+  sim.reiniciar();
+  sim.guion("gemini-3.8-flash", Array.from({ length: 30 }, () => "503" as const));
+  sim.guion("gemini-3.6-flash", ["429dia"]);
+  sim.guion("gemini-3.5-flash-lite", ["404"]);
+  sim.guion("gemini-3.1-flash-lite", ["404"]);
+  const r2 = await pedirReceta(cfg(), audio, { hasta: hasta(), reloj });
+  ok("3.8 ocupado y los demás fuera: 3.8 hasta 3 veces (6 pedidos) → «ocupado»", r2.tipo === "error" && r2.codigo === "ocupado" && r2.pedidos === 3 + MAX_PASAJEROS_POR_MODELO, r2);
 });
 
 seccion("probarClave");

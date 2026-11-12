@@ -32,7 +32,7 @@ function mensajeDe(e: unknown, def: string) {
 }
 
 /** Dónde se pide un código nuevo (en un equipo que ya está unido). */
-export const DONDE_INVITAR = "⚙️ Familia → Compartir entre equipos → Invitar otro equipo";
+export const DONDE_INVITAR = "⚙️\u00a0Familia → Compartir entre equipos → Invitar otro equipo";
 
 /**
  * Para la app abierta desde el ícono de la pantalla de inicio del iPhone o iPad (esIconoDeInicioIOS):
@@ -466,7 +466,7 @@ function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void
           <div className="space-y-3 rounded-2xl bg-acento-suave px-4 py-3 text-left text-base">
             <p>
               <strong>¿La quieren como app en el iPhone?</strong> Primero abran la dirección en Safari → Compartir → Agregar a
-              pantalla de inicio, ábranla desde el ícono y escriban este código ahí (la cámara abre Safari, y lo que se hace en
+              pantalla de inicio, ábranla desde el ícono y escriban este código ahí (la Cámara abre Safari, y lo que se hace en
               Safari no pasa al ícono).
             </p>
             <div className="flex flex-wrap items-center gap-2">
@@ -476,7 +476,7 @@ function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void
                 value={direccion}
                 aria-label="Dirección del panel"
                 onFocus={(e) => e.currentTarget.select()}
-                className={cx(claseInput, "min-w-0 flex-1 basis-56 text-base")}
+                className={cx(claseInput, "min-w-0 flex-1 basis-56")}
               />
               <Boton onClick={copiar}>{copiada ? "✓ Copiada" : "📋 Copiar"}</Boton>
             </div>
