@@ -252,6 +252,12 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
 - Protector de pantalla en la pared tras N minutos sin tocar, con hora, clima y próximos eventos encima; no se
   activa con una ventana abierta. De noche, apagado o atenuado.
 
+### Pendiente · Vista del celular más amigable (pedido de la familia, 12 nov 2026)
+En el celular «todo se ve muy gigante y no se ve bien»: los tamaños están pensados para la tablet de la pared y en el
+iPhone sobran. Rediseñar tamaños de letra, botones y distribución para pantallas chicas (iPhone 390×844 y más chicos),
+sin cambiar la vista de la pared. Revisar con capturas antes/después en cada pestaña (Calendario, Menú, Recetas,
+Compras, Quehaceres, Familia).
+
 ### Pendiente · Cambiar sólo un día de un evento que se repite (pedido de la familia, 10 nov 2026)
 Ejemplo: las niñas van al colegio de 8:30 a 15:00 todos los días, pero hoy salen más temprano; o hay un feriado
 interno del colegio y la clase de ese día no va.
