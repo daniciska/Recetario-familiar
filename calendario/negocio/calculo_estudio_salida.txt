@@ -1,0 +1,125 @@
+Costo kit: tablet 169.990 -> [240870, 204024] | 159.990 -> 195321 | distribuidor 152991 -> 189229
+Costo Instalado neto: 255831
+
+== Margen Kit Pared por precio y cuotas (tablet 169.990) ==
+   249,990 0c -14,423 (-6.9%) | 3c -19,398 (-9.2%) | 6c -23,148 (-11.0%) | 12c -31,897 (-15.2%)
+   299,990 0c 25,999 (10.3%) | 3c 20,029 (7.9%) | 6c 15,529 (6.2%) | 12c 5,029 (2.0%)
+   329,990 0c 50,252 (18.1%) | 3c 43,685 (15.8%) | 6c 38,735 (14.0%) | 12c 27,185 (9.8%)
+   349,990 0c 66,420 (22.6%) | 3c 59,456 (20.2%) | 6c 54,206 (18.4%) | 12c 41,956 (14.3%)
+   369,990 0c 82,589 (26.6%) | 3c 75,226 (24.2%) | 6c 69,677 (22.4%) | 12c 56,727 (18.2%)
+Mezcla política recomendada (50% en 3 cuotas s/i):
+   299,990 retail 169.990: 23,014 (9.1%) | -CAC35k -11,986 | -CAC y reserva 15k -26,986
+   299,990 oferta 159.990: 31,717 (12.6%) | -CAC35k -3,283 | -CAC y reserva 15k -18,283
+   299,990 distribuidor -10%: 37,809 (15.0%) | -CAC35k 2,809 | -CAC y reserva 15k -12,191
+   329,990 retail 169.990: 46,968 (16.9%) | -CAC35k 11,968 | -CAC y reserva 15k -3,032
+   329,990 oferta 159.990: 55,672 (20.1%) | -CAC35k 20,672 | -CAC y reserva 15k 5,672
+   329,990 distribuidor -10%: 61,763 (22.3%) | -CAC35k 26,763 | -CAC y reserva 15k 11,763
+   349,990 retail 169.990: 62,938 (21.4%) | -CAC35k 27,938 | -CAC y reserva 15k 12,938
+   349,990 oferta 159.990: 71,641 (24.4%) | -CAC35k 36,641 | -CAC y reserva 15k 21,641
+   349,990 distribuidor -10%: 77,733 (26.4%) | -CAC35k 42,733 | -CAC y reserva 15k 27,733
+   369,990 retail 169.990: 78,908 (25.4%) | -CAC35k 43,908 | -CAC y reserva 15k 28,908
+   369,990 oferta 159.990: 87,611 (28.2%) | -CAC35k 52,611 | -CAC y reserva 15k 37,611
+   369,990 distribuidor -10%: 93,703 (30.1%) | -CAC35k 58,703 | -CAC y reserva 15k 43,703
+Palancas desde 329.990 retail: tablet -10%: 14795 | subir a 349.990: 15970
+Piloto 249.990 por transferencia (sin comisión ni cuotas, 4 meses Plus): -5448 | con Flow: -15423
+Instalado 389,990: 43,071 (13.1%)
+Instalado 399,990: 51,056 (15.2%)
+Instalado 419,990: 67,025 (19.0%)
+Samsung 206,991 en 329.990: 5.3% | contado 6.5%
+Samsung 219,990 en 329.990: 1.2% | contado 2.4%
+Licencia 39,990: 5,573 (17%) | -CAC 10k -4,427 | -CAC y reserva 5 años 20.700 -25,127
+Licencia 59,990: 21,742 (43%) | -CAC 10k 11,742 | -CAC y reserva 5 años 20.700 -8,958
+Licencia 69,990: 29,826 (51%) | -CAC 10k 19,826 | -CAC y reserva 5 años 20.700 -874
+Licencia 79,990: 37,911 (56%) | -CAC 10k 27,911 | -CAC y reserva 5 años 20.700 7,211
+12 meses de Plus en vez de 3: costo extra por kit 9000
+
+== Plus == mensual 2,226 | anual 1,694/mes | mezcla 1,960 | fundadora 1,417
+  % en Plus para cubrir 345: mensual 15.5% mezcla 17.6% anual 20.4% fundadora 24.3%
+  % en Plus para cubrir 505: mensual 22.7% mezcla 25.8% anual 29.8% fundadora 35.6%
+  suscriptores para fijos 500k/900k/1,8M/3,3M: [255, 459, 918, 1684]
+  contenido 150-300k: 77-153 (fundadora 106-212)
+
+== Puente año 1 base ==
+  v1 reproducida con este motor: 2.4  (la v1 publicó +2,7)
+  tablet a 169.990: -3.5 -> -1.1
+  comisión neta 3,19% (IVA es crédito): +0.9 -> -0.2
+  100 fundadoras (kit -30 mil y Plus a 2.990): -2.5 -> -2.7
+  la mitad paga en 3 cuotas sin interés: -1.4 -> -4.1
+  nube sin migrar en el año 1 (505 al mes): -0.5 -> -4.6
+  puesta en marcha 7.500 por kit y licencia: -4.1 -> -8.7
+  retracto 2.000 por kit (y 500 por licencia): -0.3 -> -9.0
+  instalación a 35.000: -1.8 -> -10.8
+  Plus: 10% al fin de la prueba, con bajas (6%/mes, renovación anual 40%): -0.2 -> -11.0
+  las 20 familias del piloto en la base: -0.1 -> -11.1
+  (si en vez de 3 cuotas la mitad usa 6 cuotas s/i: -12.1)
+
+== Escenarios año 1: PRECIOS V1 CORREGIDOS ==
+  Conservador: ventas   43.1M | kits   -3.0 | lic -0.47 | plus  0.06 | ops -0.76 | fijo  -6.0 => R  -10.2M | fam 220 Plus 6 (2.7%) | publicidad 8.2M
+  Base: ventas  120.0M | kits    1.9 | lic -0.66 | plus  0.30 | ops -1.88 | fijo -10.8 => R  -11.1M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Optimista: ventas  277.0M | kits   16.3 | lic -0.97 | plus  1.81 | ops -4.29 | fijo -21.6 => R   -8.7M | fam 1,320 Plus 191 (14.5%) | publicidad 25.7M
+
+== Escenarios año 1: AJUSTADO ==
+  Conservador: ventas   48.5M | kits    0.5 | lic  1.15 | plus  0.06 | ops -0.76 | fijo  -6.0 => R   -5.0M | fam 220 Plus 6 (2.7%) | publicidad 8.2M
+  Base: ventas  133.6M | kits   10.1 | lic  4.19 | plus  0.30 | ops -1.88 | fijo -10.8 => R    1.9M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Optimista: ventas  308.7M | kits   33.7 | lic 11.96 | plus  1.81 | ops -4.29 | fijo -21.6 => R   21.5M | fam 1,320 Plus 191 (14.5%) | publicidad 25.7M
+
+== Escenarios año 1: AJUSTADO + TABLET DISTRIBUIDOR ==
+  Conservador: ventas   48.5M | kits    2.7 | lic  1.15 | plus  0.06 | ops -0.76 | fijo  -6.0 => R   -2.8M | fam 220 Plus 6 (2.7%) | publicidad 8.2M
+  Base: ventas  133.6M | kits   16.0 | lic  4.19 | plus  0.30 | ops -1.88 | fijo -10.8 => R    7.8M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Optimista: ventas  308.7M | kits   47.0 | lic 11.96 | plus  1.81 | ops -4.29 | fijo -21.6 => R   34.9M | fam 1,320 Plus 191 (14.5%) | publicidad 25.7M
+
+== Sensibilidad año 1 (escenario base) al costo de captar ==
+  CAC 25,000: precios v1 -7.1 | ajustado 5.9 | ajustado+distribuidor 11.8
+  CAC 35,000: precios v1 -11.1 | ajustado 1.9 | ajustado+distribuidor 7.8
+  CAC 50,000: precios v1 -17.1 | ajustado -4.1 | ajustado+distribuidor 1.8
+  CAC 70,000: precios v1 -25.1 | ajustado -12.1 | ajustado+distribuidor -6.2
+  ajustado con 50% en 6 cuotas s/i: 0.8
+
+== Proyección 3 años ==
+  Precios v1 corregidos año 1: ventas  120.0M | kits    1.9 | lic -0.66 | plus  0.30 | ops -1.88 | fijo -10.8 => R  -11.1M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Precios v1 corregidos año 2: ventas  217.1M | kits   11.1 | lic -1.33 | plus  1.43 | ops -4.55 | fijo -18.0 => R  -11.4M | fam 1,570 Plus 88 (5.6%) | publicidad 24.0M
+  Precios v1 corregidos año 3: ventas  313.8M | kits   17.8 | lic -2.21 | plus  2.89 | ops -9.79 | fijo -26.4 => R  -17.7M | fam 3,070 Plus 153 (5.0%) | publicidad 33.0M
+  Ajustado año 1: ventas  133.6M | kits   10.1 | lic  4.19 | plus  0.30 | ops -1.88 | fijo -10.8 => R    1.9M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Ajustado año 2: ventas  240.7M | kits   23.9 | lic  8.37 | plus  1.43 | ops -4.55 | fijo -18.0 => R   11.2M | fam 1,570 Plus 88 (5.6%) | publicidad 24.0M
+  Ajustado año 3: ventas  349.9M | kits   36.2 | lic 13.96 | plus  2.89 | ops -9.79 | fijo -26.4 => R   16.8M | fam 3,070 Plus 153 (5.0%) | publicidad 33.0M
+  Ajustado + distribuidor año 1: ventas  133.6M | kits   16.0 | lic  4.19 | plus  0.30 | ops -1.88 | fijo -10.8 => R    7.8M | fam 570 Plus 32 (5.6%) | publicidad 15.5M
+  Ajustado + distribuidor año 2: ventas  240.7M | kits   34.3 | lic  8.37 | plus  1.43 | ops -4.55 | fijo -18.0 => R   21.5M | fam 1,570 Plus 88 (5.6%) | publicidad 24.0M
+  Ajustado + distribuidor año 3: ventas  349.9M | kits   51.0 | lic 13.96 | plus  2.89 | ops -9.79 | fijo -26.4 => R   31.6M | fam 3,070 Plus 153 (5.0%) | publicidad 33.0M
+
+== Sólo software (Trae tu tablet 79.990 + Plus), fijo 500k ==
+  300 licencias, CAC 15,000: ventas   20.5M | kits    0.0 | lic  6.87 | plus  0.20 | ops -1.08 | fijo  -6.0 => R   -0.0M | fam 320 Plus 19 (5.9%) | publicidad 4.5M
+  600 licencias, CAC 15,000: ventas   40.9M | kits    0.0 | lic 13.75 | plus  0.37 | ops -2.05 | fijo  -6.0 => R    6.1M | fam 620 Plus 37 (5.9%) | publicidad 9.0M
+  600 licencias, CAC 25,000: ventas   40.9M | kits    0.0 | lic  7.75 | plus  0.37 | ops -2.05 | fijo  -6.0 => R    0.1M | fam 620 Plus 37 (5.9%) | publicidad 15.0M
+  1200 licencias, CAC 15,000: ventas   81.8M | kits    0.0 | lic 27.49 | plus  0.72 | ops -3.97 | fijo  -6.0 => R   18.2M | fam 1,220 Plus 72 (5.9%) | publicidad 18.0M
+  licencias al mes para cubrir 500k: CAC 15k -> 22; CAC 25k -> 39
+
+== Punto de equilibrio (kits al mes, mezcla 70/30, tras captar) ==
+  precios v1, retail: contribución antes de captar 45,799 -> F500k 24/46/no | F900k 43/83/no | F1800k 87/167/no | F3300k 159/306/no
+  ajustado, retail: contribución antes de captar 64,164 -> F500k 13/17/35 | F900k 23/31/64 | F1800k 46/62/127 | F3300k 84/113/233
+  ajustado, distribuidor: contribución antes de captar 78,959 -> F500k 9/11/17 | F900k 17/20/31 | F1800k 33/41/62 | F3300k 61/75/114
+
+== Caja mensual (presupuesto austero ~1,95 M antes de marzo) ==
+  Precios v1 corregidos:
+    nov-26:-0.6/-0.6 dic-26:-0.6/-1.2 ene-27:-0.4/-1.7 feb-27:-0.8/-2.5 mar-27:-1.6/-4.1 abr-27:-1.3/-5.4 may-27:-1.2/-6.6 jun-27:-0.7/-7.3 jul-27:-0.8/-8.1 ago-27:-0.8/-8.9 sep-27:-0.8/-9.7 oct-27:-0.8/-10.4 nov-27:-0.6/-11.1 dic-27:-0.6/-11.6 ene-28:-1.0/-12.6 feb-28:-1.0/-13.6
+    mínimo -13.6M | final -13.6M | reserva sugerida (15 mil x 570 familias): 8.6M
+  Ajustado:
+    nov-26:-0.6/-0.6 dic-26:-0.6/-1.2 ene-27:-0.4/-1.7 feb-27:-0.8/-2.5 mar-27:+0.2/-2.3 abr-27:-0.4/-2.6 may-27:+0.5/-2.2 jun-27:+0.4/-1.7 jul-27:-0.1/-1.8 ago-27:-0.1/-1.9 sep-27:+0.1/-1.8 oct-27:+0.2/-1.6 nov-27:+0.8/-0.7 dic-27:+1.1/+0.4 ene-28:-0.5/-0.1 feb-28:-0.5/-0.6
+    mínimo -2.6M | final -0.6M | reserva sugerida (15 mil x 570 familias): 8.6M
+  Ajustado + distribuidor:
+    nov-26:-0.6/-0.6 dic-26:-0.6/-1.2 ene-27:-0.4/-1.7 feb-27:-0.8/-2.5 mar-27:+0.9/-1.5 abr-27:-0.0/-1.6 may-27:+1.2/-0.4 jun-27:+1.0/+0.6 jul-27:+0.3/+0.9 ago-27:+0.3/+1.1 sep-27:+0.5/+1.6 oct-27:+0.7/+2.3 nov-27:+1.5/+3.9 dic-27:+1.9/+5.8 ene-28:-0.2/+5.6 feb-28:-0.3/+5.3
+    mínimo -2.5M | final 5.3M | reserva sugerida (15 mil x 570 familias): 8.6M
+
+== Varios ==
+  Google: 1 cal. cada 5 min = 288 req/día -> 1M/día con 3,472 familias
+  Google: 2 cal. cada 5 min = 576 req/día -> 1M/día con 1,736 familias
+  Google: 3 cal. cada 5 min = 864 req/día -> 1M/día con 1,157 familias
+  3.050 familias x 3 calendarios en el mismo minuto: 9150
+  Fully Cloud Advanced 1,18 EUR x ~1.130 + IVA: 1587
+  Costo anual de la base gratis con 3.070 familias: a 345 12.7 M; a 505 18.6 M
+  Reserva 36 / 60 meses a 345: 12420 20700
+  DIY: tablet 169.990 + soporte 7.990 = 177980 | + licencia 39.990 = 217970 | + 79.990 = 257970
+  Brecha kit 349.990 vs DIY con licencia 79.990: 92020 (36%) | v1 329.990 vs DIY 39.990: 112020
+  Cozyla Neo USD 169,99: 167440 + IVA 199254 | Plus 2 USD 349,99 + IVA 410241
+  Hearth Black Friday USD 559,20: 550812
+  Gemini 2027 circular (3k entrada, 1k salida) Flash: 11.8 CLP; Flash-Lite 3.5: 3.3
+  Electricidad: 6 W x 720 h = 4,3 kWh/mes

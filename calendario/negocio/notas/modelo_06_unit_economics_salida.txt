@@ -1,0 +1,71 @@
+
+===  nube actual Netlify ~CLP 700/mes  (36 meses prepagados en el kit) ===
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 249,990 neto  210,076 costo  228,205 margen -18,130 (-8.6%) contrib tras CAC -43,130 (-20.5%)
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 299,990 neto  252,092 costo  230,288 margen  21,805 ( 8.6%) contrib tras CAC  -3,195 (-1.3%)
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 349,990 neto  294,109 costo  232,370 margen  61,739 (21.0%) contrib tras CAC  36,739 (12.5%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 249,990 neto  210,076 costo  217,019 margen  -6,944 (-3.3%) contrib tras CAC -31,944 (-15.2%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 299,990 neto  252,092 costo  219,102 margen  32,991 (13.1%) contrib tras CAC   7,991 ( 3.2%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 349,990 neto  294,109 costo  221,184 margen  72,925 (24.8%) contrib tras CAC  47,925 (16.3%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 249,990 neto  210,076 costo  258,802 margen -48,727 (-23.2%) contrib tras CAC -73,727 (-35.1%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 299,990 neto  252,092 costo  260,885 margen  -8,792 (-3.5%) contrib tras CAC -33,792 (-13.4%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 349,990 neto  294,109 costo  262,967 margen  31,142 (10.6%) contrib tras CAC   6,142 ( 2.1%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 249,990 neto  210,076 costo  245,169 margen -35,093 (-16.7%) contrib tras CAC -60,093 (-28.6%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 299,990 neto  252,092 costo  247,251 margen   4,841 ( 1.9%) contrib tras CAC -20,159 (-8.0%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 349,990 neto  294,109 costo  249,334 margen  44,776 (15.2%) contrib tras CAC  19,776 ( 6.7%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 249,990 neto  210,076 costo  263,163 margen -53,088 (-25.3%) contrib tras CAC -78,088 (-37.2%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 299,990 neto  252,092 costo  265,246 margen -13,153 (-5.2%) contrib tras CAC -38,153 (-15.1%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 349,990 neto  294,109 costo  267,328 margen  26,781 ( 9.1%) contrib tras CAC   1,781 ( 0.6%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 249,990 neto  210,076 costo  249,181 margen -39,105 (-18.6%) contrib tras CAC -64,105 (-30.5%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 299,990 neto  252,092 costo  251,263 margen     829 ( 0.3%) contrib tras CAC -24,171 (-9.6%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 349,990 neto  294,109 costo  253,346 margen  40,763 (13.9%) contrib tras CAC  15,763 ( 5.4%)
+
+===  nube optimizada ~CLP 100/mes  (36 meses prepagados en el kit) ===
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 249,990 neto  210,076 costo  206,605 margen   3,470 ( 1.7%) contrib tras CAC -21,530 (-10.2%)
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 299,990 neto  252,092 costo  208,688 margen  43,405 (17.2%) contrib tras CAC  18,405 ( 7.3%)
+Redmi Pad 2 11in (Ripley 159 desc 0% precio 349,990 neto  294,109 costo  210,770 margen  83,339 (28.3%) contrib tras CAC  58,339 (19.8%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 249,990 neto  210,076 costo  195,419 margen  14,656 ( 7.0%) contrib tras CAC -10,344 (-4.9%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 299,990 neto  252,092 costo  197,502 margen  54,591 (21.7%) contrib tras CAC  29,591 (11.7%)
+Redmi Pad 2 11in (Ripley 159 desc 8% precio 349,990 neto  294,109 costo  199,584 margen  94,525 (32.1%) contrib tras CAC  69,525 (23.6%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 249,990 neto  210,076 costo  237,202 margen -27,127 (-12.9%) contrib tras CAC -52,127 (-24.8%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 299,990 neto  252,092 costo  239,285 margen  12,808 ( 5.1%) contrib tras CAC -12,192 (-4.8%)
+TCL Tab A1 Plus 12,2in (~195 desc 0% precio 349,990 neto  294,109 costo  241,367 margen  52,742 (17.9%) contrib tras CAC  27,742 ( 9.4%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 249,990 neto  210,076 costo  223,569 margen -13,493 (-6.4%) contrib tras CAC -38,493 (-18.3%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 299,990 neto  252,092 costo  225,651 margen  26,441 (10.5%) contrib tras CAC   1,441 ( 0.6%)
+TCL Tab A1 Plus 12,2in (~195 desc 8% precio 349,990 neto  294,109 costo  227,734 margen  66,376 (22.6%) contrib tras CAC  41,376 (14.1%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 249,990 neto  210,076 costo  241,563 margen -31,488 (-15.0%) contrib tras CAC -56,488 (-26.9%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 299,990 neto  252,092 costo  243,646 margen   8,447 ( 3.4%) contrib tras CAC -16,553 (-6.6%)
+Samsung Tab A11+ 11in (Lider desc 0% precio 349,990 neto  294,109 costo  245,728 margen  48,381 (16.5%) contrib tras CAC  23,381 ( 7.9%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 249,990 neto  210,076 costo  227,581 margen -17,505 (-8.3%) contrib tras CAC -42,505 (-20.2%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 299,990 neto  252,092 costo  229,663 margen  22,429 ( 8.9%) contrib tras CAC  -2,571 (-1.0%)
+Samsung Tab A11+ 11in (Lider desc 8% precio 349,990 neto  294,109 costo  231,746 margen  62,363 (21.2%) contrib tras CAC  37,363 (12.7%)
+
+extras netos: 52770 {'soporte pared': 15000, 'cable 3m+cargador': 8000, 'embalaje+guia': 4000, 'Fully Kiosk PLUS (10,99 USD)': 10770, 'configuracion 30-40 min': 8000, 'envio': 7000}
+
+=== Suscripcion ===
+precio 2990: neto 2,513 fee 125 costo var 1140 contribucion 1,248/mes (50%)
+precio 3990: neto 3,353 fee 166 costo var 1140 contribucion 2,047/mes (61%)
+precio 4990: neto 4,193 fee 208 costo var 1140 contribucion 2,845/mes (68%)
+precio 6990: neto 5,874 fee 291 costo var 1140 contribucion 4,443/mes (76%)
+
+=== MRR con base instalada ===
+kits    300 attach   2% -> subs      6 contribucion mensual CLP      12,281
+kits    300 attach  10% -> subs     30 contribucion mensual CLP      61,403
+kits    300 attach  20% -> subs     60 contribucion mensual CLP     122,805
+kits    300 attach  30% -> subs     90 contribucion mensual CLP     184,208
+kits   1000 attach   2% -> subs     20 contribucion mensual CLP      40,935
+kits   1000 attach  10% -> subs    100 contribucion mensual CLP     204,676
+kits   1000 attach  20% -> subs    200 contribucion mensual CLP     409,352
+kits   1000 attach  30% -> subs    300 contribucion mensual CLP     614,027
+kits   3000 attach   2% -> subs     60 contribucion mensual CLP     122,805
+kits   3000 attach  10% -> subs    300 contribucion mensual CLP     614,027
+kits   3000 attach  20% -> subs    600 contribucion mensual CLP   1,228,055
+kits   3000 attach  30% -> subs    900 contribucion mensual CLP   1,842,082
+kits  10000 attach   2% -> subs    200 contribucion mensual CLP     409,352
+kits  10000 attach  10% -> subs   1000 contribucion mensual CLP   2,046,758
+kits  10000 attach  20% -> subs   2000 contribucion mensual CLP   4,093,515
+kits  10000 attach  30% -> subs   3000 contribucion mensual CLP   6,140,273
+
+=== Punto de equilibrio (costos fijos mensuales) ===
+minimo sin sueldos (Netlify Pro, dominio, contador, herramientas) ~CLP 250 mil: 122 suscriptores a $3.990; o 4 kits/mes con contribucion ~CLP 60 mil
+con soporte part-time + nutricionista ~CLP 1,3 M: 635 suscriptores a $3.990; o 22 kits/mes con contribucion ~CLP 60 mil
+con 1 sueldo completo + soporte + contenido ~CLP 3 M: 1,466 suscriptores a $3.990; o 50 kits/mes con contribucion ~CLP 60 mil
