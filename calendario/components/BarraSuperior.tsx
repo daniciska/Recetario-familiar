@@ -41,29 +41,32 @@ export default function BarraSuperior({
   const destacadas = hoyComidas.slice(0, 2);
 
   return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2">
+    // Celular: una sola línea de unos 52 px (fecha y cuenta regresiva a la izquierda, clima a la derecha).
+    // Sin reloj (el teléfono ya muestra la hora) ni «Hoy se cocina» (está en el bloque de hoy del
+    // calendario y en el Menú).
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2 cel:flex-nowrap cel:gap-x-3 cel:px-4 cel:pb-1 cel:pt-[max(0.375rem,env(safe-area-inset-top))]">
       {/* Hora y fecha. Sin min-w-0: nunca se achica bajo su contenido (si no cabe, la tarjeta de
-          la comida baja a otra línea, como en el iPad vertical). */}
-      <div className="flex grow items-baseline gap-4">
-        <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl">
+          la comida baja a otra línea, como en el iPad vertical). En el celular sí: la fecha se corta. */}
+      <div className="flex grow items-baseline gap-4 cel:min-w-0">
+        <span className="num font-display text-5xl font-semibold leading-none tracking-tight md:text-6xl 2xl:text-7xl cel:hidden">
           {ahora.hora}
         </span>
         {/* Sin min-w-0: el mínimo es la palabra más larga ("septiembre"), así nunca se sale de su caja. */}
-        <div className="grow leading-tight">
-          <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl">{fecha}</div>
+        <div className="grow leading-tight cel:min-w-0">
+          <div className="text-xl font-extrabold text-balance first-letter:uppercase md:text-2xl xl:whitespace-nowrap 2xl:text-3xl cel:truncate cel:text-lg">{fecha}</div>
           <LineaCuentas cuentas={cuentas} familia={estado.ajustes.nombreFamilia} />
         </div>
       </div>
 
       {/* Clima */}
       {clima && ci && (
-        <div className="flex shrink-0 items-center gap-2 rounded-3xl bg-superficie px-3 py-2 md:px-4">
-          <span className="text-3xl md:text-5xl" aria-hidden>
+        <div className="flex shrink-0 items-center gap-2 rounded-3xl bg-superficie px-3 py-2 md:px-4 cel:gap-1 cel:rounded-2xl cel:py-1 cel:pl-2 cel:pr-2.5">
+          <span className="text-3xl md:text-5xl cel:text-[1.375rem] cel:leading-none" aria-hidden>
             {ci.icono}
           </span>
           <div className="leading-tight">
-            <div className="num text-2xl font-extrabold md:text-3xl">{clima.actual}°</div>
-            <div className="num text-sm font-bold text-tinta-suave max-sm:hidden md:text-base">
+            <div className="num text-2xl font-extrabold md:text-3xl cel:text-lg">{clima.actual}°</div>
+            <div className="num text-sm font-bold text-tinta-suave max-sm:hidden md:text-base cel:hidden">
               {clima.max}° / {clima.min}°
               {clima.lluvia >= 30 && <span className="ml-1.5 whitespace-nowrap">💧{clima.lluvia}%</span>}
             </div>
@@ -75,7 +78,7 @@ export default function BarraSuperior({
       <button
         type="button"
         onClick={alIrAMenu}
-        className="flex min-w-0 flex-[1_1_10rem] items-center gap-2 md:flex-[1_1_14rem] rounded-3xl bg-acento-suave px-3 py-2 text-left transition active:scale-[0.99] md:gap-3 md:px-4"
+        className="flex min-w-0 flex-[1_1_10rem] items-center gap-2 md:flex-[1_1_14rem] rounded-3xl bg-acento-suave px-3 py-2 text-left transition active:scale-[0.99] md:gap-3 md:px-4 cel:hidden"
       >
         <span className="text-3xl md:text-4xl" aria-hidden>
           {destacadas[0]?.emoji ?? "🍳"}
@@ -123,7 +126,7 @@ function LineaCuentas({ cuentas, familia }: { cuentas: CuentaRegresiva[]; famili
   }, [cuentas.length]);
   const c = cuentas.length ? cuentas[i % cuentas.length] : null;
   return (
-    <div className="w-0 min-w-full truncate text-base font-bold text-tinta-suave md:text-xl" title={c ? undefined : familia}>
+    <div className="w-0 min-w-full truncate text-base font-bold text-tinta-suave md:text-xl cel:text-sm" title={c ? undefined : familia}>
       {c ? (
         <>
           {/* Primero cuánto falta: si el título no cabe, se corta el título y no los días. */}

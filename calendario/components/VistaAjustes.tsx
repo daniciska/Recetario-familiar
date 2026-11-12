@@ -74,7 +74,7 @@ export default function VistaAjustes() {
   return (
     <section className="desliza h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-4 pb-6">
-        <h1 className="font-display text-2xl font-semibold md:text-3xl">Familia y ajustes</h1>
+        <h1 className="font-display text-2xl font-semibold md:text-3xl cel:text-[1.375rem]">Familia y ajustes</h1>
 
         <div className="rounded-3xl bg-superficie p-4">
           <Campo etiqueta="Nombre de la familia">
@@ -95,12 +95,12 @@ export default function VistaAjustes() {
                 key={m.id}
                 type="button"
                 onClick={() => setEditando(m)}
-                className="flex items-center gap-3 rounded-2xl border-[3px] p-2 text-left transition active:scale-[0.98]"
+                className="flex items-center gap-3 rounded-2xl border-[3px] p-2 text-left transition active:scale-[0.98] cel:min-h-14 cel:rounded-xl cel:border-2 cel:px-1.5 cel:py-1"
                 style={{ borderColor: m.color }}
               >
                 <Avatar miembro={m} tam="lg" />
-                <span className="flex-1 text-2xl font-extrabold">{m.nombre}</span>
-                <span className="pr-2 text-xl text-tinta-suave">✏️</span>
+                <span className="flex-1 text-2xl font-extrabold cel:text-[1.0625rem]">{m.nombre}</span>
+                <span className="pr-2 text-xl text-tinta-suave cel:text-base">✏️</span>
               </button>
             ))}
           </div>

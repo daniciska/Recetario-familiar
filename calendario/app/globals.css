@@ -8,6 +8,12 @@
    Igual que MEDIA_TABLET en lib/hooks.ts. */
 @custom-variant md (@media (width >= 48rem) and (height >= 29rem));
 
+/* "cel" = interfaz de teléfono: la negación EXACTA de md (teléfono vertical y también en horizontal).
+   Todo lo que sea sólo del celular va con cel: o dentro de este @media; así la pared (md) queda igual.
+   No usar max-md: (sólo mira el ancho y deja fuera el teléfono en horizontal). Sintaxis clásica
+   (not all and …) para que la entiendan los iPhone con iOS anterior a 16.4. */
+@custom-variant cel (@media not all and (min-width: 48rem) and (min-height: 29rem));
+
 /* Paleta pastel, clara y luminosa (estilo Skylight): fondo casi blanco con un toque lavanda,
    tarjetas blancas, acento lavanda y los colores de cada persona en pastel con texto oscuro.
    Se definen como variables para cambiar a modo noche con data-tema="noche" en <html>. */
@@ -41,6 +47,37 @@
   --c-hoy-borde: #a99dff;
   --c-ok: #74d3a0;
   color-scheme: dark;
+}
+
+/* Celular: la misma interfaz con la escala de letra de una app de teléfono (iOS / Android). Tailwind
+   compila .text-lg{font-size:var(--text-lg)} y .font-extrabold{font-weight:var(--font-weight-extrabold)},
+   así que redefinir las variables aquí achica todas las clases de una vez sin tocar la pared. Va fuera
+   de @layer para ganarle a @layer theme. --spacing no se toca (los toques siguen de 44 px o más) y las
+   entradas quedan con 16 px o más (text-lg 17, la hora text-xl 18): el iPhone no hace zoom al enfocar. */
+@media not all and (min-width: 48rem) and (min-height: 29rem) {
+  :root {
+    --text-sm: 0.8125rem; /* 14 → 13 */
+    --text-sm--line-height: 1.4;
+    --text-base: 0.9375rem; /* 16 → 15 */
+    --text-base--line-height: 1.4;
+    --text-lg: 1.0625rem; /* 18 → 17 */
+    --text-lg--line-height: 1.35;
+    --text-xl: 1.125rem; /* 20 → 18 */
+    --text-xl--line-height: 1.3;
+    --text-2xl: 1.25rem; /* 24 → 20 */
+    --text-2xl--line-height: 1.25;
+    --text-3xl: 1.5rem; /* 30 → 24 */
+    --text-3xl--line-height: 1.2;
+    --text-4xl: 1.75rem; /* 36 → 28 */
+    --text-4xl--line-height: 1.15;
+    --text-5xl: 2.125rem; /* 48 → 34 */
+    --text-6xl: 2.5rem; /* 60 → 40 */
+    --text-7xl: 3rem; /* 72 → 48 */
+    --text-8xl: 3.5rem; /* 96 → 56 */
+    --font-weight-extrabold: 700; /* 800 → 700: menos pesado */
+    --font-weight-black: 800;
+    --radius-3xl: 1.25rem; /* 24 → 20 */
+  }
 }
 
 @theme inline {

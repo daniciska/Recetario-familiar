@@ -173,14 +173,40 @@ function recetasEjemplo(): Receta[] {
 }
 
 /** Los integrantes inventados de `estadoEjemplo` (id → nombre). */
-const MIEMBROS_EJEMPLO: Record<string, string> = { mie_mama: "Carolina", mie_papa: "Felipe", mie_sofi: "Sofía", mie_tomi: "Tomás" };
+export const MIEMBROS_EJEMPLO: Readonly<Record<string, string>> = { mie_mama: "Carolina", mie_papa: "Felipe", mie_sofi: "Sofía", mie_tomi: "Tomás" };
+
+/** Los ids de los eventos inventados de `estadoEjemplo` (una prueba revisa que sean los mismos). */
+export const EVENTOS_EJEMPLO: readonly string[] = [
+  "ev_colegio",
+  "ev_colegio_ma",
+  "ev_colegio_mi",
+  "ev_colegio_ju",
+  "ev_colegio_vi",
+  "ev_futbol",
+  "ev_ballet",
+  "ev_pilates",
+  "ev_reunion",
+  "ev_dentista",
+  "ev_feria",
+  "ev_cumple",
+  "ev_vacaciones",
+  "ev_basura",
+  "ev_almuerzo_abuela",
+  "ev_arriendo",
+];
 
 /**
- * ¿Lo que se ve sigue siendo la familia de ejemplo? Sí mientras quede alguno de sus integrantes con su
- * nombre de fábrica (la familia que usa el panel sin nube ya los cambió por los suyos).
+ * ¿Lo que se ve sigue siendo la familia de ejemplo? Hacen falta las dos señales: la mayoría de sus
+ * integrantes con su id y su nombre de fábrica (3 de 4) y al menos la mitad de sus eventos (por id).
+ * Un nombre solo no basta: una familia de verdad puede tener una Sofía o un Tomás, y la que usa el
+ * panel sin nube cambia los integrantes y borra los eventos inventados.
  */
-export function esFamiliaDeEjemplo(estado: Pick<EstadoApp, "miembros">): boolean {
-  return estado.miembros.some((m) => MIEMBROS_EJEMPLO[m.id] === m.nombre);
+export function esFamiliaDeEjemplo(estado: Pick<EstadoApp, "miembros" | "eventos">): boolean {
+  // (lo heredado de Object, como "toString", nunca es un texto igual al nombre)
+  const integrantes = new Set(estado.miembros.filter((m) => MIEMBROS_EJEMPLO[m.id] === m.nombre).map((m) => m.id));
+  if (integrantes.size * 2 <= Object.keys(MIEMBROS_EJEMPLO).length) return false;
+  const eventos = new Set(estado.eventos.map((e) => e.id));
+  return EVENTOS_EJEMPLO.filter((id) => eventos.has(id)).length * 2 >= EVENTOS_EJEMPLO.length;
 }
 
 export function estadoEjemplo(): EstadoApp {

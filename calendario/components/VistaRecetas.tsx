@@ -66,11 +66,12 @@ export default function VistaRecetas() {
   };
 
   return (
-    <section className="flex h-full flex-col gap-3">
+    <section className="flex h-full flex-col gap-3 cel:gap-2">
+      {/* Celular: título, 🎙️ y ＋ en una fila; el buscador debajo, a todo el ancho. */}
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-2 font-display text-2xl font-semibold md:text-3xl">Recetario</h1>
+        <h1 className="mr-2 font-display text-2xl font-semibold md:text-3xl cel:text-[1.375rem]">Recetario</h1>
         <Entrada
-          className="max-w-sm flex-1"
+          className="max-w-sm flex-1 cel:order-last cel:max-w-none cel:basis-full"
           placeholder="🔎 Buscar…"
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
@@ -92,7 +93,7 @@ export default function VistaRecetas() {
         {lista.length === 0 ? (
           <Vacio emoji="📖" texto={busqueda ? "No hay recetas con ese nombre." : TEXTOS.vacio} />
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 cel:gap-2.5">
             {lista.map((r) => (
               <button
                 key={r.id}
@@ -100,12 +101,12 @@ export default function VistaRecetas() {
                 onClick={() => setViendo(r)}
                 className="flex flex-col overflow-hidden rounded-3xl bg-superficie text-left shadow-sm transition active:scale-[0.98]"
               >
-                <div className="flex aspect-[4/3] items-center justify-center bg-superficie-2">
+                <div className="flex aspect-[4/3] items-center justify-center bg-superficie-2 cel:aspect-[3/2]">
                   <FotoReceta receta={r} className={r.foto ? "size-full rounded-none" : "text-7xl"} />
                 </div>
-                <div className="p-3">
-                  <div className="text-xl font-extrabold leading-tight">{r.nombre}</div>
-                  <div className="mt-1 text-base font-bold text-tinta-suave">
+                <div className="p-3 cel:px-2.5 cel:py-2">
+                  <div className="text-xl font-extrabold leading-tight cel:text-[1.0625rem]">{r.nombre}</div>
+                  <div className="mt-1 text-base font-bold text-tinta-suave cel:mt-0.5 cel:text-[0.8125rem]">
                     👥 {r.porciones}
                     {r.tiempoMin ? ` · ⏱ ${r.tiempoMin} min` : ""} · {r.ingredientes.length} ingr.
                     {r.dictado ? " · 🎙️" : ""}
@@ -174,27 +175,33 @@ export function RecetaDetalle({
         )
       }
     >
-      <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] cel:gap-5">
         <div>
+          {/* Celular: sin foto no se muestra el bloque 4:3 (sólo un emoji): el emoji va junto a las porciones. */}
           {receta.foto ? (
-            <FotoReceta receta={receta} className="mb-4 aspect-[4/3] w-full" />
+            <FotoReceta receta={receta} className="mb-4 aspect-[4/3] w-full cel:mb-3 cel:aspect-[16/9]" />
           ) : (
-            <div className="mb-4 flex aspect-[4/3] items-center justify-center rounded-2xl bg-superficie-2 text-8xl">
+            <div className="mb-4 flex aspect-[4/3] items-center justify-center rounded-2xl bg-superficie-2 text-8xl cel:hidden">
               {receta.emoji}
             </div>
           )}
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <span className="text-lg font-bold">Porciones</span>
+          <div className="mb-3 flex flex-wrap items-center gap-3 cel:gap-x-2.5 cel:gap-y-1">
+            {!receta.foto && (
+              <span className="hidden size-11 items-center justify-center rounded-xl bg-superficie-2 text-[1.75rem] cel:inline-flex" aria-hidden>
+                {receta.emoji || "🍽️"}
+              </span>
+            )}
+            <span className="text-lg font-bold cel:text-base">Porciones</span>
             <Contador valor={porciones} alCambiar={setPorciones} />
             {receta.tiempoMin ? <span className="text-lg font-bold text-tinta-suave">⏱ {receta.tiempoMin} min</span> : null}
           </div>
-          <h3 className="mb-2 text-lg font-extrabold uppercase text-acento">Ingredientes</h3>
+          <h3 className="mb-2 text-lg font-extrabold uppercase text-acento cel:mb-1 cel:text-[0.8125rem] cel:tracking-wide">Ingredientes</h3>
           <ul className="space-y-1.5">
             {receta.ingredientes.map((i) => {
               const cant = escalar(i.cantidad, receta, porciones);
               return (
-                <li key={i.id} className="flex gap-2 border-b border-borde pb-1.5 text-lg">
-                  <span className="num min-w-24 shrink-0 font-extrabold">
+                <li key={i.id} className="flex gap-2 border-b border-borde pb-1.5 text-lg cel:pb-1">
+                  <span className="num min-w-24 shrink-0 font-extrabold cel:min-w-20">
                     {conAprox(textoCantidad(cant != null ? redondeo(cant) : null, i.unidad), i.estimado === true && cant != null)}
                   </span>
                   <span className="min-w-0">
@@ -215,7 +222,7 @@ export function RecetaDetalle({
           )}
         </div>
         <div>
-          <h3 className="mb-2 text-lg font-extrabold uppercase text-acento">Preparación</h3>
+          <h3 className="mb-2 text-lg font-extrabold uppercase text-acento cel:mb-1.5 cel:text-[0.8125rem] cel:tracking-wide">Preparación</h3>
           <ol className="space-y-2">
             {receta.pasos.map((p, n) => (
               <li key={n}>
@@ -230,11 +237,11 @@ export function RecetaDetalle({
                     })
                   }
                   className={cx(
-                    "flex w-full gap-3 rounded-2xl bg-superficie-2 p-3 text-left text-xl leading-snug transition",
+                    "flex w-full gap-3 rounded-2xl bg-superficie-2 p-3 text-left text-xl leading-snug transition cel:gap-2.5 cel:rounded-xl cel:p-2.5 cel:text-[1.0625rem]",
                     hechos.has(n) && "opacity-45 line-through",
                   )}
                 >
-                  <span className="num flex size-9 shrink-0 items-center justify-center rounded-full bg-acento font-extrabold text-acento-tinta">
+                  <span className="num flex size-9 shrink-0 items-center justify-center rounded-full bg-acento font-extrabold text-acento-tinta cel:size-7 cel:text-sm">
                     {n + 1}
                   </span>
                   <span>{p}</span>

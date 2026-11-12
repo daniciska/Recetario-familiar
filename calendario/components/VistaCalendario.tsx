@@ -14,9 +14,11 @@ import {
   mesAnio,
   partes,
   rangoSemana,
+  semanaCorta,
   sumarDias,
   sumarMeses,
   diaSemana,
+  MESES,
 } from "@/lib/fechas";
 import { duracionDias, ocurrenciasEnRango, seRepite, textoHora } from "@/lib/eventos";
 import { iconoClima, useIrAHoyEnMovil, type Clima } from "@/lib/hooks";
@@ -55,6 +57,16 @@ export default function VistaCalendario({
 
   const titulo =
     modo === "semana" ? rangoSemana(lunesDe(a)) : modo === "mes" ? mesAnio(a) : fechaLarga(a, true);
+  // Celular: título corto (cabe entre ‹ y › en una línea) y, debajo, si es el período de hoy o cómo volver.
+  const pa = partes(a);
+  const tituloCorto =
+    modo === "semana"
+      ? semanaCorta(lunesDe(a))
+      : modo === "mes"
+        ? mesAnio(a)
+        : `${DIAS_CORTOS[diaSemana(a)]} ${pa.dia} ${MESES[pa.mes - 1].slice(0, 3)}`;
+  const enHoy =
+    modo === "semana" ? lunesDe(a) === lunesDe(hoy) : modo === "mes" ? a.slice(0, 7) === hoy.slice(0, 7) : a === hoy;
 
   const alternar = (id: string) =>
     setFiltro((f) => {
@@ -65,23 +77,35 @@ export default function VistaCalendario({
     });
 
   return (
-    <section className="flex h-full flex-col gap-3">
-      {/* Controles */}
-      <div className="flex flex-wrap items-center gap-2">
-        <BotonIcono etiqueta="Anterior" onClick={() => mover(-1)}>
+    <section className="flex h-full flex-col gap-3 cel:gap-2">
+      {/* Controles. Celular (2 filas): ‹ título › ＋ y debajo Día | Semana | Mes a todo el ancho; tocar el
+          título vuelve a hoy (reemplaza al botón «Hoy»). */}
+      <div className="flex flex-wrap items-center gap-2 cel:grid cel:grid-cols-[auto_minmax(0,1fr)_auto_auto] cel:gap-x-1">
+        <BotonIcono etiqueta="Anterior" onClick={() => mover(-1)} className="cel:col-start-1 cel:row-start-1">
           ‹
         </BotonIcono>
-        <Boton onClick={() => setAncla(null)} className={cx(a === hoy && "opacity-60")}>
+        <Boton onClick={() => setAncla(null)} className={cx(a === hoy && "opacity-60", "cel:hidden")}>
           Hoy
         </Boton>
-        <BotonIcono etiqueta="Siguiente" onClick={() => mover(1)}>
+        <BotonIcono etiqueta="Siguiente" onClick={() => mover(1)} className="cel:col-start-3 cel:row-start-1">
           ›
         </BotonIcono>
-        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold first-letter:uppercase md:whitespace-nowrap xl:text-3xl">
+        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold first-letter:uppercase md:whitespace-nowrap xl:text-3xl cel:hidden">
           {titulo}
         </h1>
-        <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
-          <div className="hidden items-center gap-1 xl:flex">
+        <button
+          type="button"
+          onClick={() => setAncla(null)}
+          aria-label={enHoy ? titulo : `${titulo}. Volver a hoy`}
+          className="hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
+        >
+          <span className="max-w-full truncate font-display text-2xl font-semibold first-letter:uppercase">{tituloCorto}</span>
+          <span className={cx("text-xs font-bold", enHoy ? "text-tinta-suave" : "text-acento")}>
+            {enHoy ? (modo === "semana" ? "Esta semana" : modo === "mes" ? "Este mes" : "Hoy") : "↩ Volver a hoy"}
+          </span>
+        </button>
+        <div className="flex flex-1 flex-wrap items-center justify-end gap-2 cel:contents">
+          <div className="hidden items-center gap-1 xl:flex cel:hidden">
             {estado.miembros.map((m) => (
               <button
                 key={m.id}
@@ -102,13 +126,20 @@ export default function VistaCalendario({
           <Segmentos
             valor={modo}
             alCambiar={setModo}
+            lleno
+            className="cel:col-span-4 cel:row-start-2"
             opciones={[
               { valor: "dia", texto: "Día" },
               { valor: "semana", texto: "Semana" },
               { valor: "mes", texto: "Mes" },
             ]}
           />
-          <Boton variante="primario" aria-label="Nuevo evento" onClick={() => proteger(() => setEditando({ fecha: a }))}>
+          <Boton
+            variante="primario"
+            aria-label="Nuevo evento"
+            className="cel:col-start-4 cel:row-start-1 cel:ml-1 cel:min-w-11"
+            onClick={() => proteger(() => setEditando({ fecha: a }))}
+          >
             ＋<span className="max-sm:hidden">Evento</span>
           </Boton>
         </div>
@@ -190,15 +221,19 @@ function TarjetaEvento({
   oc,
   miembros,
   grande,
+  fila,
   onClick,
 }: {
   oc: Ocurrencia;
   miembros: Map<string, Miembro>;
   grande?: boolean;
+  /** Celular: una fila (hora a la izquierda, título, personas a la derecha) en vez de 3 líneas. */
+  fila?: boolean;
   onClick: () => void;
 }) {
   const ev = oc.evento;
   const personas = ev.miembros.map((id) => miembros.get(id)).filter(Boolean) as Miembro[];
+  if (fila) return <FilaEvento oc={oc} personas={personas} miembros={miembros} onClick={onClick} />;
   return (
     <button
       type="button"
@@ -235,7 +270,7 @@ function TarjetaEvento({
       <div
         className={cx(
           "font-extrabold leading-snug break-words hyphens-auto",
-          grande ? "text-3xl" : "text-base lg:text-lg xl:text-xl",
+          grande ? "text-3xl cel:text-[1.375rem]" : "text-base lg:text-lg xl:text-xl",
         )}
       >
         {ev.titulo}
@@ -250,6 +285,72 @@ function TarjetaEvento({
       </div>
       {grande && ev.lugar && <div className="mt-2 break-words text-lg text-tinta-suave">📍 {ev.lugar}</div>}
       {grande && ev.nota && <div className="mt-2 whitespace-pre-line break-words text-lg text-tinta-suave">📝 {ev.nota}</div>}
+    </button>
+  );
+}
+
+/** Lo que va en la columna de la hora de la fila: inicio arriba y término abajo. */
+function horasFila(ev: Evento, oc: Ocurrencia): [string, string] {
+  if (ev.horaInicio && ev.horaFin && !ev.todoElDia && duracionDias(ev) === 1) return [ev.horaInicio, ev.horaFin];
+  const t = textoHora(ev, oc);
+  if (t === "Todo el día") return ["Todo", "el día"];
+  const m = /^(Desde|Hasta) (.+)$/.exec(t);
+  return m ? [m[1], m[2]] : [t, ""];
+}
+
+function FilaEvento({
+  oc,
+  personas,
+  miembros,
+  onClick,
+}: {
+  oc: Ocurrencia;
+  personas: Miembro[];
+  miembros: Map<string, Miembro>;
+  onClick: () => void;
+}) {
+  const ev = oc.evento;
+  const [arriba, abajo] = horasFila(ev, oc);
+  const esHora = /^\d/.test(arriba);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cx(
+        "tarjeta-evento flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-xl py-1.5 pl-2 pr-2.5 text-left transition active:scale-[0.98]",
+        personas.length > 1 && "compartido",
+      )}
+      style={estiloPersonas(ev.miembros, miembros)}
+    >
+      <span className="num w-11 shrink-0 leading-tight">
+        <span className={cx("block font-bold", esHora ? "text-[0.9375rem]" : "text-[0.8125rem]")}>{arriba}</span>
+        {(abajo || seRepite(ev)) && (
+          <span className="block whitespace-nowrap text-[0.8125rem] font-semibold text-tinta-suave">
+            {abajo}
+            {seRepite(ev) && (
+              <span className={abajo ? "ml-0.5" : undefined} aria-label="se repite">
+                ↻
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-2 break-words text-[1.0625rem] font-bold leading-snug hyphens-auto">{ev.titulo}</span>
+        {ev.lugar && <span className="block truncate text-[0.8125rem] font-semibold text-tinta-suave">📍 {ev.lugar}</span>}
+      </span>
+      {personas.length > 0 && (
+        <span className="flex shrink-0 -space-x-0.5 text-base leading-none" aria-label={personas.map((p) => p.nombre).join(", ")}>
+          {personas.map((m) => (
+            <span key={m.id} title={m.nombre} aria-hidden>
+              {m.emoji}
+            </span>
+          ))}
+        </span>
+      )}
     </button>
   );
 }
@@ -276,7 +377,7 @@ function ComidasDelDia({ fecha, alTocar }: { fecha: string; alTocar: () => void 
         e.stopPropagation();
         alTocar();
       }}
-      className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base"
+      className="block min-h-12 w-full space-y-0.5 border-t border-dashed border-borde py-1.5 text-left text-sm transition active:scale-[0.98] md:pb-0 xl:text-base cel:min-h-11 cel:pb-0"
     >
       {lista.map(({ t, nombre }) => (
         <span
@@ -372,32 +473,33 @@ function Semana({
         })}
       </div>
 
-      {/* Teléfono: lista por día */}
-      <div className="desliza h-full space-y-3 overflow-y-auto md:hidden">
+      {/* Teléfono: lista por día, cada evento en una fila */}
+      <div className="desliza h-full space-y-2.5 overflow-y-auto md:hidden">
         {dias.map((f, i) => {
           const esHoy = f === hoy;
+          const lista = ocs.get(f)!;
           return (
             <div
               key={f}
               data-hoy-movil={esHoy || undefined}
-              className={cx("scroll-mt-2 rounded-3xl border-[3px] p-3", esHoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie")}
+              className={cx("scroll-mt-1 rounded-2xl border-2 px-2.5 pb-2 pt-1", esHoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie")}
             >
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-xl font-extrabold">
+              <div className="flex items-center justify-between pl-1">
+                <div className="text-[1.0625rem] font-bold">
                   {DIAS_LARGOS[i]} <span className="num">{partes(f).dia}</span>
-                  {esHoy && <span className="ml-2 text-acento">· Hoy</span>}
+                  {esHoy && <span className="ml-1.5 text-acento">· Hoy</span>}
                 </div>
-                <BotonIcono etiqueta="Agregar evento" onClick={() => alNuevo(f)}>
+                <BotonIcono etiqueta={`Agregar evento el ${DIAS_LARGOS[i].toLowerCase()} ${partes(f).dia}`} className="-mr-1.5 bg-transparent text-xl text-tinta-suave" onClick={() => alNuevo(f)}>
                   ＋
                 </BotonIcono>
               </div>
               <div className="space-y-1.5">
-                {ocs.get(f)!.length === 0 && <div className="text-base text-tinta-suave">Sin eventos</div>}
-                {ocs.get(f)!.map((oc) => (
-                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} onClick={() => alAbrir(oc.evento, oc.inicio)} />
+                {lista.length === 0 && <div className="pb-1 pl-1 text-sm text-tinta-suave">Sin eventos</div>}
+                {lista.map((oc) => (
+                  <TarjetaEvento key={oc.evento.id} oc={oc} miembros={miembros} fila onClick={() => alAbrir(oc.evento, oc.inicio)} />
                 ))}
               </div>
-              <div className="mt-2">
+              <div className="mt-1.5">
                 <ComidasDelDia fecha={f} alTocar={alIrAMenu} />
               </div>
             </div>
@@ -429,7 +531,8 @@ function Mes({
   const ocs = ocurrenciasEnRango(estado.eventos, dias[0], dias[41], filtro);
   return (
     <div className="flex h-full flex-col">
-      <div className="grid grid-cols-7 gap-1.5 pb-1.5">
+      {/* Celular: casi sin espacio entre columnas, así cada día mide 44 px o más de ancho (360 px de pantalla). */}
+      <div className="grid grid-cols-7 gap-1.5 pb-1.5 cel:gap-x-0.5">
         {DIAS_CORTOS.map((d) => (
           <div key={d} className="text-center text-sm font-extrabold uppercase text-tinta-suave md:text-base">
             {d}
@@ -437,7 +540,7 @@ function Mes({
         ))}
       </div>
       {/* En el teléfono cada fila tiene un alto mínimo (el número y los puntos) y la grilla hace scroll. */}
-      <div className="desliza grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(3.25rem,1fr))] gap-1.5 overflow-y-auto md:grid-rows-6 md:overflow-visible">
+      <div className="desliza grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(3.25rem,1fr))] gap-1.5 overflow-y-auto md:grid-rows-6 md:overflow-visible cel:gap-x-0.5 cel:gap-y-1">
         {dias.map((f) => {
           const lista = ocs.get(f)!;
           const fuera = partes(f).mes !== mes;
@@ -448,7 +551,7 @@ function Mes({
               type="button"
               onClick={() => alVerDia(f)}
               className={cx(
-                "flex min-h-0 flex-col overflow-hidden rounded-2xl border-[3px] p-1 text-left md:p-1.5",
+                "flex min-h-0 flex-col overflow-hidden rounded-2xl border-[3px] p-1 text-left md:p-1.5 cel:rounded-xl cel:border-2",
                 esHoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie",
                 fuera && "opacity-40",
               )}
@@ -510,9 +613,10 @@ function Dia({
   const recetas = new Map(estado.recetas.map((r) => [r.id, r]));
   const cd = clima?.dias.find((d) => d.fecha === fecha);
   return (
-    <div className="grid h-full gap-3 md:grid-cols-[2fr_1fr]">
-      <div className={cx("desliza min-h-0 overflow-y-auto rounded-3xl p-3 md:p-4", fecha === hoy ? "bg-hoy" : "bg-superficie")}>
-        <div className="mb-3 text-2xl font-extrabold md:text-3xl">
+    // Celular: un solo desplazamiento (eventos, clima y menú uno debajo del otro), sin paneles con scroll propio.
+    <div className="desliza grid h-full gap-3 md:grid-cols-[2fr_1fr] cel:block cel:space-y-3 cel:overflow-y-auto">
+      <div className={cx("desliza min-h-0 overflow-y-auto rounded-3xl p-3 md:p-4 cel:overflow-visible", fecha === hoy ? "bg-hoy" : "bg-superficie")}>
+        <div className="mb-3 text-2xl font-extrabold md:text-3xl cel:mb-2">
           {DIAS_LARGOS[diaSemana(fecha)]}
           {fecha === hoy && <span className="ml-2 text-acento">· Hoy</span>}
         </div>
@@ -523,10 +627,10 @@ function Dia({
           ))}
         </div>
       </div>
-      <div className="desliza min-h-0 space-y-3 overflow-y-auto">
+      <div className="desliza min-h-0 space-y-3 overflow-y-auto cel:overflow-visible">
         {cd && (
-          <div className="flex items-center gap-4 rounded-3xl bg-superficie p-4">
-            <span className="text-6xl">{iconoClima(cd.codigo).icono}</span>
+          <div className="flex items-center gap-4 rounded-3xl bg-superficie p-4 cel:gap-3 cel:px-4 cel:py-3">
+            <span className="text-6xl cel:text-4xl">{iconoClima(cd.codigo).icono}</span>
             <div>
               <div className="text-xl font-bold">{iconoClima(cd.codigo).texto}</div>
               <div className="num text-3xl font-extrabold">

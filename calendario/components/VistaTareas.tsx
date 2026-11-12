@@ -145,18 +145,23 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
   ].filter((c) => c.miembro || c.tareas.length > 0);
 
   return (
-    <section className="flex h-full flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-auto font-display text-2xl font-semibold max-sm:w-full md:text-3xl">
+    <section className="flex h-full flex-col gap-3 cel:gap-2">
+      {/* Celular: título, 🏆 y ＋ en una fila; las personas en una fila que se desliza de lado. */}
+      <div className="flex flex-wrap items-center gap-2 cel:flex-nowrap">
+        <h1 className="mr-auto font-display text-2xl font-semibold max-sm:w-full md:text-3xl cel:w-auto cel:min-w-0 cel:truncate cel:text-[1.375rem]">
           Tareas de hoy <span className="num text-tinta-suave">· {pendientesHoy}</span>
         </h1>
-        <Boton onClick={() => setVerPremios(true)}>🏆 Premios</Boton>
-        <Boton variante="primario" onClick={() => proteger(() => setEditando("nueva"))}>
-          ＋ Tarea
+        <Boton onClick={() => setVerPremios(true)} aria-label="Premios" className="cel:min-w-11 cel:px-0">
+          <span className="cel:hidden">🏆 Premios</span>
+          <span className="hidden text-xl cel:inline">🏆</span>
+        </Boton>
+        <Boton variante="primario" onClick={() => proteger(() => setEditando("nueva"))} aria-label="Nueva tarea" className="cel:min-w-11 cel:px-0">
+          <span className="cel:hidden">＋ Tarea</span>
+          <span className="hidden text-xl cel:inline">＋</span>
         </Boton>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5 cel:-mx-4 cel:flex-nowrap cel:overflow-x-auto cel:px-4 cel:[scrollbar-width:none]">
         <FiltroBtn activo={filtro === "todos"} onClick={() => setFiltro("todos")}>
           Todos
         </FiltroBtn>
@@ -208,7 +213,7 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
         {(otrosDias.length > 0 || hayHechasUnaVez) && (
           <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
-              <h2 className="text-lg font-extrabold uppercase text-tinta-suave">{otrosDias.length > 0 ? "Otros días" : ""}</h2>
+              <h2 className="text-lg font-extrabold uppercase text-tinta-suave cel:text-[0.8125rem] cel:tracking-wide">{otrosDias.length > 0 ? "Otros días" : ""}</h2>
               {hayHechasUnaVez &&
                 (confirmarLimpiar ? (
                   <span className="flex items-center gap-2">
@@ -240,11 +245,11 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
                 key={t.id}
                 type="button"
                 onClick={() => proteger(() => setEditando(t))}
-                className="flex min-h-12 w-full items-center gap-3 rounded-2xl bg-superficie px-3 py-2 text-left opacity-70"
+                className="flex min-h-12 w-full items-center gap-3 rounded-2xl bg-superficie px-3 py-2 text-left opacity-70 cel:min-h-11 cel:gap-2.5 cel:rounded-xl cel:py-1.5"
               >
                 {t.miembroId && miembros.get(t.miembroId) ? <Avatar miembro={miembros.get(t.miembroId)!} tam="sm" /> : <span>👥</span>}
-                <span className="min-w-0 flex-1 truncate text-lg font-bold">{t.titulo}</span>
-                <span className="text-base font-bold text-tinta-suave">{textoRepeticion(t)}</span>
+                <span className="min-w-0 flex-1 truncate text-lg font-bold cel:text-base">{t.titulo}</span>
+                <span className="text-base font-bold text-tinta-suave cel:text-[0.8125rem]">{textoRepeticion(t)}</span>
               </button>
             ))}
           </div>
@@ -288,7 +293,7 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
 
 function Estrellas({ n, signo }: { n: number; signo?: boolean }) {
   return (
-    <span className="num inline-flex shrink-0 items-center gap-0.5 rounded-full bg-acento-suave px-2.5 py-0.5 text-lg font-extrabold">
+    <span className="num inline-flex shrink-0 items-center gap-0.5 rounded-full bg-acento-suave px-2.5 py-0.5 text-lg font-extrabold cel:px-2 cel:text-[0.9375rem]">
       ⭐ {signo && n > 0 ? "+" : ""}
       {n}
     </span>
@@ -311,7 +316,7 @@ function FiltroBtn({
       type="button"
       onClick={onClick}
       className={cx(
-        "min-h-11 rounded-full border-[3px] px-3.5 text-base font-bold transition active:scale-95",
+        "min-h-11 rounded-full border-[3px] px-3.5 text-base font-bold transition active:scale-95 cel:shrink-0 cel:whitespace-nowrap cel:border-2 cel:px-3",
         activo ? "text-tinta" : "border-transparent bg-superficie-2 text-tinta-suave",
       )}
       style={activo ? { borderColor: color ?? "var(--c-acento)", background: "var(--c-superficie)" } : undefined}
@@ -342,18 +347,28 @@ function FilaTarea({
   const mom = MOMENTOS.find((x) => x.id === t.momento);
   return (
     <div
-      className={cx("flex items-center gap-1 rounded-2xl p-1.5", enColumna ? "bg-superficie-2 pl-2" : "bg-superficie pl-2.5", hecha && "opacity-55")}
+      className={cx(
+        "flex items-center gap-1 rounded-2xl p-1.5",
+        enColumna ? "bg-superficie-2 pl-2" : "bg-superficie pl-2.5 cel:rounded-xl cel:py-0.5 cel:pl-3 cel:pr-0.5",
+        hecha && "opacity-55",
+      )}
       style={m && !enColumna ? { boxShadow: `inset 6px 0 0 ${m.color}` } : undefined}
     >
-      <button type="button" onClick={alMarcar} className={cx("flex min-h-14 min-w-0 flex-1 items-center text-left", enColumna ? "gap-2" : "gap-3")}>
+      <button type="button" onClick={alMarcar} className={cx("flex min-h-14 min-w-0 flex-1 items-center text-left", enColumna ? "gap-2" : "gap-3 cel:min-h-12 cel:gap-2.5 cel:py-1")}>
         <Casilla marcada={hecha} color={m?.color} />
         <span className="min-w-0 flex-1">
-          <span className={cx("block break-words font-extrabold leading-tight", enColumna ? "text-lg xl:text-xl" : "text-xl md:text-2xl", hecha && "line-through")}>
+          <span
+            className={cx(
+              "block break-words font-extrabold leading-tight",
+              enColumna ? "text-lg xl:text-xl" : "text-xl md:text-2xl cel:text-[1.0625rem] cel:leading-snug",
+              hecha && "line-through",
+            )}
+          >
             {mom && <span aria-label={mom.texto}>{mom.emoji} </span>}
             {t.titulo}
           </span>
           {(rep || (t.estrellas ?? 0) > 0 || (!enColumna && !m)) && (
-            <span className="mt-0.5 flex flex-wrap gap-x-2 text-base font-bold text-tinta-suave">
+            <span className="mt-0.5 flex flex-wrap gap-x-2 text-base font-bold text-tinta-suave cel:mt-0 cel:text-[0.8125rem] cel:font-semibold">
               {(t.estrellas ?? 0) > 0 && <span className="text-acento">⭐ {t.estrellas}</span>}
               {rep && <span>🔁 {rep}</span>}
               {!enColumna && !m && <span>👥 Quien pueda</span>}
@@ -553,12 +568,12 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
   return (
     <>
       <Modal titulo="🏆 Estrellas y premios" alCerrar={alCerrar} ancho="max-w-4xl">
-        <div className="space-y-6">
+        <div className="space-y-6 cel:space-y-5">
           <div className="grid gap-2 sm:grid-cols-2">
             {estado.miembros.map((m) => (
-              <div key={m.id} className="flex min-w-0 items-center gap-3 rounded-2xl bg-superficie-2 p-2 pl-3">
+              <div key={m.id} className="flex min-w-0 items-center gap-3 rounded-2xl bg-superficie-2 p-2 pl-3 cel:gap-2 cel:rounded-xl cel:py-1 cel:pl-2.5 cel:pr-1">
                 <Avatar miembro={m} />
-                <span className="min-w-0 flex-1 truncate text-xl font-extrabold">{m.nombre}</span>
+                <span className="min-w-0 flex-1 truncate text-xl font-extrabold cel:text-[1.0625rem]">{m.nombre}</span>
                 <Estrellas n={saldo.get(m.id) ?? 0} />
                 <BotonIcono etiqueta={`Quitar una estrella a ${m.nombre}`} onClick={() => ajustar(m, -1)}>
                   −
@@ -572,7 +587,7 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
 
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-lg font-extrabold uppercase text-tinta-suave">Premios</h3>
+              <h3 className="text-lg font-extrabold uppercase text-tinta-suave cel:text-[0.8125rem] cel:tracking-wide">Premios</h3>
               <Boton onClick={() => proteger(() => setNuevo({ id: nuevoId("pre"), titulo: "", emoji: "🎁", costo: 10 }))}>＋ Premio</Boton>
             </div>
             {estado.premios.length === 0 && <Vacio emoji="🎁" texto="Agrega premios para canjear con estrellas." />}
@@ -582,14 +597,14 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
                 const suyo = p.miembroId ? estado.miembros.filter((m) => m.id === p.miembroId) : [];
                 const para = suyo.length ? suyo : estado.miembros;
                 return (
-                  <div key={p.id} className="rounded-2xl bg-superficie-2 p-3">
-                    <div className="flex items-center gap-3">
+                  <div key={p.id} className="rounded-2xl bg-superficie-2 p-3 cel:rounded-xl cel:p-2.5 cel:pr-1">
+                    <div className="flex items-center gap-3 cel:gap-2.5">
                       <span className="text-4xl" aria-hidden>
                         {p.emoji}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-xl font-extrabold leading-tight">{p.titulo}</span>
-                        <span className="text-base font-bold text-tinta-suave">
+                        <span className="block text-xl font-extrabold leading-tight cel:text-[1.0625rem] cel:leading-snug">{p.titulo}</span>
+                        <span className="text-base font-bold text-tinta-suave cel:text-[0.8125rem]">
                           ⭐ {p.costo} · {p.miembroId && miembros.get(p.miembroId) ? `para ${miembros.get(p.miembroId)!.nombre}` : "para todos"}
                         </span>
                       </span>
@@ -634,7 +649,7 @@ function PremiosModal({ alCerrar }: { alCerrar: () => void }) {
 
           {historial.length > 0 && (
             <div>
-              <h3 className="mb-2 text-lg font-extrabold uppercase text-tinta-suave">Últimos movimientos</h3>
+              <h3 className="mb-2 text-lg font-extrabold uppercase text-tinta-suave cel:text-[0.8125rem] cel:tracking-wide">Últimos movimientos</h3>
               <ul className="space-y-1 text-base">
                 {historial.map((h) => (
                   <li key={h.id} className="flex items-center gap-2">

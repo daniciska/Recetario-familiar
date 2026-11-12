@@ -302,3 +302,20 @@ export function useIrAHoyEnMovil(dependencia: unknown) {
     document.querySelector("[data-hoy-movil]")?.scrollIntoView({ block: "start" });
   }, [dependencia]);
 }
+
+/**
+ * ¿Interfaz de teléfono? (la negación de MEDIA_TABLET, igual que la variante `cel:` de globals.css). Sólo
+ * para lo que el CSS no puede cambiar, como el texto de ejemplo de una entrada. Antes de hidratar (y en el
+ * servidor) es false: el tablet nunca cambia.
+ */
+export function useCelular(): boolean {
+  return useSyncExternalStore(
+    (avisar) => {
+      const mq = window.matchMedia(MEDIA_TABLET);
+      mq.addEventListener("change", avisar);
+      return () => mq.removeEventListener("change", avisar);
+    },
+    () => !window.matchMedia(MEDIA_TABLET).matches,
+    () => false,
+  );
+}

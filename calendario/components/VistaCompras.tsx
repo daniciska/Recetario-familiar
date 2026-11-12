@@ -6,6 +6,7 @@ import type { CategoriaCompra, ItemCompra, Unidad } from "@/lib/datos/tipos";
 import { CATEGORIAS, adivinarCategoria, agruparPorCategoria, textoCantidad } from "@/lib/compras";
 import { nuevoId } from "@/lib/ejemplo";
 import { hoy, lunesDe, semanaCorta } from "@/lib/fechas";
+import { useCelular } from "@/lib/hooks";
 import { Boton, BotonIcono, Casilla, Entrada, Selector, Vacio, cx } from "./ui";
 
 /** Unidades que se entienden al escribir a mano ("2 kilos de papas", "1 docena de huevos"). */
@@ -71,6 +72,7 @@ export function interpretar(texto: string): Pick<ItemCompra, "nombre" | "cantida
 /** "2–8 nov" para distinguir ítems del menú de distintas semanas. */
 export default function VistaCompras() {
   const { estado, actualizar } = useDatos();
+  const celular = useCelular();
   const [texto, setTexto] = useState("");
   const [categoria, setCategoria] = useState<CategoriaCompra | "auto">("auto");
   // Los "ocultos" son comprados que se sacaron de la vista; se guardan para descontarlos si se regenera la lista.
@@ -114,26 +116,28 @@ export default function VistaCompras() {
     );
 
   return (
-    <section className="flex h-full flex-col gap-3">
+    <section className="flex h-full flex-col gap-3 cel:gap-2">
+      {/* Celular: título y una fila para agregar (la categoría es automática; «Sacar comprados» va en «En el carro»). */}
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-2 font-display text-2xl font-semibold md:text-3xl">
+        <h1 className="mr-2 font-display text-2xl font-semibold md:text-3xl cel:text-[1.375rem]">
           Lista de compras <span className="num text-tinta-suave">· {pendientes.length}</span>
         </h1>
         {comprados.length > 0 && (
-          <Boton className="ml-auto" onClick={sacarComprados}>
+          <Boton className="ml-auto cel:hidden" onClick={sacarComprados}>
             🧹 Sacar comprados ({comprados.length})
           </Boton>
         )}
       </div>
 
-      <form onSubmit={agregar} className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+      <form onSubmit={agregar} className="grid gap-2 md:grid-cols-[1fr_auto_auto] cel:grid-cols-[minmax(0,1fr)_auto]">
         <Entrada
           value={texto}
           onChange={(e) => setTexto(e.target.value)}
-          placeholder="Agregar: “2 kg papas”, “leche”, “detergente”…"
+          placeholder={celular ? "Agregar: “2 kg papas”, “leche”…" : "Agregar: “2 kg papas”, “leche”, “detergente”…"}
+          aria-label="Agregar a la lista"
           enterKeyHint="done"
         />
-        <Selector className="md:w-auto" value={categoria} onChange={(e) => setCategoria(e.target.value as CategoriaCompra | "auto")}>
+        <Selector className="md:w-auto cel:hidden" value={categoria} onChange={(e) => setCategoria(e.target.value as CategoriaCompra | "auto")}>
           <option value="auto">✨ Categoría automática</option>
           {CATEGORIAS.map((c) => (
             <option key={c.nombre} value={c.nombre}>
@@ -141,8 +145,9 @@ export default function VistaCompras() {
             </option>
           ))}
         </Selector>
-        <Boton type="submit" variante="primario" disabled={!texto.trim()}>
-          ＋ Agregar
+        <Boton type="submit" variante="primario" disabled={!texto.trim()} aria-label="Agregar" className="cel:min-w-11 cel:px-0">
+          <span className="cel:hidden">＋ Agregar</span>
+          <span className="hidden text-xl cel:inline">＋</span>
         </Boton>
       </form>
 
@@ -152,11 +157,11 @@ export default function VistaCompras() {
         ) : (
           <div className="columns-1 gap-3 md:columns-2 xl:columns-3">
             {agruparPorCategoria(pendientes).map((g) => (
-              <div key={g.nombre} className="mb-3 break-inside-avoid rounded-3xl bg-superficie p-3">
-                <h2 className="mb-2 px-1 text-lg font-extrabold uppercase text-tinta-suave">
+              <div key={g.nombre} className="mb-3 break-inside-avoid rounded-3xl bg-superficie p-3 cel:mb-2.5 cel:px-2 cel:pb-1 cel:pt-2">
+                <h2 className="mb-2 px-1 text-lg font-extrabold uppercase text-tinta-suave cel:mb-0 cel:px-2 cel:text-[0.8125rem] cel:tracking-wide">
                   {g.emoji} {g.nombre}
                 </h2>
-                <div className="space-y-1">
+                <div className="space-y-1 cel:space-y-0">
                   {g.items.map((c) => (
                     <Fila key={c.id} item={c} conSemana={variasSemanas} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
                   ))}
@@ -164,9 +169,18 @@ export default function VistaCompras() {
               </div>
             ))}
             {comprados.length > 0 && (
-              <div className="mb-3 break-inside-avoid rounded-3xl bg-superficie p-3 opacity-80">
-                <h2 className="mb-2 px-1 text-lg font-extrabold uppercase text-ok">✓ En el carro</h2>
-                <div className="space-y-1">
+              <div className="mb-3 break-inside-avoid rounded-3xl bg-superficie p-3 opacity-80 cel:mb-2.5 cel:px-2 cel:pb-1 cel:pt-1">
+                <h2 className="mb-2 px-1 text-lg font-extrabold uppercase text-ok cel:mb-0 cel:flex cel:items-center cel:justify-between cel:gap-2 cel:px-2 cel:text-[0.8125rem] cel:tracking-wide">
+                  ✓ En el carro
+                  <button
+                    type="button"
+                    onClick={sacarComprados}
+                    className="-mr-1 hidden min-h-11 items-center rounded-xl px-2 text-[0.9375rem] font-bold normal-case tracking-normal text-acento active:bg-superficie-2 cel:inline-flex"
+                  >
+                    🧹 Sacar ({comprados.length})
+                  </button>
+                </h2>
+                <div className="space-y-1 cel:space-y-0">
                   {comprados.map((c) => (
                     <Fila key={c.id} item={c} conSemana={variasSemanas} alAlternar={() => alternar(c.id)} alQuitar={() => quitar(c.id)} />
                   ))}
@@ -196,18 +210,18 @@ function Fila({
       <button
         type="button"
         onClick={alAlternar}
-        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-2xl px-1 text-left transition active:bg-superficie-2"
+        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-2xl px-1 text-left transition active:bg-superficie-2 cel:min-h-12 cel:gap-2.5 cel:rounded-xl cel:pl-2"
       >
         <Casilla marcada={item.comprado} />
         <div className="min-w-0">
-          <div className={cx("text-xl font-extrabold leading-tight", item.comprado && "text-tinta-suave line-through")}>
+          <div className={cx("text-xl font-extrabold leading-tight cel:text-[1.0625rem] cel:leading-snug", item.comprado && "text-tinta-suave line-through")}>
             {item.nombre}
             {item.cantidad != null && (
-              <span className="num ml-2 font-bold text-acento">{textoCantidad(item.cantidad, item.unidad)}</span>
+              <span className="num ml-2 font-bold text-acento cel:ml-1.5 cel:whitespace-nowrap">{textoCantidad(item.cantidad, item.unidad)}</span>
             )}
           </div>
           {item.origen === "menu" && item.detalle && (
-            <div className="truncate text-sm font-bold text-tinta-suave">
+            <div className="truncate text-sm font-bold text-tinta-suave cel:font-semibold">
               🍽️ {conSemana && item.semana ? `${semanaCorta(item.semana)} · ` : ""}
               {item.detalle}
             </div>

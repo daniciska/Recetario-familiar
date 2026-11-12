@@ -265,9 +265,9 @@ export function TecladoPin({
         aria-modal="true"
         aria-label={titulo}
         onClick={(e) => e.stopPropagation()}
-        className="aparecer w-full max-w-sm rounded-3xl bg-superficie p-6 text-center shadow-2xl"
+        className="aparecer w-full max-w-sm rounded-3xl bg-superficie p-6 text-center shadow-2xl cel:px-5 cel:py-5"
       >
-        <div className="text-5xl" aria-hidden>
+        <div className="text-5xl cel:text-4xl" aria-hidden>
           🔒
         </div>
         {olvido && alDestrabar ? (

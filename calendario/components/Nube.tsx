@@ -39,8 +39,27 @@ export const DONDE_INVITAR = "⚙️\u00a0Familia → Compartir entre equipos �
  * guarda sus datos aparte de Safari, así que unirse con el QR de la Cámara (que abre Safari) no la une.
  */
 export function textoIconoIOS(): string {
-  const equipo = nombreDeEsteEquipo() === "iPad" ? "iPad" : "iPhone";
-  return `En el ${equipo}, el ícono de la pantalla de inicio no comparte lo de Safari: aunque te hayas unido en Safari, aquí hay que unirse de nuevo. Pide un código nuevo en otro equipo (${DONDE_INVITAR}) y escríbelo aquí.`;
+  return `En el ${equipoIOS()}, el ícono de la pantalla de inicio no comparte lo de Safari: aunque te hayas unido en Safari, aquí hay que unirse de nuevo. Pide un código nuevo en otro equipo (${DONDE_INVITAR}) y escríbelo aquí.`;
+}
+
+/** textoIconoIOS en una línea: para la franja de arriba (el texto largo queda en «Unirme con un código»). */
+export function textoIconoCorto(): string {
+  return `En el ${equipoIOS()}, el ícono no comparte lo de Safari: únete aquí con un código nuevo.`;
+}
+
+/** El resto de textoIconoIOS, para el «¿Por qué?» de la franja (va después de textoIconoCorto). */
+export function textoIconoPorQue(): string {
+  return `Aunque te hayas unido en Safari, aquí hay que unirse de nuevo: el ícono funciona como otro equipo y no ve lo que se hizo en Safari. El código nuevo se pide en un equipo ya unido (${DONDE_INVITAR}) y se escribe aquí.`;
+}
+
+const equipoIOS = () => (nombreDeEsteEquipo() === "iPad" ? "iPad" : "iPhone");
+
+/** El QR de un texto (una dirección), como SVG. */
+function svgQR(texto: string): string {
+  const q = qrcode(0, "M");
+  q.addData(texto);
+  q.make();
+  return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
 }
 
 /** El campo del código de invitación (ABCD-2345) con su botón. */
@@ -98,8 +117,7 @@ export function UnirseConCodigoModal({ alCerrar }: { alCerrar: () => void }) {
           <>
             <p className="rounded-2xl bg-acento-suave px-4 py-3">{textoIconoIOS()}</p>
             <p className="text-base text-tinta-suave">
-              Si ya te uniste en Safari en este {nombreDeEsteEquipo() === "iPad" ? "iPad" : "iPhone"}, el código lo puedes pedir ahí
-              mismo y volver al ícono a escribirlo.
+              Si ya te uniste en Safari en este {equipoIOS()}, el código lo puedes pedir ahí mismo y volver al ícono a escribirlo.
             </p>
           </>
         ) : (
@@ -360,8 +378,9 @@ function FamiliaConectada() {
       {!equipos && !msg && <p className="text-base text-tinta-suave">Cargando…</p>}
       <ul className="space-y-2">
         {equipos?.map((e) => (
-          <li key={e.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-superficie-2 px-4 py-2">
-            <span className="min-w-0 flex-1 text-lg font-bold">
+          <li key={e.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-superficie-2 px-4 py-2 cel:gap-x-2 cel:gap-y-0.5 cel:rounded-xl cel:px-3 cel:pb-1.5">
+            {/* Celular: el nombre en su línea y el botón debajo (si no, quedan apretados). */}
+            <span className="min-w-0 flex-1 text-lg font-bold cel:basis-full">
               {e.nombre} {e.esEste && <span className="font-normal text-tinta-suave">(este)</span>}
             </span>
             <Boton variante={e.esEste ? "fantasma" : "peligro"} onClick={() => setQuitar(e)}>
@@ -436,14 +455,9 @@ function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void
     };
   }, [token]);
 
-  const enlace = inv ? `${location.origin}/#unirse=${inv.codigo}` : "";
-  const svg = (() => {
-    if (!inv) return "";
-    const q = qrcode(0, "M");
-    q.addData(enlace);
-    q.make();
-    return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
-  })();
+  // El QR de unirse lleva el código; el segundo, sólo la dirección (para abrirla en Safari sin gastar el código).
+  const svgUnirse = inv ? svgQR(`${direccion}/#unirse=${inv.codigo}`) : "";
+  const svgDireccion = inv ? svgQR(`${direccion}/`) : "";
 
   return (
     <Modal titulo="📲 Invitar otro equipo" alCerrar={alCerrar} ancho="max-w-lg">
@@ -453,22 +467,37 @@ function InvitarModal({ token, alCerrar }: { token: string; alCerrar: () => void
         <p className="text-lg text-tinta-suave">Creando el código…</p>
       ) : (
         <div className="space-y-4 text-center">
-          <div className="mx-auto w-60 rounded-2xl bg-white p-2" aria-label="Código QR para unirse" dangerouslySetInnerHTML={{ __html: svg }} />
+          <div className="mx-auto w-60 rounded-2xl bg-white p-2" role="img" aria-label="Código QR para unirse" dangerouslySetInnerHTML={{ __html: svgUnirse }} />
           <p className="text-lg">
-            En el iPhone o iPad, abre la <strong>Cámara</strong> y apunta al código.
+            En el iPhone o iPad, abre la <strong>Cámara</strong> y apunta al código: se une en Safari.
           </p>
           <p className="text-base text-tinta-suave">
             O en el otro equipo: toca «Unirme con un código» (arriba) o ve a Familia → Compartir entre equipos, y escribe
           </p>
           <p className="num font-display text-4xl font-semibold tracking-widest">{formatoCodigo(inv.codigo)}</p>
           <p className="text-base text-tinta-suave">Sirve una vez y vence en 24 horas.</p>
-          {/* La Cámara abre Safari, y en el iPhone el ícono de la pantalla de inicio guarda sus datos aparte. */}
-          <div className="space-y-3 rounded-2xl bg-acento-suave px-4 py-3 text-left text-base">
+          {/* La Cámara abre Safari, y en el iPhone el ícono de la pantalla de inicio guarda sus datos aparte:
+              si escanean el QR de arriba se une Safari y el código queda gastado para el ícono. */}
+          <div className="space-y-3 rounded-2xl bg-acento-suave px-4 py-3 text-left text-base" data-guia="como-app">
             <p>
-              <strong>¿La quieren como app en el iPhone?</strong> Primero abran la dirección en Safari → Compartir → Agregar a
-              pantalla de inicio, ábranla desde el ícono y escriban este código ahí (la Cámara abre Safari, y lo que se hace en
-              Safari no pasa al ícono).
+              <strong>¿La quieren como app en el iPhone o iPad?</strong> Entonces <strong>no escaneen el QR de arriba</strong>: se
+              uniría Safari, no la app, y el código quedaría gastado.
             </p>
+            <ol className="list-decimal space-y-1 pl-6">
+              <li>Escaneen este otro QR con la Cámara: sólo abre la dirección en Safari, sin unirse.</li>
+              <li>En Safari: Compartir → Agregar a pantalla de inicio.</li>
+              <li>
+                Ábranla desde el ícono, toquen «Unirme con un código» y escriban{" "}
+                <strong className="num whitespace-nowrap">{formatoCodigo(inv.codigo)}</strong>.
+              </li>
+            </ol>
+            <div
+              className="mx-auto w-40 rounded-2xl bg-white p-2"
+              role="img"
+              aria-label="Código QR sólo con la dirección (no une)"
+              dangerouslySetInnerHTML={{ __html: svgDireccion }}
+            />
+            <p className="text-tinta-suave">O manden la dirección (por WhatsApp, por ejemplo):</p>
             <div className="flex flex-wrap items-center gap-2">
               <input
                 ref={campoDireccion}

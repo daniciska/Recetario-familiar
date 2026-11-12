@@ -101,12 +101,21 @@ export async function api<T = Record<string, unknown>>(
 const CLAVE_UNIDO = "calendario-familiar:nube:recien";
 const CLAVE_SIN_NUBE = "calendario-familiar:equipo:solo-aqui";
 
-/** Antes de recargar tras unirse ("unido") o crear la familia ("creada"): el panel lo celebra al abrir. */
+/**
+ * Antes de recargar tras unirse ("unido") o crear la familia ("creada"): el panel lo celebra al abrir.
+ * También olvida «Usar sólo en este equipo», que valía mientras el equipo no estaba unido: si después se
+ * desconecta o le quitan el acceso, la franja de equipo sin unir tiene que volver.
+ */
 export function anotarRecienUnido(como: "unido" | "creada") {
   try {
     localStorage.setItem(CLAVE_UNIDO, como);
   } catch {
     /* sin almacenamiento: no hay mensaje, nada más */
+  }
+  try {
+    localStorage.removeItem(CLAVE_SIN_NUBE);
+  } catch {
+    /* nada */
   }
 }
 export function leerRecienUnido(): "unido" | "creada" | null {
@@ -125,7 +134,10 @@ export function olvidarRecienUnido() {
   }
 }
 
-/** «Usar sólo en este equipo»: no mostrar el aviso de equipo sin familia (sólo en este equipo). */
+/**
+ * «Usar sólo en este equipo»: no mostrar el aviso de equipo sin familia (sólo en este equipo, y sólo
+ * hasta que se una o cree la familia: anotarRecienUnido lo borra).
+ */
 export function avisoSinFamiliaOculto(): boolean {
   try {
     return localStorage.getItem(CLAVE_SIN_NUBE) === "1";

@@ -201,7 +201,7 @@ export default function EventoModal({
         </>
       }
     >
-      <div className="space-y-5">
+      <div className="space-y-5 cel:space-y-4">
         {error && <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300">{error}</p>}
         <Campo etiqueta="¿Qué es?">
           <Entrada
@@ -213,7 +213,7 @@ export default function EventoModal({
         </Campo>
 
         <div>
-          <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Para quién? (puedes elegir varios)</span>
+          <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">¿Para quién? (puedes elegir varios)</span>
           <div className="flex flex-wrap gap-2">
             {estado.miembros.map((m) => (
               <ChipMiembro
@@ -231,7 +231,7 @@ export default function EventoModal({
             <button
               type="button"
               onClick={() => set("miembros", estado.miembros.map((m) => m.id))}
-              className="min-h-12 rounded-full bg-superficie-2 px-4 text-lg font-bold text-tinta-suave"
+              className="min-h-12 rounded-full bg-superficie-2 px-4 text-lg font-bold text-tinta-suave cel:min-h-11 cel:px-3 cel:text-base"
             >
               👨‍👩‍👧‍👦 Todos
             </button>
@@ -241,7 +241,7 @@ export default function EventoModal({
         <div className="grid gap-4 sm:grid-cols-2">
           {repeticionDeAfuera ? (
             <div>
-              <span className="mb-1.5 block text-base font-bold text-tinta-suave">Desde</span>
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">Desde</span>
               <span className="block text-lg font-bold first-letter:uppercase">{fechaLarga(f.fecha, true)}</span>
             </div>
           ) : (
@@ -251,7 +251,7 @@ export default function EventoModal({
             </Campo>
           )}
           <div>
-            <span className="mb-1.5 block text-base font-bold text-tinta-suave">Horario</span>
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">Horario</span>
             <Segmentos
               valor={f.todoElDia ? "todo" : "hora"}
               alCambiar={(v) =>
@@ -275,7 +275,7 @@ export default function EventoModal({
             role="switch"
             aria-checked={variosDias}
             onClick={() => set("fechaFin", variosDias ? undefined : sumarDias(f.fecha, 1))}
-            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left cel:min-h-12 cel:gap-2.5 cel:rounded-xl cel:px-3 cel:py-1.5"
           >
             <Casilla marcada={variosDias} />
             <span className="flex-1 text-lg font-bold">Dura varios días</span>
@@ -306,11 +306,11 @@ export default function EventoModal({
         {!f.todoElDia && (
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="mb-1.5 block text-base font-bold text-tinta-suave">{variosDias ? "Empieza el primer día" : "Empieza"}</span>
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">{variosDias ? "Empieza el primer día" : "Empieza"}</span>
               <SelectorHora etiqueta="Empieza" valor={f.horaInicio ?? HORA_DEFECTO} alCambiar={cambiarInicio} />
             </div>
             <div>
-              <span className="mb-1.5 block text-base font-bold text-tinta-suave">
+              <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">
                 {variosDias ? "Termina el último día" : "Termina (opcional)"}
               </span>
               <SelectorHora etiqueta="Termina" opcional valor={f.horaFin} alCambiar={(v) => set("horaFin", v)} />
@@ -339,15 +339,16 @@ export default function EventoModal({
           </div>
         ) : (
           <div>
-            <span className="mb-1.5 block text-base font-bold text-tinta-suave">¿Se repite?</span>
-            <div className="flex flex-wrap gap-2">
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">¿Se repite?</span>
+            {/* Celular: las 5 opciones en 2 filas de 3 columnas. */}
+            <div className="flex flex-wrap gap-2 cel:grid cel:grid-cols-3 cel:gap-1.5">
               {(Object.keys(NOMBRE_REPETICION) as Repeticion[]).map((r) => (
                 <button
                   key={r}
                   type="button"
                   onClick={() => cambiarRepeticion(r)}
                   className={
-                    "min-h-12 rounded-2xl px-4 text-lg font-bold transition " +
+                    "min-h-12 rounded-2xl px-4 text-lg font-bold transition cel:min-h-11 cel:rounded-xl cel:px-1 cel:text-[0.9375rem] cel:leading-tight " +
                     (f.repeticion === r ? "bg-acento text-acento-tinta" : "bg-superficie-2 text-tinta-suave")
                   }
                 >
@@ -359,7 +360,7 @@ export default function EventoModal({
         )}
 
         {!repeticionDeAfuera && !diaDeSerie && f.repeticion !== "nunca" && (
-          <div className="-mt-1 space-y-3 rounded-2xl bg-superficie-2 px-4 py-3">
+          <div className="-mt-1 space-y-3 rounded-2xl bg-superficie-2 px-4 py-3 cel:rounded-xl cel:px-3">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-lg font-bold">Cada</span>
               <Contador
@@ -372,8 +373,8 @@ export default function EventoModal({
             </div>
             {f.repeticion === "semanal" && (
               <div>
-                <span className="mb-1.5 block text-base font-bold text-tinta-suave">Los días</span>
-                <div className="flex flex-wrap gap-1.5">
+                <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">Los días</span>
+                <div className="flex flex-wrap gap-1.5 cel:grid cel:grid-cols-7 cel:gap-1">
                   {DIAS_CORTOS.map((d, i) => {
                     const activo = diasDeLaSemana(f).includes(i);
                     return (
@@ -383,7 +384,7 @@ export default function EventoModal({
                         aria-pressed={activo}
                         onClick={() => cambiarDiasSemana(i)}
                         className={cx(
-                          "min-h-12 min-w-12 rounded-full px-3 text-lg font-bold capitalize transition",
+                          "min-h-12 min-w-12 rounded-full px-3 text-lg font-bold capitalize transition cel:min-h-11 cel:min-w-0 cel:px-0 cel:text-sm",
                           activo ? "bg-acento text-acento-tinta" : "bg-superficie text-tinta-suave",
                         )}
                       >
@@ -431,7 +432,7 @@ export default function EventoModal({
           role="switch"
           aria-checked={!!f.cuentaRegresiva}
           onClick={() => set("cuentaRegresiva", f.cuentaRegresiva ? undefined : true)}
-          className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+          className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left cel:min-h-12 cel:gap-2.5 cel:rounded-xl cel:px-3 cel:py-1.5"
         >
           <Casilla marcada={!!f.cuentaRegresiva} />
           <span className="flex-1">
@@ -454,7 +455,7 @@ export default function EventoModal({
             role="switch"
             aria-checked={!f.soloPanel}
             onClick={() => set("soloPanel", f.soloPanel ? undefined : true)}
-            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left"
+            className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-superficie-2 px-4 text-left cel:min-h-12 cel:gap-2.5 cel:rounded-xl cel:px-3 cel:py-1.5"
           >
             <Casilla marcada={!f.soloPanel} />
             <span className="flex-1">

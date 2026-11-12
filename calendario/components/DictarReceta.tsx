@@ -607,24 +607,24 @@ function Inicio({
   const [ios] = useState(() => esIOS());
   const [accept] = useState(() => aceptarArchivos());
   return (
-    <div className="space-y-4 text-lg">
+    <div className="space-y-4 text-lg cel:space-y-3 cel:text-base">
       {aviso && (
         <p role="alert" className="rounded-2xl bg-red-600/15 px-4 py-2 font-bold text-red-700 noche:text-red-300">
           {aviso}
         </p>
       )}
-      {geminiFalta && <p className="rounded-2xl bg-acento-suave px-4 py-3">{TEXTOS.geminiNoConectado}</p>}
+      {geminiFalta && <p className="rounded-2xl bg-acento-suave px-4 py-3 cel:px-3 cel:py-2 cel:text-[0.9375rem]">{TEXTOS.geminiNoConectado}</p>}
       <p>{TEXTOS.inicio}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Boton variante="primario" grande disabled={!graba || iniciando} onClick={alGrabar}>
             {iniciando ? TEXTOS.abriendoMicrofono : TEXTOS.empezar}
           </Boton>
-          {!graba && <span className="text-base text-tinta-suave">{TEXTOS.sinGrabadora}</span>}
-          {graba && ios && <span className="text-base text-tinta-suave">{TEXTOS.permisoIphone}</span>}
+          {!graba && <span className="text-base text-tinta-suave cel:text-sm">{TEXTOS.sinGrabadora}</span>}
+          {graba && ios && <span className="text-base text-tinta-suave cel:text-sm">{TEXTOS.permisoIphone}</span>}
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="inline-flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-2xl bg-superficie-2 px-6 text-xl font-bold transition active:scale-[0.97]">
+          <label className="inline-flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-2xl bg-superficie-2 px-6 text-xl font-bold transition active:scale-[0.97] cel:min-h-12 cel:px-5">
             {TEXTOS.subirAudio}
             {/* En iOS sin `accept`: con "audio/*" el selector no deja elegir el .opus de WhatsApp desde Archivos. */}
             <input
@@ -639,18 +639,18 @@ function Inicio({
               }}
             />
           </label>
-          <span className="text-base text-tinta-suave">{TEXTOS.subirAudioLinea}</span>
+          <span className="text-base text-tinta-suave cel:text-sm">{TEXTOS.subirAudioLinea}</span>
         </div>
       </div>
       <details className="rounded-2xl bg-superficie-2 p-3 text-base">
-        <summary className="min-h-8 cursor-pointer text-lg font-bold">{TEXTOS.whatsappTitulo}</summary>
-        <ol className="mt-2 list-decimal space-y-1 pl-6 text-lg">
+        <summary className="min-h-8 cursor-pointer text-lg font-bold cel:min-h-11 cel:py-2.5 cel:text-base">{TEXTOS.whatsappTitulo}</summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-6 text-lg cel:pl-5 cel:text-base">
           {TEXTOS.whatsappPasos.map((p) => (
             <li key={p}>{p}</li>
           ))}
         </ol>
       </details>
-      <p className="text-base text-tinta-suave">{TEXTOS.privacidad}</p>
+      <p className="text-base text-tinta-suave cel:text-sm">{TEXTOS.privacidad}</p>
     </div>
   );
 }

@@ -18,8 +18,9 @@ import { AvisoRecienUnido, AvisoSinFamilia } from "./AvisoEquipo";
 
 export type Pestana = "calendario" | "comidas" | "recetas" | "compras" | "tareas" | "ajustes";
 
-const PESTANAS: { id: Pestana; icono: string; texto: string }[] = [
-  { id: "calendario", icono: "📅", texto: "Calendario" },
+// `iconoCel`: en la barra del teléfono. 📅 dibuja «July 17» (una fecha cualquiera) y ahí se lee mal.
+const PESTANAS: { id: Pestana; icono: string; iconoCel?: string; texto: string }[] = [
+  { id: "calendario", icono: "📅", iconoCel: "🗓️", texto: "Calendario" },
   { id: "comidas", icono: "🍽️", texto: "Menú" },
   { id: "recetas", icono: "📖", texto: "Recetas" },
   { id: "compras", icono: "🛒", texto: "Compras" },
@@ -152,14 +153,15 @@ function Panel() {
         <AvisoSinFamilia compacto={modoPared} />
         <AvisoRecienUnido />
         {errorGuardado && (
-          <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4">
+          <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4 cel:mx-4 cel:gap-2 cel:px-3 cel:py-1">
             <span className="flex-1">{errorGuardado}</span>
             <button type="button" onClick={cerrarError} aria-label="Cerrar aviso" className="min-h-11 min-w-11 rounded-xl text-xl">
               ✕
             </button>
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-4 md:pb-4">
+        {/* Celular: márgenes de 16 px, como una app de teléfono. */}
+        <main className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-4 md:pb-4 cel:px-4 cel:pb-2">
           {pestana === "calendario" && (
             <VistaCalendario key={reinicio} hoy={ahora.fecha} clima={clima} alIrAMenu={() => ir("comidas")} />
           )}
@@ -173,22 +175,35 @@ function Panel() {
 
       {unirse && <UnirseModal codigo={unirse} alCerrar={() => setUnirse(null)} />}
 
-      {/* Barra inferior (teléfono) */}
+      {/* Barra inferior (teléfono): 52 px más la zona segura; la pestaña activa con una píldora detrás del
+          ícono (el emoji no se puede teñir) y la etiqueta en el color de acento. */}
       <nav className="grid shrink-0 grid-cols-6 border-t border-borde bg-superficie pb-[env(safe-area-inset-bottom)] md:hidden">
-        {PESTANAS.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => ir(p.id)}
-            className={cx(
-              "flex min-h-16 flex-col items-center justify-center gap-0.5 text-xs font-bold",
-              pestana === p.id ? "text-acento" : "text-tinta-suave",
-            )}
-          >
-            <span className={cx("text-2xl transition", pestana === p.id && "scale-110")}>{p.icono}</span>
-            {p.texto}
-          </button>
-        ))}
+        {PESTANAS.map((p) => {
+          const activa = pestana === p.id;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => ir(p.id)}
+              aria-current={activa ? "page" : undefined}
+              className={cx(
+                "flex min-h-13 min-w-0 flex-col items-center justify-center gap-0.5 pt-1 text-[0.6875rem] font-bold leading-tight",
+                activa ? "text-acento" : "text-tinta-suave",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cx(
+                  "flex h-7 w-12 items-center justify-center rounded-full text-[1.375rem] leading-none transition",
+                  activa ? "bg-acento-suave" : "opacity-85",
+                )}
+              >
+                {p.iconoCel ?? p.icono}
+              </span>
+              <span className="max-w-full truncate px-0.5">{p.texto}</span>
+            </button>
+          );
+        })}
       </nav>
     </div>
   );

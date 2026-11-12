@@ -19,6 +19,7 @@ import {
   TIPOS_COMIDA,
   atajosComida,
   claveComida,
+  emojiComida,
   esComidaEntera,
   itemsLlenos,
   itemsVisibles,
@@ -62,20 +63,32 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   };
 
   return (
-    <section className="flex h-full flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
-        <BotonIcono etiqueta="Semana anterior" onClick={() => setSemana(sumarDias(lunes, -7))}>
+    <section className="flex h-full flex-col gap-3 cel:gap-2">
+      {/* Celular (una fila): ‹ semana › ↻ 🛒; tocar la semana vuelve a esta semana. */}
+      <div className="flex flex-wrap items-center gap-2 md:flex-nowrap cel:grid cel:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] cel:gap-x-1">
+        <BotonIcono etiqueta="Semana anterior" onClick={() => setSemana(sumarDias(lunes, -7))} className="cel:col-start-1 cel:row-start-1">
           ‹
         </BotonIcono>
-        <Boton onClick={() => setSemana(null)} className={cx("whitespace-nowrap", lunes === lunesDe(hoy) && "opacity-60")}>
+        <Boton onClick={() => setSemana(null)} className={cx("whitespace-nowrap", lunes === lunesDe(hoy) && "opacity-60", "cel:hidden")}>
           {/* En el tablet angosto (iPad vertical) "Hoy" deja espacio para el rango de la semana. */}
           <span className="md:max-[56rem]:hidden">Esta semana</span>
           <span className="hidden md:max-[56rem]:inline">Hoy</span>
         </Boton>
-        <BotonIcono etiqueta="Semana siguiente" onClick={() => setSemana(sumarDias(lunes, 7))}>
+        <BotonIcono etiqueta="Semana siguiente" onClick={() => setSemana(sumarDias(lunes, 7))} className="cel:col-start-3 cel:row-start-1">
           ›
         </BotonIcono>
-        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold leading-tight md:flex-1 xl:text-3xl">
+        <button
+          type="button"
+          onClick={() => setSemana(null)}
+          aria-label={`Menú ${rangoSemana(lunes)}${lunes === lunesDe(hoy) ? "" : ". Volver a esta semana"}`}
+          className="hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
+        >
+          <span className="max-w-full truncate font-display text-2xl font-semibold">{semanaCorta(lunes)}</span>
+          <span className={cx("text-xs font-bold", lunes === lunesDe(hoy) ? "text-tinta-suave" : "text-acento")}>
+            {lunes === lunesDe(hoy) ? "Esta semana" : "↩ Volver a esta semana"}
+          </span>
+        </button>
+        <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold leading-tight md:flex-1 xl:text-3xl cel:hidden">
           <span className="md:max-xl:hidden">Menú </span>
           <span className="text-tinta-suave">
             <span className="md:max-xl:hidden">· </span>
@@ -83,12 +96,24 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
             <span className="hidden md:max-[56rem]:inline">{semanaCorta(lunes)}</span>
           </span>
         </h1>
-        <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-none md:flex-nowrap">
-          <Boton onClick={() => proteger(repetirSemanaPasada)} className="whitespace-nowrap" aria-label="Repetir la semana pasada" title="Repetir la semana pasada">
-            ↻<span className="md:max-xl:hidden"> Repetir semana</span>
+        <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-none md:flex-nowrap cel:contents">
+          <Boton
+            onClick={() => proteger(repetirSemanaPasada)}
+            className="whitespace-nowrap cel:col-start-4 cel:row-start-1 cel:ml-1 cel:min-w-11 cel:px-0"
+            aria-label="Repetir la semana pasada"
+            title="Repetir la semana pasada"
+          >
+            ↻<span className="md:max-xl:hidden cel:hidden"> Repetir semana</span>
           </Boton>
-          <Boton variante="primario" className="whitespace-nowrap" onClick={() => proteger(() => setGenerando(lunes))} disabled={nComidas === 0}>
-            🛒 <span className="md:max-xl:hidden">Generar lista de compras</span>
+          <Boton
+            variante="primario"
+            className="whitespace-nowrap cel:col-start-5 cel:row-start-1 cel:ml-1 cel:min-w-11 cel:px-0"
+            aria-label="Generar lista de compras"
+            title="Generar lista de compras"
+            onClick={() => proteger(() => setGenerando(lunes))}
+            disabled={nComidas === 0}
+          >
+            🛒 <span className="md:max-xl:hidden cel:hidden">Generar lista de compras</span>
             <span className="hidden md:max-xl:inline">Lista de compras</span>
           </Boton>
         </div>
@@ -115,24 +140,25 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
         ))}
       </div>
 
-      {/* Teléfono: un bloque por día */}
-      <div className="desliza min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden">
+      {/* Teléfono: un bloque por día con una fila por comida (unos 2 días por pantalla) */}
+      <div className="desliza min-h-0 flex-1 space-y-2.5 overflow-y-auto md:hidden">
         {dias.map((f, i) => (
-          <div key={f} data-hoy-movil={f === hoy || undefined} className={cx("scroll-mt-2 rounded-3xl border-[3px] p-3", f === hoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie")}>
-            <div className="mb-2 text-xl font-extrabold">
+          <div
+            key={f}
+            data-hoy-movil={f === hoy || undefined}
+            className={cx("scroll-mt-1 rounded-2xl border-2 px-2 pb-1 pt-2", f === hoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie")}
+          >
+            <div className="pb-0.5 pl-2 text-[1.0625rem] font-bold">
               {DIAS_LARGOS[i]} <span className="num">{partes(f).dia}</span>
-              {f === hoy && <span className="ml-2 text-acento">· Hoy</span>}
+              {f === hoy && <span className="ml-1.5 text-acento">· Hoy</span>}
             </div>
-            {/* 5 comidas en 2 columnas: la última (cena) ocupa la fila entera. */}
-            <div className="grid grid-cols-2 gap-2 [&>:last-child:nth-child(odd)]:col-span-2">
+            <div className="divide-y divide-borde">
               {TIPOS_COMIDA.map((t) => (
-                <Celda
+                <FilaComidaCel
                   key={t.id}
                   tipo={t}
                   comida={estado.plan[claveComida(f, t.id)]}
                   recetas={recetas}
-                  esHoy={false}
-                  conEtiqueta
                   onClick={() => setCelda({ fecha: f, tipo: t.id })}
                 />
               ))}
@@ -237,7 +263,6 @@ function Celda({
   comida,
   recetas,
   esHoy,
-  conEtiqueta,
   enGrilla,
   onClick,
 }: {
@@ -245,7 +270,6 @@ function Celda({
   comida?: ComidaPlanificada;
   recetas: Map<string, Receta>;
   esHoy: boolean;
-  conEtiqueta?: boolean;
   /** En la grilla del tablet la celda se ajusta a su fila (pantallas bajas como el Fire HD 8). */
   enGrilla?: boolean;
   onClick: () => void;
@@ -275,7 +299,6 @@ function Celda({
         !llenos.length && "border-dashed border-borde",
       )}
     >
-      {conEtiqueta && <span className="text-xs font-extrabold uppercase text-tinta-suave">{tipo.nombre}</span>}
       {!llenos.length ? (
         <span className="text-3xl text-borde">＋</span>
       ) : !varios ? (
@@ -346,6 +369,56 @@ function Celda({
           {vacios > 0 && <span className="tracking-[0.2em] text-borde">{"＋".repeat(vacios)}</span>}
           {varios && conReceta && <span className="text-tinta-suave">👥{comida!.porciones}</span>}
         </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Celular: una comida en una fila: el emoji (de la receta o de la comida), el tipo en mayúsculas y lo que
+ * hay seguido ("Charquicán · Ensalada · Fruta", hasta 2 líneas); vacía, un ＋. Lo mismo que la celda.
+ */
+function FilaComidaCel({
+  tipo,
+  comida,
+  recetas,
+  onClick,
+}: {
+  tipo: (typeof TIPOS_COMIDA)[number];
+  comida?: ComidaPlanificada;
+  recetas: Map<string, Receta>;
+  onClick: () => void;
+}) {
+  const items = itemsVisibles(comida, tipo.id, recetas);
+  const llenos = items.filter((x): x is ItemComida => !!x);
+  const vacios = esComidaEntera(comida, tipo.id, recetas) ? 0 : items.length - llenos.length;
+  const nombres = llenos.map((x) => nombreItem(x, recetas));
+  const conReceta = llenos.some((x) => x.recetaId);
+  const emoji = emojiComida(comida, recetas) ?? (llenos.length ? "🍴" : tipo.emoji);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`${tipo.nombre}: ${nombres.length ? nombres.join(", ") : "nada todavía"}${vacios && nombres.length ? ` (${vacios} ${vacios === 1 ? "espacio libre" : "espacios libres"})` : ""}`}
+      className="flex min-h-11 w-full items-center gap-2 rounded-lg px-1 py-1 text-left transition active:bg-superficie-2"
+    >
+      <span aria-hidden className={cx("w-7 shrink-0 text-center text-[1.375rem] leading-none", !llenos.length && "opacity-45 grayscale")}>
+        {emoji}
+      </span>
+      <span className="w-[4.75rem] shrink-0 text-xs font-bold uppercase tracking-wide text-tinta-suave">{tipo.nombre}</span>
+      <span className="line-clamp-2 min-w-0 flex-1 break-words text-[0.9375rem] font-semibold leading-snug">{nombres.join(" · ")}</span>
+      {llenos.length > 0 && conReceta && <span className="num shrink-0 text-xs font-bold text-tinta-suave">👥{comida!.porciones}</span>}
+      {/* Vacía: un ＋ punteado (como la celda del tablet). Con espacios libres, sólo un ＋ tenue. */}
+      {!llenos.length ? (
+        <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-dashed border-borde text-base leading-none text-tinta-suave">
+          ＋
+        </span>
+      ) : (
+        vacios > 0 && (
+          <span aria-hidden className="w-7 shrink-0 text-center text-base leading-none text-borde">
+            ＋
+          </span>
+        )
       )}
     </button>
   );
@@ -449,11 +522,11 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
         </>
       }
     >
-      <div className="space-y-5">
-        <div className="flex flex-wrap items-center gap-4 rounded-2xl bg-superficie-2 p-3">
-          <span className="text-lg font-bold">¿Para cuántos?</span>
+      <div className="space-y-5 cel:space-y-4">
+        <div className="flex flex-wrap items-center gap-4 rounded-2xl bg-superficie-2 p-3 cel:gap-x-3 cel:gap-y-0 cel:py-1.5 cel:pl-3 cel:pr-1.5">
+          <span className="text-lg font-bold cel:flex-1 cel:text-base">¿Para cuántos?</span>
           <Contador valor={porciones} alCambiar={setPorciones} />
-          <span className="text-base text-tinta-suave">Las cantidades se ajustan solas.</span>
+          <span className="text-base text-tinta-suave cel:basis-full cel:pb-1 cel:text-xs">Las cantidades se ajustan solas.</span>
         </div>
 
         {/* grid-cols-1 (minmax(0, 1fr)): un nombre largo se corta con "…" en vez de ensanchar la columna. */}
@@ -475,25 +548,26 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
 
         <div ref={elegirRef} className="scroll-mt-2">
           {!unSolo && (
-            <h3 className="mb-2 text-xl font-extrabold">
+            <h3 className="mb-2 text-xl font-extrabold cel:mb-1.5 cel:text-[1.0625rem]">
               Para {espacio?.nombre ? `«${espacio.nombre}»` : `el ítem ${sel + 1}`}
               {espacio && !espacio.nombre && <span className="font-bold text-tinta-suave"> · p. ej. {espacio.ejemplo.toLowerCase()}</span>}
             </h3>
           )}
           <Entrada placeholder="🔎 Buscar receta…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {/* Celular: baldosas de 3 columnas (unas 9 recetas por pantalla). */}
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 cel:mt-2 cel:grid-cols-3 cel:gap-1.5">
             {filtradas.map((r) => (
               <button
                 key={r.id}
                 type="button"
                 onClick={() => ponerEn(sel, { recetaId: r.id })}
                 className={cx(
-                  "flex min-h-24 flex-col items-center justify-center gap-1 rounded-2xl border-[3px] bg-superficie p-2 text-center transition active:scale-95",
+                  "flex min-h-24 flex-col items-center justify-center gap-1 rounded-2xl border-[3px] bg-superficie p-2 text-center transition active:scale-95 cel:min-h-20 cel:gap-0.5 cel:rounded-xl cel:border-2 cel:p-1.5",
                   items[sel]?.recetaId === r.id ? "border-acento" : "border-borde",
                 )}
               >
-                <FotoReceta receta={r} className="size-12 text-4xl" />
-                <span className="text-lg font-extrabold leading-tight">{r.nombre}</span>
+                <FotoReceta receta={r} className="size-12 text-4xl cel:size-9 cel:text-[1.75rem]" />
+                <span className="text-lg font-extrabold leading-tight cel:line-clamp-2 cel:text-sm cel:break-words">{r.nombre}</span>
               </button>
             ))}
             {filtradas.length === 0 && (
@@ -505,7 +579,7 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
         </div>
 
         <div>
-          <span className="mb-1.5 block text-base font-bold text-tinta-suave">…o escribe algo sin receta</span>
+          <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">…o escribe algo sin receta</span>
           <div className="mb-2 flex flex-wrap gap-2">
             {/* Con un solo espacio, ponerlo o poner la comida entera es lo mismo: van todos juntos. */}
             {(unSolo ? [...new Set([...atajosItem, ...atajosTodo])] : atajosItem).map((a) => (
@@ -538,7 +612,7 @@ function AsignarComida({ fecha, tipo, alCerrar }: { fecha: string; tipo: TipoCom
 
         {!unSolo && (
           <div>
-            <span className="mb-1.5 block text-base font-bold text-tinta-suave">Para toda la comida (vacía los demás espacios)</span>
+            <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">Para toda la comida (vacía los demás espacios)</span>
             <div className="flex flex-wrap gap-2">
               {atajosTodo.map((a) => (
                 <button
@@ -585,20 +659,20 @@ function EspacioFila({
   return (
     <div
       className={cx(
-        "flex min-h-16 items-center gap-1 rounded-2xl border-[3px] pr-1.5 transition",
+        "flex min-h-16 items-center gap-1 rounded-2xl border-[3px] pr-1.5 transition cel:min-h-13 cel:rounded-xl cel:border-2 cel:pr-1",
         elegido ? "border-acento bg-acento-suave" : item ? "border-borde bg-superficie" : "border-dashed border-borde bg-superficie",
       )}
     >
-      <button type="button" onClick={alElegir} aria-pressed={elegido} className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch py-1.5 pl-3 text-left">
+      <button type="button" onClick={alElegir} aria-pressed={elegido} className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch py-1.5 pl-3 text-left cel:gap-2 cel:py-1 cel:pl-2">
         {r ? (
-          <FotoReceta receta={r} className="size-10 text-3xl" />
+          <FotoReceta receta={r} className="size-10 text-3xl cel:size-8 cel:text-2xl" />
         ) : (
-          <span aria-hidden className={cx("w-10 shrink-0 text-center text-2xl", !item && "text-borde")}>
+          <span aria-hidden className={cx("w-10 shrink-0 text-center text-2xl cel:w-8 cel:text-xl", !item && "text-borde")}>
             {item ? "🍴" : "＋"}
           </span>
         )}
         <span className="min-w-0 flex-1 leading-tight">
-          <span className="block text-sm font-extrabold uppercase text-tinta-suave">{etiqueta}</span>
+          <span className="block text-sm font-extrabold uppercase text-tinta-suave cel:text-xs">{etiqueta}</span>
           <span className={cx("block truncate text-lg", item ? "font-extrabold" : "text-tinta-suave")}>
             {item ? nombreItem(item, recetas) : ejemplo ? `Ej.: ${ejemplo}` : "Vacío"}
           </span>
@@ -653,11 +727,12 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
   return (
     <Modal
       titulo={`🛒 Compras del menú · ${rangoSemana(lunes)}`}
+      tituloCorto={`🛒 Compras · ${semanaCorta(lunes)}`}
       alCerrar={alCerrar}
       ancho="max-w-3xl"
       pie={
         <>
-          <span className="mr-auto text-base text-tinta-suave">Desmarca lo que ya tienes en casa.</span>
+          <span className="mr-auto text-base text-tinta-suave cel:hidden">Desmarca lo que ya tienes en casa.</span>
           <Boton variante="fantasma" onClick={alCerrar}>
             Cancelar
           </Boton>
@@ -671,8 +746,10 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
         </>
       }
     >
+      {/* Celular: la ayuda va arriba de la lista (en el pie no cabe junto a los botones). */}
+      <p className="mb-3 hidden text-sm text-tinta-suave cel:block">Desmarca lo que ya tienes en casa.</p>
       {yaHabia && (
-        <p className="mb-4 rounded-2xl bg-acento-suave px-4 py-3 text-lg">
+        <p className="mb-4 rounded-2xl bg-acento-suave px-4 py-3 text-lg cel:mb-3 cel:px-3 cel:py-2 cel:text-[0.9375rem]">
           {elegidas.length === 0 && nPendientes > 0 ? (
             `${quedaPorMandar ? "Desmarcaste todo." : "No queda nada por mandar."} Al confirmar se quitan de la lista ${nPendientes === 1 ? "el pendiente" : `los ${nPendientes} pendientes`} que había mandado el menú de esta semana.`
           ) : (
@@ -688,10 +765,10 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
           )}
         </p>
       )}
-      <div className="space-y-5">
+      <div className="space-y-5 cel:space-y-4">
         {grupos.map((g) => (
           <div key={g.nombre}>
-            <h3 className="mb-2 text-lg font-extrabold uppercase text-tinta-suave">
+            <h3 className="mb-2 text-lg font-extrabold uppercase text-tinta-suave cel:mb-1.5 cel:text-[0.8125rem] cel:tracking-wide">
               {g.emoji} {g.nombre}
             </h3>
             <div className="space-y-1.5">
@@ -714,13 +791,13 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
                       })
                     }
                     className={cx(
-                      "flex w-full items-center gap-3 rounded-2xl bg-superficie-2 px-3 py-2 text-left transition",
+                      "flex w-full items-center gap-3 rounded-2xl bg-superficie-2 px-3 py-2 text-left transition cel:min-h-12 cel:gap-2.5 cel:rounded-xl cel:py-1.5",
                       !marcado && "opacity-50",
                     )}
                   >
                     <Casilla marcada={marcado} />
                     <div className="min-w-0 flex-1">
-                      <div className="text-xl font-extrabold">
+                      <div className="text-xl font-extrabold cel:text-[1.0625rem] cel:leading-snug">
                         {l.nombre}{" "}
                         {todoComprado ? (
                           <span className="font-bold text-ok">✓ ya en el carro</span>
