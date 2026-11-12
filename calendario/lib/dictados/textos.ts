@@ -69,7 +69,8 @@ export const MENSAJES: Record<CodigoError, (proximo?: number) => string> = {
   sin_saldo: () => "Se acabó el saldo prepagado de Gemini. Hay que cargar saldo en AI Studio. El audio sigue guardado.",
   permiso: () => "Google no dejó usar Gemini con esta clave (permiso denegado). Revisa la cuenta en aistudio.google.com. El audio sigue guardado.",
   cuota_dia: (p) => `Se usó la cuota gratis de Gemini de hoy. El audio está guardado y se procesa solo ${despuesDe(p)}.`,
-  ocupado: (p) => `Gemini está ocupado. Se vuelve a intentar solo ${cercaDe(p)}, o toca «Intentar de nuevo».`,
+  ocupado: (p) =>
+    `Gemini (Google) está saturado en este momento: no es un error del panel. El audio está guardado y se vuelve a intentar solo ${cercaDe(p)}, o toca «Intentar de nuevo».`,
   se_corto: () => "Se cortó mientras Gemini escuchaba. El audio quedó guardado: toca «Intentar de nuevo».",
   formato: () => "Gemini no pudo leer este audio. Grábalo de nuevo o compártelo en otro formato (m4a o mp3).",
   bloqueado: () => "Gemini no quiso procesar este audio. Puedes intentar de nuevo o escribir la receta a mano.",

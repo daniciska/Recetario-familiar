@@ -11,19 +11,31 @@
 //   Sólo entonces vale GEMINI_TIMEOUT_MS (200–180.000 ms por pedido).
 // - Netlify AI Gateway: si la familia NO define GEMINI_API_KEY, Netlify inyecta su propia clave y
 //   GOOGLE_GEMINI_BASE_URL (cobra créditos, sin tope). Eso se detecta y no se usa salvo GEMINI_USAR_AI_GATEWAY=1.
-// - GEMINI_MODELOS (opcional): "gemini-3.8-flash,gemini-3.5-flash-lite" (hasta 4, en orden de preferencia).
+// - GEMINI_MODELOS (opcional): "gemini-3.8-flash,gemini-3.6-flash" (hasta 4, en orden de preferencia).
+// - Modelos por omisión (aistudio.google.com/docs/models, 12 nov 2026): 3.8 Flash (el más nuevo), y de
+//   respaldo los «Stable» 3.6 Flash, 3.5 Flash-Lite y 3.1 Flash-Lite (deprecado, se apaga no antes del
+//   7 may 2027: si ya no existe, da 404 y se salta). Los cuatro aceptan audio en línea, salida estructurada
+//   (responseFormat o responseJsonSchema) y thinkingLevel "low" (docs/thinking: "minimal" da error en 3.8 y
+//   "low" no sirve sólo en 3.1 Flash-Lite Image, que no se usa), así que el cuerpo es el mismo para todos. Si
+//   un modelo igual rechaza algo (400), se pasa al siguiente (ver pedirReceta).
 
-import { esReintentable, type CodigoError, type EstadoGemini } from "../lib/dictados/tipos";
+import { esReintentable, esperaOcupadoMs, type CodigoError, type EstadoGemini } from "../lib/dictados/tipos";
 import { ESQUEMA_JSON } from "./receta-ia/esquema";
 import { INSTRUCCION_SISTEMA, partesGenerateContent } from "./receta-ia/instruccion";
 import { interpretar } from "./receta-ia/normalizar-receta";
 
 export const URL_GOOGLE = "https://generativelanguage.googleapis.com";
-export const MODELOS_POR_OMISION = ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
+export const MODELOS_POR_OMISION = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 /** Plazo de cada pedido a Gemini (escuchar 15 min de audio y escribir la receta). */
 export const TIMEOUT_PEDIDO_MS = 180_000;
-/** Pedidos a Gemini por corrida, sumando reintentos y modelos (el plan gratis tiene ≈ 20 por día). */
-export const MAX_PEDIDOS_CORRIDA = 8;
+/**
+ * Pedidos a Gemini por corrida, sumando vueltas y modelos: con 4 modelos, 3 vueltas. Un 503 «high demand»
+ * no gasta tokens (Google no atendió el pedido: "503 errors are unrelated to your quota", foro de Google);
+ * el plan gratis tiene ≈ 20 pedidos al día por modelo.
+ */
+export const MAX_PEDIDOS_CORRIDA = 12;
+/** Espera antes de otra vuelta si algún modelo estaba ocupado: ≈ 10 s después de la 1.ª y ≈ 30 s después de las demás (± 20 %). */
+export const ESPERAS_VUELTA_MS = [10_000, 30_000] as const;
 const MAX_TOKENS = 16_384; // incluye el pensamiento ("max_output_tokens … including thought tokens")
 const MAX_TOKENS_LARGO = 32_768;
 const MARGEN_MS = 20_000; // no se empieza un pedido si quedan menos de esto del presupuesto
@@ -690,7 +702,8 @@ export function reinicioCuota(ahora: number): number {
 export type FormaSalida = "responseFormat" | "responseJsonSchema";
 
 /**
- * Cuerpo de generateContent. "low" sirve en 3.8 Flash y en Flash-Lite ("minimal" da error en 3.8). Sin
+ * Cuerpo de generateContent, el mismo para los cuatro modelos por omisión. "low" sirve en 3.8 Flash, 3.6
+ * Flash y 3.5/3.1 Flash-Lite ("minimal" da error en 3.8). Sin
  * temperature/topP/topK ni thinkingBudget: desde 3.6 se ignoran y "a futuro" darán 400. La forma nueva de la
  * salida estructurada es responseFormat.text; si la API no la conoce (400 "Unknown name"), se usa
  * responseMimeType + responseJsonSchema.
@@ -804,6 +817,8 @@ export interface AudioPedido {
 export interface OpcionesPedido {
   /** epoch ms (del reloj): no se empieza un pedido después de hasta − 20 s. */
   hasta: number;
+  /** Qué corrida es (`intentos` del dictado, desde 1): fija cuándo se reintenta un «ocupado» (esperaOcupadoMs). */
+  corrida?: number;
   reloj?: Reloj;
   log?: (linea: string) => void;
 }
@@ -815,17 +830,33 @@ export type ResultadoPedido =
 
 const acotar = (x: number, min: number, max: number) => Math.min(max, Math.max(min, x));
 
+/** Por qué un modelo quedó fuera de la corrida: no existe (404), sin cuota del día o rechazó el pedido (400). */
+type Fuera = "no_existe" | "cuota_dia" | "rechazo";
+const FUERA: Record<Fuera, string> = { no_existe: "no existe", cuota_dia: "sin cuota del día", rechazo: "rechazó el pedido" };
+
+/** Lo que se anota de cada pedido fallido en el resumen del registro: "ocupado 503", "modelo 404", "plazo agotado"… (corto: el resumen entero cabe en los 500 de sanear). */
+const etiqueta = (f: Fallo) =>
+  f.http ? `${f.codigo} ${f.http}` : f.codigo === "ocupado" ? (/plazo/.test(f.detalle) ? "plazo agotado" : "sin conexión") : f.codigo;
+
 /**
- * Pide la receta con reintentos dentro del presupuesto `hasta`. Nunca lanza.
- * - 429 por minuto: espera lo que dice RetryInfo (2–60 s, un poco más) y repite; a la 3.ª, el otro modelo.
- * - 5xx, red o plazo: espera ≈ 10 s y ≈ 30 s; a la 3.ª, el otro modelo.
- * - Cuota del día: el otro modelo de inmediato (su retryDelay engaña); si se agotaron todos, cuota_dia
- *   hasta la medianoche del Pacífico.
- * - 404: el otro modelo. 400 por responseFormat: una vez con responseJsonSchema. Formato: una vez con el
- *   MIME alterno. Respuesta cortada: una vez con 32.768 tokens. JSON dañado: una vez más. Si no, se rescata
- *   la transcripción o queda "incompleta". Si después de un corte la corrida termina por algo pasajero, no
- *   se rescata: queda ocupado o cuota_dia (se reintenta solo).
- * - Clave, verificación, región, saldo, permiso y bloqueo: sin reintento (la familia tiene que hacer algo).
+ * Pide la receta con reintentos dentro del presupuesto `hasta` (y de MAX_PEDIDOS_CORRIDA). Nunca lanza.
+ * Da vueltas por los modelos en orden de preferencia:
+ * - Ocupado (503 «high demand», 500, 504, 408, 499, red o plazo) o 429 por minuto: el siguiente modelo de
+ *   inmediato (la saturación y el cupo por minuto son de cada modelo). Recién después de probarlos todos,
+ *   otra vuelta: si alguno estaba ocupado, después de ≈ 10 s (y ≈ 30 s en las siguientes); un 429 por
+ *   minuto, nunca antes de lo que dijo Google (RetryInfo, 2–60 s, un poco más).
+ * - Fuera de la corrida: 404 (no existe), cuota del día (su retryDelay engaña) y un 400 que no se entiende
+ *   (p. ej. un modelo que no acepta algún campo): se sigue con los demás. Si ya no queda ninguno: cuota_dia
+ *   hasta la medianoche del Pacífico si alguno se quedó sin cuota; si no, "interno" (todos dieron 404 o 400).
+ * - 400 por responseFormat: se pasa a responseJsonSchema para todos (es la API la que no conoce el campo) y
+ *   se repite; si vuelve, ese modelo queda fuera. Formato: una vez con el MIME alterno. Respuesta cortada:
+ *   una vez con 32.768 tokens. JSON dañado: una vez más. Si no, se rescata la transcripción o queda
+ *   "incompleta". Si después de un corte la corrida termina por algo pasajero, no se rescata: queda ocupado
+ *   o cuota_dia (se reintenta solo).
+ * - Clave, verificación, región, saldo, permiso, bloqueo y pedido demasiado grande: sin reintento.
+ * - Se acabó el presupuesto o los pedidos con algún modelo ocupado: "ocupado", con `proximo` según la corrida
+ *   (esperaOcupadoMs: 3 min después de la primera, después 10, 20 y 30).
+ * El registro anota cada pedido fallido y, al final, un resumen con lo que pasó con cada modelo (saneado).
  */
 export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: OpcionesPedido): Promise<ResultadoPedido> {
   const reloj = op.reloj ?? relojReal;
@@ -837,100 +868,126 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
   let jsonReintentado = false;
   let alternoUsado = false;
   let pedidos = 0;
-  let dia = 0;
-  let sinModelo = 0;
   let pasajero = false;
   let incompleta = false;
   let rescate: { transcripcion: string; modelo: string } | undefined;
   let detalle = "";
-  const error = (codigo: CodigoError, proximo?: number): ResultadoPedido => ({
-    tipo: "error",
-    codigo,
-    reintentable: esReintentable(codigo),
-    ...(proximo ? { proximo } : {}),
-    detalle,
-    pedidos,
-  });
+  const modelos = new Map(cfg.modelos.map((m) => [m, { fuera: undefined as Fuera | undefined, noAntesDe: 0, pasos: [] as string[] }]));
+  const resumen = () =>
+    [...modelos].map(([m, x]) => `${m}: ${x.pasos.join(", ") || "sin probar"}${x.fuera ? ` → fuera (${FUERA[x.fuera]})` : ""}`).join(" · ");
+  /** Lo que se devuelve, con una línea de registro que dice qué pasó con cada modelo (si no salió al primer pedido). */
+  const terminar = (r: ResultadoPedido): ResultadoPedido => {
+    const como = r.tipo === "error" ? r.codigo : `${r.tipo} con ${r.modelo}`;
+    const linea = sanear(`resumen (${pedidos} pedido${pedidos === 1 ? "" : "s"} → ${como}): ${resumen()}`, cfg.clave);
+    if (r.tipo !== "ok" || pedidos > 1) log(`gemini ${linea}`);
+    return r.tipo === "error" ? { ...r, detalle: linea } : r;
+  };
+  const error = (codigo: CodigoError, proximo?: number): ResultadoPedido =>
+    terminar({ tipo: "error", codigo, reintentable: esReintentable(codigo), ...(proximo ? { proximo } : {}), detalle, pedidos });
 
   try {
-    todos: for (const modelo of cfg.modelos) {
-      let pasajeros = 0;
-      for (;;) {
-        if (pedidos >= MAX_PEDIDOS_CORRIDA || reloj.ahora() > op.hasta - MARGEN_MS) {
-          pasajero = true;
-          break todos;
-        }
-        pedidos++;
-        const t0 = reloj.ahora();
-        const parts = partesGenerateContent([{ datos: base64, mime, nombreArchivo: audio.archivo }], { fecha: audio.fecha });
-        const plazo = Math.min(cfg.timeoutMs, Math.max(1_000, op.hasta - t0));
-        const r = await intento(cfg, modelo, cuerpoPedido(parts, forma, maxTokens), plazo);
-        if (r.tipo === "ok") return { tipo: "ok", modelo, ms: reloj.ahora() - t0, datos: r.datos, tokens: r.tokens, pedidos, mime };
-        if (r.tipo === "corte" || r.tipo === "json") {
-          detalle = `${modelo}: ${r.detalle}`;
-          log(`gemini ${modelo}: ${r.tipo} (${r.detalle})`);
-          if (r.transcripcion && !rescate) rescate = { transcripcion: r.transcripcion, modelo };
-          if (r.tipo === "corte" && maxTokens === MAX_TOKENS) {
-            maxTokens = MAX_TOKENS_LARGO;
-            continue;
-          }
-          if (r.tipo === "json" && !jsonReintentado) {
-            jsonReintentado = true;
-            continue;
-          }
-          incompleta = true;
-          break todos;
-        }
-        const f = r.fallo;
-        detalle = sanear(`${modelo}: ${f.codigo} ${f.detalle}`, cfg.clave);
-        log(`gemini ${detalle}`);
-        switch (f.codigo) {
-          case "campo":
-            if (forma === "responseFormat") {
-              forma = "responseJsonSchema";
-              continue;
-            }
-            return error("interno");
-          case "formato":
-            if (audio.mimeAlterno && !alternoUsado) {
-              alternoUsado = true;
-              mime = audio.mimeAlterno;
-              continue;
-            }
-            return error("formato");
-          case "cuota_minuto":
-          case "ocupado": {
+    todo: for (let vuelta = 1; ; vuelta++) {
+      let algunoOcupado = false;
+      for (const [modelo, m] of modelos) {
+        if (m.fuera) continue;
+        // Mismo modelo otra vez sólo por el pedido (otra forma de salida, el MIME alterno, más tokens, JSON
+        // dañado); por Google ocupado, se pasa al siguiente.
+        for (;;) {
+          if (pedidos >= MAX_PEDIDOS_CORRIDA || reloj.ahora() > op.hasta - MARGEN_MS) {
             pasajero = true;
-            pasajeros++;
-            const espera =
-              f.codigo === "cuota_minuto"
-                ? Math.round(acotar(f.esperaMs ?? 20_000, 2_000, 60_000) * (1 + Math.random() * 0.2)) // nunca antes de lo que dijo Google
-                : jitter(pasajeros === 1 ? 10_000 : 30_000);
-            if (pasajeros < 3 && reloj.ahora() + espera + MARGEN_MS < op.hasta) {
-              await reloj.dormir(espera);
+            break todo;
+          }
+          pedidos++;
+          const t0 = reloj.ahora();
+          const parts = partesGenerateContent([{ datos: base64, mime, nombreArchivo: audio.archivo }], { fecha: audio.fecha });
+          const plazo = Math.min(cfg.timeoutMs, Math.max(1_000, op.hasta - t0));
+          const r = await intento(cfg, modelo, cuerpoPedido(parts, forma, maxTokens), plazo);
+          if (r.tipo === "ok") {
+            m.pasos.push("ok");
+            return terminar({ tipo: "ok", modelo, ms: reloj.ahora() - t0, datos: r.datos, tokens: r.tokens, pedidos, mime });
+          }
+          if (r.tipo === "corte" || r.tipo === "json") {
+            detalle = sanear(`${modelo}: ${r.detalle}`, cfg.clave);
+            m.pasos.push(r.tipo);
+            log(sanear(`gemini ${modelo} (vuelta ${vuelta}): ${r.tipo} (${r.detalle})`, cfg.clave));
+            if (r.transcripcion && !rescate) rescate = { transcripcion: r.transcripcion, modelo };
+            if (r.tipo === "corte" && maxTokens === MAX_TOKENS) {
+              maxTokens = MAX_TOKENS_LARGO;
               continue;
             }
-            continue todos;
+            if (r.tipo === "json" && !jsonReintentado) {
+              jsonReintentado = true;
+              continue;
+            }
+            incompleta = true;
+            break todo;
           }
-          case "cuota_dia":
-            dia++;
-            continue todos;
-          case "modelo":
-            sinModelo++;
-            continue todos;
-          case "bloqueo":
-            return error("bloqueado");
-          case "clave_invalida":
-          case "verificacion":
-          case "region":
-          case "permiso":
-            return error(f.codigo);
-          case "pago":
-            return error("sin_saldo");
-          default: // peticion, grande: error del panel
-            return error("interno");
+          const f = r.fallo;
+          detalle = sanear(`${modelo}: ${f.codigo} ${f.detalle}`, cfg.clave);
+          m.pasos.push(etiqueta(f));
+          log(sanear(`gemini ${modelo} (vuelta ${vuelta}): ${f.codigo} ${f.detalle}`, cfg.clave));
+          switch (f.codigo) {
+            case "campo":
+              if (forma === "responseFormat") {
+                forma = "responseJsonSchema";
+                continue;
+              }
+              m.fuera = "rechazo";
+              break;
+            case "formato":
+              if (audio.mimeAlterno && !alternoUsado) {
+                alternoUsado = true;
+                mime = audio.mimeAlterno;
+                continue;
+              }
+              return error("formato");
+            case "ocupado":
+              pasajero = true;
+              algunoOcupado = true;
+              break;
+            case "cuota_minuto":
+              pasajero = true;
+              // Nunca antes de lo que dijo Google (y un poco más, para no llegar justo).
+              m.noAntesDe = reloj.ahora() + Math.round(acotar(f.esperaMs ?? 20_000, 2_000, 60_000) * (1 + Math.random() * 0.2));
+              break;
+            case "cuota_dia":
+              m.fuera = "cuota_dia";
+              break;
+            case "modelo":
+              m.fuera = "no_existe";
+              break;
+            case "peticion":
+              m.fuera = "rechazo";
+              break;
+            case "bloqueo":
+              return error("bloqueado");
+            case "clave_invalida":
+            case "verificacion":
+            case "region":
+            case "permiso":
+              return error(f.codigo);
+            case "pago":
+              return error("sin_saldo");
+            default: // grande: el mismo pedido no cabe en ningún modelo (error del panel)
+              return error("interno");
+          }
+          break; // al siguiente modelo
         }
       }
+      // Se probaron todos los que quedan: otra vuelta, si hay a quién y alcanza.
+      const quedan = [...modelos.values()].filter((m) => !m.fuera);
+      if (!quedan.length) break;
+      const ahora = reloj.ahora();
+      const espera = Math.max(
+        algunoOcupado ? jitter(ESPERAS_VUELTA_MS[Math.min(vuelta, ESPERAS_VUELTA_MS.length) - 1]) : 0,
+        ...quedan.map((m) => m.noAntesDe - ahora),
+      );
+      if (pedidos >= MAX_PEDIDOS_CORRIDA || ahora + espera + MARGEN_MS >= op.hasta) {
+        pasajero = true;
+        break;
+      }
+      log(`gemini vuelta ${vuelta}: ${quedan.length === 1 ? "el modelo que queda no respondió" : `ninguno de los ${quedan.length} modelos que quedan respondió`}; otra vuelta en ${Math.round(Math.max(0, espera) / 1000)} s`);
+      if (espera > 0) await reloj.dormir(espera);
     }
   } catch (e) {
     detalle = sanear(`falla inesperada: ${String((e as Error)?.message ?? e)}`, cfg.clave);
@@ -940,11 +997,13 @@ export async function pedirReceta(cfg: ConfigLista, audio: AudioPedido, op: Opci
   // El rescate (borrador sin ingredientes ni pasos) es sólo para cuando Gemini cortó o dañó la respuesta las
   // veces que se le pidió. Si la corrida terminó por algo pasajero (ocupado, cuota, presupuesto), queda el
   // error y la app reintenta sola: la próxima vez puede salir la receta entera.
-  if (rescate && incompleta) return { tipo: "rescate", transcripcion: rescate.transcripcion, modelo: rescate.modelo, pedidos };
+  if (rescate && incompleta) return terminar({ tipo: "rescate", transcripcion: rescate.transcripcion, modelo: rescate.modelo, pedidos });
   if (incompleta) return error("incompleta");
-  if (dia && dia + sinModelo >= cfg.modelos.length) return error("cuota_dia", reinicioCuota(reloj.ahora()));
-  if (pasajero || dia) return error("ocupado", reloj.ahora() + 10 * 60_000);
-  return error("interno"); // todos los modelos dieron 404: GEMINI_MODELOS mal escrito o modelos retirados
+  const fuera = [...modelos.values()].map((m) => m.fuera);
+  // Quedan modelos: se cortó por el presupuesto o el tope de pedidos con ellos ocupados (o con cupo por minuto).
+  if (pasajero && fuera.some((x) => !x)) return error("ocupado", reloj.ahora() + esperaOcupadoMs(op.corrida ?? 1));
+  if (fuera.includes("cuota_dia")) return error("cuota_dia", reinicioCuota(reloj.ahora()));
+  return error("interno"); // todos dieron 404 o 400: GEMINI_MODELOS mal escrito, modelos retirados o un pedido mal armado
 }
 
 /** Prueba la clave sin gastar cuota de generación (GET /v1beta/models/{modelo}). */

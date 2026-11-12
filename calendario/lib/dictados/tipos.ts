@@ -46,7 +46,7 @@ export type CodigoError =
   | "sin_saldo" // prepago agotado (402)
   | "permiso" // otro 403
   | "cuota_dia" // se acabó la cuota diaria de todos los modelos: se reintenta después de `proximo`
-  | "ocupado" // 429 por minuto, 5xx, red o demora: se reintenta cerca de `proximo`
+  | "ocupado" // Google saturado (503 «high demand», otro 5xx, 429 por minuto, red o demora) en todos los modelos: se reintenta cerca de `proximo`
   | "se_corto" // la corrida no terminó dentro de su plazo
   | "formato" // Gemini no pudo leer el audio
   | "bloqueado" // filtros de seguridad de Gemini
@@ -64,9 +64,19 @@ export type EstadoGemini = "ok" | "sin_clave" | "solo_ai_gateway";
 export interface ErrorDictado {
   codigo: CodigoError;
   reintentable: boolean;
-  /** epoch ms: no antes de esto (cuota_dia: medianoche del Pacífico + 5 min; ocupado: ≈ 10 min). */
+  /** epoch ms: no antes de esto (cuota_dia: medianoche del Pacífico + 5 min; ocupado: esperaOcupadoMs). */
   proximo?: number;
 }
+
+/**
+ * «ocupado»: en cuántos minutos queda `proximo` (cuándo la app vuelve a pedir la receta sola) según la corrida
+ * que terminó así (`intentos` del dictado, desde 1). La primera vuelve pronto, porque los picos de demanda de
+ * Google suelen pasar en minutos; las siguientes, cada vez más espaciadas, para no insistir en vano. Con las
+ * 8 corridas de MAX_INTENTOS_SOLOS.ocupado (lib/dictados/reglas.ts) cubre unas 2 horas y media.
+ */
+export const ESPERAS_OCUPADO_MIN = [3, 10, 20, 30] as const;
+export const esperaOcupadoMs = (corrida: number): number =>
+  ESPERAS_OCUPADO_MIN[Math.min(Math.max(1, Math.floor(corrida) || 1), ESPERAS_OCUPADO_MIN.length) - 1] * 60_000;
 
 /** Un dictado como lo ven los equipos de la familia. */
 export interface DictadoPublico {

@@ -550,7 +550,7 @@ async function pedirYOrdenar(d: Dictado, deps: DepsDictados, log: (l: string) =>
   const r = await pedirReceta(
     cfg,
     { datos, mime: d.mime, mimeAlterno: d.mimeAlterno, archivo: d.archivo, fecha: fechaLarga(d.creado) },
-    { hasta: deps.reloj.ahora() + PRESUPUESTO_MS, reloj: deps.reloj, log: (l) => log(`dictado ${d.id}: ${l}`) },
+    { hasta: deps.reloj.ahora() + PRESUPUESTO_MS, corrida: d.intentos, reloj: deps.reloj, log: (l) => log(`dictado ${d.id}: ${l}`) },
   );
   const enlace = { id: d.id, fecha: d.creado, segundos: d.segundos };
   const listo = (b: BorradorReceta, modelo: string, ms?: number, rescate?: true): Cambios => {

@@ -17,7 +17,9 @@ export const CADA_LOCALES_MS = 60_000;
 /**
  * Corridas (`intentos` del servidor) hasta las que la app reintenta sola un «se cortó» o un «ocupado» (y el
  * chip dice «Se reintenta sola»). Pasado esto, «Necesita ayuda»: así la tablet de la pared, que pasa el día
- * abierta, no gasta la cuota de Gemini con un audio que falla siempre.
+ * abierta, no gasta la cuota de Gemini con un audio que falla siempre. Un «ocupado» se vuelve a pedir a la
+ * hora que trae (`proximo`): 3 min después de la primera corrida, 10 después de la segunda, 20 y después
+ * cada 30 (esperaOcupadoMs en tipos.ts): las 8 corridas cubren unas 2 horas y media de Google saturado.
  */
 export const MAX_INTENTOS_SOLOS = { se_corto: 4, ocupado: 8 } as const;
 
