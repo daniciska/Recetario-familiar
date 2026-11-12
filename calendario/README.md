@@ -241,6 +241,25 @@ GEMINI_API_KEY=clave-de-prueba GEMINI_API_URL=http://127.0.0.1:8787 NODE_OPTIONS
 
 `GEMINI_API_URL` es sólo para pruebas: el código la ignora si no es `http://127.0.0.1` o `http://localhost` (una variable mal puesta no puede mandar la clave a otro sitio), y sólo entonces vale `GEMINI_TIMEOUT_MS`. Al simulador se le piden errores con `POST /__guion` (p. ej. `[{"modelo":"*","accion":"429dia"}]`, o por modelo: `[{"modelo":"gemini-3.8-flash","accion":"503"}]`; las acciones están al comienzo del archivo); `--mimes-extra audio/mp4` y `--sin-response-format` imitan otras respuestas de Google. Las pruebas automáticas (formatos de audio, Gemini con el simulador, la API y la corrida con un reloj falso, datos con equipos viejos y nuevos, cliente y lo automático, grabadora con un navegador falso) se corren con `bash pruebas/correr.sh recetas`. La prueba en el navegador es manual: `npm run build && node --experimental-transform-types --no-warnings --import ./pruebas/registrar.mjs pruebas/recetas/navegador.e2e.mjs --puerto 8900` (Chrome con micrófono falso, un tablet y un iPhone de la misma familia, `netlify dev` con las funciones reales; necesita Chrome, Playwright, ffmpeg y netlify-cli; usa los puertos N y N+1; `--capturas <carpeta> --prefijo r2-` guarda ahí las capturas con ese prefijo).
 
+## Celular y pared
+
+La misma app sirve para la pared (tablet) y el celular. **Interfaz de tablet** = variante `md:` (ancho ≥ 48rem **y**
+alto ≥ 29rem, igual que `MEDIA_TABLET` en `lib/hooks.ts`); **interfaz de celular** = variante `cel:`, que es su
+negación exacta (también el teléfono en horizontal). Regla: lo que sea sólo del celular va con `cel:` (o dentro de
+`@media not all and (min-width: 48rem) and (min-height: 29rem)`), sin tocar las clases base ni `md:`; así la pared
+queda igual. No usar `max-md:` para esto: sólo mira el ancho.
+
+- En el celular la escala de letra se redefine por variables (`--text-lg` 18 → 17 px, `--text-xl` 20 → 18, … y
+  `--font-weight-extrabold` 800 → 700) en `app/globals.css`, así cada `text-lg` ya queda del tamaño de teléfono.
+  `--spacing` no cambia: los toques siguen de 44 px o más.
+- Componentes base (`components/ui.tsx`): `Boton` y `BotonIcono` de 44 px, entradas de 44 px con letra de 17 (16 o
+  más: el iPhone no se acerca al enfocar), `Modal` con título de una línea (`tituloCorto` si el largo no cabe) y la
+  zona segura de abajo, `Segmentos lleno` a todo el ancho.
+- Lo que el CSS no alcanza (un texto de ejemplo más corto) usa `useCelular()` de `lib/hooks.ts`, que antes de
+  hidratar es `false`: la pared nunca cambia.
+- Para comprobar que la pared no cambió: capturas antes/después en 1280×800, 1366×1024, 1024×600 y 800×1280
+  comparadas píxel a píxel.
+
 ## Modo kiosko en el tablet
 
 Pasos comunes, en cualquier tablet:

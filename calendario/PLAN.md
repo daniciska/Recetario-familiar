@@ -253,11 +253,21 @@ varios días, lugar, "cada N" y varios días de la semana. Falta que la familia 
 - Protector de pantalla en la pared tras N minutos sin tocar, con hora, clima y próximos eventos encima; no se
   activa con una ventana abierta. De noche, apagado o atenuado.
 
-### Pendiente · Vista del celular más amigable (pedido de la familia, 12 nov 2026)
-En el celular «todo se ve muy gigante y no se ve bien»: los tamaños están pensados para la tablet de la pared y en el
-iPhone sobran. Rediseñar tamaños de letra, botones y distribución para pantallas chicas (iPhone 390×844 y más chicos),
-sin cambiar la vista de la pared. Revisar con capturas antes/después en cada pestaña (Calendario, Menú, Recetas,
-Compras, Quehaceres, Familia).
+### Hecho (sin publicar) · Vista del celular más amigable (pedido de la familia, 12 nov 2026)
+En el celular «todo se ve muy gigante y no se ve bien»: los tamaños estaban pensados para la tablet de la pared.
+Rediseñado sólo para el celular, sin cambiar la pared (ver README → Celular y pared):
+- Variante `cel:` (la negación exacta de `md`) y, en el celular, la escala de letra de una app de teléfono por
+  variables CSS (`app/globals.css`); botones de 44 px, entradas de 44 px con letra de 17 (sin zoom en el iPhone),
+  ventanas con encabezado de una línea y la zona segura de abajo también sin pie (`components/ui.tsx`).
+- Barra de arriba de una línea (fecha, cuenta regresiva y clima: 188 → 51 px), barra de pestañas de 52 px con
+  píldora en la activa, y una o dos filas de herramientas por pestaña.
+- Listas compactas: el evento en una fila (hora, título, personas), el menú con una fila por comida (2 días por
+  pantalla), compras y quehaceres de 48–54 px, recetas en 3:2, el formulario del evento más corto.
+- Arreglado de paso: la vista Día con un solo desplazamiento y las celdas vacías del menú visibles en el celular.
+- iPhone 390×844: el contenido pasa del 35–54 % al 68–81 % de la pantalla (7 eventos en vez de 3, 8 quehaceres en
+  vez de 4). La pared: mismas capturas píxel a píxel y misma huella visual en todas las pantallas.
+- Queda para después: permitir el zoom con los dedos en el celular (hoy `maximumScale: 1` en `app/layout.tsx`, que
+  la pared necesita) y, si la familia quiere, pasar «Familia» a un ⚙ arriba para dejar 5 pestañas.
 
 ### Pendiente · Cambiar sólo un día de un evento que se repite (pedido de la familia, 10 nov 2026)
 Ejemplo: las niñas van al colegio de 8:30 a 15:00 todos los días, pero hoy salen más temprano; o hay un feriado

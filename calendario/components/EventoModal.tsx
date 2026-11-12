@@ -374,7 +374,8 @@ export default function EventoModal({
             {f.repeticion === "semanal" && (
               <div>
                 <span className="mb-1.5 block text-base font-bold text-tinta-suave cel:mb-1 cel:text-sm">Los días</span>
-                <div className="flex flex-wrap gap-1.5 cel:grid cel:grid-cols-7 cel:gap-1">
+                {/* Celular: 4 columnas (Lu–Ju y Vi–Do), así cada día mide 44 px o más de ancho. */}
+                <div className="flex flex-wrap gap-1.5 cel:grid cel:grid-cols-4">
                   {DIAS_CORTOS.map((d, i) => {
                     const activo = diasDeLaSemana(f).includes(i);
                     return (
