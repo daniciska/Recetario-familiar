@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Fredoka, Nunito } from "next/font/google";
 import "./globals.css";
+import { ZOOM_SOLO_CELULAR } from "@/lib/pantalla";
 
 const texto = Nunito({ subsets: ["latin"], variable: "--fuente-texto", display: "swap" });
 // Títulos y reloj en una letra redondeada y amable (estilo Skylight).
@@ -15,6 +16,10 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+/**
+ * Sin zoom con dos dedos: es lo que quiere la pared y el tablet. En el celular el guion ZOOM_SOLO_CELULAR
+ * (lib/pantalla.ts) quita maximum-scale y user-scalable antes de pintar, y ahí sí se puede acercar.
+ */
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -42,7 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es-CL" data-tema="claro" className={`${texto.variable} ${titulo.variable}`} suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: TEMA_INICIAL }} />
+        <script dangerouslySetInnerHTML={{ __html: TEMA_INICIAL + ZOOM_SOLO_CELULAR }} />
       </head>
       <body>{children}</body>
     </html>

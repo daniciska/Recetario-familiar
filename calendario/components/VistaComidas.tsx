@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDatos } from "@/lib/store";
 import { useCandado } from "@/lib/candado";
-import type { ComidaPlanificada, ItemComida, Receta, TipoComida } from "@/lib/datos/tipos";
-import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, semanaCorta, sumarDias } from "@/lib/fechas";
+import type { ComidaPlanificada, ItemComida, PlanComidas, Receta, TipoComida } from "@/lib/datos/tipos";
+import { DIAS_CORTOS, DIAS_LARGOS, diasDeSemana, lunesDe, partes, rangoSemana, semanaCorta, semanaDeUnMes, semanaMinima, sumarDias } from "@/lib/fechas";
 import {
   agruparPorCategoria,
   comidasDeSemana,
@@ -26,13 +26,14 @@ import {
   nombreItem,
   ponerComida,
   ponerItem,
+  deshacerRepetir,
   repetirSemana,
   type Espacio,
 } from "@/lib/comidas";
 import { nuevoId } from "@/lib/ejemplo";
 import { conAprox } from "@/lib/dictados/textos";
 import { useIrAHoyEnMovil } from "@/lib/hooks";
-import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, cx } from "./ui";
+import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, TextoQueCabe, cx } from "./ui";
 import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
 
 export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrACompras: () => void }) {
@@ -44,27 +45,68 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   const [celda, setCelda] = useState<{ fecha: string; tipo: TipoComida } | null>(null);
   // Lunes de la semana para la que se abrió "Generar lista" (fijo aunque pase la medianoche del domingo).
   const [generando, setGenerando] = useState<string | null>(null);
-  const [aviso, setAviso] = useState<string | null>(null);
+  // Aviso bajo la barra («Se copiaron 5 comidas…»). Con `copias`, ofrece «Deshacer» un rato.
+  const [aviso, setAviso] = useState<{ texto: string; copias?: PlanComidas } | null>(null);
+  const relojAviso = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(relojAviso.current), []);
+  const mostrarAviso = (texto: string, copias?: PlanComidas) => {
+    clearTimeout(relojAviso.current);
+    setAviso({ texto, copias });
+    relojAviso.current = setTimeout(() => setAviso(null), copias ? 15_000 : 4_000);
+  };
   const dias = diasDeSemana(lunes);
   const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
   useIrAHoyEnMovil(lunes);
   // Comidas con alguna receta en cualquiera de sus espacios (de ahí sale la lista de compras).
   const nComidas = comidasDeSemana(estado.plan, lunes).filter((c) => itemsLlenos(c).some((x) => x.recetaId)).length;
 
-  const repetirSemanaPasada = () => {
-    let n = 0;
-    actualizar("plan", (plan) => {
+  const textoCopiadas = (n: number) =>
+    n ? `Se ${n === 1 ? "copió 1 comida" : `copiaron ${n} comidas`} de la semana pasada.` : "No había nada nuevo que copiar.";
+
+  /**
+   * Copia la semana pasada en los espacios vacíos de esta (para toda la familia) y ofrece deshacerlo.
+   * Si otro equipo guardó antes, `actualizar` vuelve a aplicar el cambio sobre lo último: lo que se deshace
+   * es lo que quedó guardado (el último intento), no lo del primero.
+   */
+  const repetirSemanaPasada = async () => {
+    let copias: PlanComidas = {};
+    const guardado = actualizar("plan", (plan) => {
       const r = repetirSemana(plan, dias);
-      n = r.copiadas;
+      copias = r.copias;
       return r.plan;
     });
-    setAviso(n ? `Se copiaron ${n} comidas de la semana pasada.` : "No había nada nuevo que copiar.");
-    setTimeout(() => setAviso(null), 3500);
+    const primeras = copias;
+    const n = Object.keys(primeras).length;
+    mostrarAviso(textoCopiadas(n), n ? primeras : undefined);
+    if (!n) return;
+    const ok = await guardado;
+    const finales = copias;
+    // No se guardó (sin conexión o sin espacio): el cambio ya se deshizo solo y hay otro aviso.
+    if (!ok) setAviso((a) => (a?.copias === primeras ? null : a));
+    else if (finales !== primeras)
+      setAviso((a) => (a?.copias === primeras ? { texto: textoCopiadas(Object.keys(finales).length), copias: finales } : a));
+  };
+
+  /** Quita exactamente lo que se copió y sigue igual; lo que alguien cambió entretanto se queda. */
+  const deshacerCopia = (copias: PlanComidas) => {
+    let r = { quitadas: 0, cambiadas: 0 };
+    actualizar("plan", (plan) => {
+      const d = deshacerRepetir(plan, copias);
+      r = d;
+      return d.plan;
+    });
+    const quedan = r.cambiadas ? ` ${r.cambiadas === 1 ? "Una ya la habían cambiado y quedó" : `${r.cambiadas} ya las habían cambiado y quedaron`}.` : "";
+    mostrarAviso(
+      r.quitadas
+        ? `Listo: se ${r.quitadas === 1 ? "quitó la comida copiada" : `quitaron las ${r.quitadas} comidas copiadas`}.${quedan}`
+        : `No quedaba nada copiado que quitar.${quedan}`,
+    );
   };
 
   return (
     <section className="flex h-full flex-col gap-3 cel:gap-2">
-      {/* Celular (una fila): ‹ semana › ↻ 🛒; tocar la semana vuelve a esta semana. */}
+      {/* Celular (una fila): ‹ semana › ↻ Repetir 🛒 Lista; tocar la semana vuelve a esta semana. Los dos
+          botones llevan el ícono arriba y la palabra abajo (13 px): así caben con el rango aun en 320 px. */}
       <div className="flex flex-wrap items-center gap-2 md:flex-nowrap cel:grid cel:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] cel:gap-x-1">
         <BotonIcono etiqueta="Semana anterior" onClick={() => setSemana(sumarDias(lunes, -7))} className="cel:col-start-1 cel:row-start-1">
           ‹
@@ -81,12 +123,22 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
           type="button"
           onClick={() => setSemana(null)}
           aria-label={`Menú ${rangoSemana(lunes)}${lunes === lunesDe(hoy) ? "" : ". Volver a esta semana"}`}
-          className="hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
+          className="@container hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
         >
-          <span className="max-w-full truncate font-display text-2xl font-semibold">{semanaCorta(lunes)}</span>
-          <span className={cx("text-xs font-bold", lunes === lunesDe(hoy) ? "text-tinta-suave" : "text-acento")}>
-            {lunes === lunesDe(hoy) ? "Esta semana" : "↩ Volver a esta semana"}
-          </span>
+          {/* Si no cabe (320 px): «9–15» en vez de «9–15 nov» cortado. */}
+          <TextoQueCabe
+            largo={semanaCorta(lunes)}
+            corto={semanaMinima(lunes)}
+            minimo={semanaDeUnMes(lunes) ? "6rem" : "7.25rem"}
+            className="font-display text-2xl font-semibold"
+          />
+          {/* En 320 px «Esta semana» no cabe y no se muestra (el día de hoy ya lo dice); «↩ Volver». */}
+          <TextoQueCabe
+            largo={lunes === lunesDe(hoy) ? "Esta semana" : "↩ Volver a esta semana"}
+            corto={lunes === lunesDe(hoy) ? "" : "↩ Volver"}
+            minimo={lunes === lunesDe(hoy) ? "4.875rem" : "9.25rem"}
+            className={cx("text-xs font-bold", lunes === lunesDe(hoy) ? "text-tinta-suave" : "text-acento")}
+          />
         </button>
         <h1 className="mx-1 min-w-0 text-balance font-display text-2xl font-semibold leading-tight md:flex-1 xl:text-3xl cel:hidden">
           <span className="md:max-xl:hidden">Menú </span>
@@ -99,26 +151,43 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
         <div className="flex flex-1 flex-wrap justify-end gap-2 md:flex-none md:flex-nowrap cel:contents">
           <Boton
             onClick={() => proteger(repetirSemanaPasada)}
-            className="whitespace-nowrap cel:col-start-4 cel:row-start-1 cel:ml-1 cel:min-w-11 cel:px-0"
+            apilado
+            className="whitespace-nowrap cel:col-start-4 cel:row-start-1 cel:ml-1"
             aria-label="Repetir la semana pasada"
             title="Repetir la semana pasada"
           >
-            ↻<span className="md:max-xl:hidden cel:hidden"> Repetir semana</span>
+            <span className="cel:text-xl cel:leading-none">↻</span>
+            <span className="md:max-xl:hidden cel:hidden"> Repetir semana</span>
+            <span className="hidden cel:inline cel:text-xs cel:leading-tight">Repetir</span>
           </Boton>
           <Boton
             variante="primario"
-            className="whitespace-nowrap cel:col-start-5 cel:row-start-1 cel:ml-1 cel:min-w-11 cel:px-0"
+            apilado
+            className="whitespace-nowrap cel:col-start-5 cel:row-start-1"
             aria-label="Generar lista de compras"
             title="Generar lista de compras"
             onClick={() => proteger(() => setGenerando(lunes))}
             disabled={nComidas === 0}
           >
-            🛒 <span className="md:max-xl:hidden cel:hidden">Generar lista de compras</span>
+            <span className="cel:text-lg cel:leading-none">🛒</span> <span className="md:max-xl:hidden cel:hidden">Generar lista de compras</span>
             <span className="hidden md:max-xl:inline">Lista de compras</span>
+            <span className="hidden cel:inline cel:text-xs cel:leading-tight">Lista</span>
           </Boton>
         </div>
       </div>
-      {aviso && <div className="rounded-2xl bg-acento-suave px-4 py-2 text-lg font-bold">{aviso}</div>}
+      {aviso && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-2xl bg-acento-suave px-4 py-2 text-lg font-bold cel:gap-2 cel:py-1 cel:pl-3 cel:pr-1 cel:text-[0.9375rem] cel:leading-snug"
+        >
+          <span className="min-w-0 flex-1 cel:py-1.5">{aviso.texto}</span>
+          {aviso.copias && (
+            <Boton variante="primario" className="shrink-0" onClick={() => proteger(() => deshacerCopia(aviso.copias!))}>
+              Deshacer
+            </Boton>
+          )}
+        </div>
+      )}
 
       {/* Tablet: grilla días × comidas */}
       <div className="desliza hidden min-h-0 flex-1 grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] grid-rows-[auto_repeat(5,minmax(3rem,1fr))] gap-2 overflow-y-auto md:grid [@media(max-height:700px)]:gap-1.5">
@@ -405,7 +474,7 @@ function FilaComidaCel({
       <span aria-hidden className={cx("w-7 shrink-0 text-center text-[1.375rem] leading-none", !llenos.length && "opacity-45 grayscale")}>
         {emoji}
       </span>
-      <span className="w-[4.75rem] shrink-0 text-xs font-bold uppercase tracking-wide text-tinta-suave">{tipo.nombre}</span>
+      <span className="w-[5rem] shrink-0 text-xs font-bold uppercase tracking-wide text-tinta-suave">{tipo.nombre}</span>
       <span className="line-clamp-2 min-w-0 flex-1 break-words text-[0.9375rem] font-semibold leading-snug">{nombres.join(" · ")}</span>
       {llenos.length > 0 && conReceta && <span className="num shrink-0 text-xs font-bold text-tinta-suave">👥{comida!.porciones}</span>}
       {/* Vacía: un ＋ punteado (como la celda del tablet). Con espacios libres, sólo un ＋ tenue. */}

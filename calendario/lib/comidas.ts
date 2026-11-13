@@ -137,9 +137,13 @@ export function copiarComida(c: ComidaPlanificada): ComidaPlanificada {
   return { ...c, ...(c.mas ? { mas: c.mas.map((x) => (x ? { ...x } : null)) } : {}) };
 }
 
-/** "Repetir semana": copia cada comida de la semana anterior a los días de `dias` que la tienen vacía. */
-export function repetirSemana(plan: PlanComidas, dias: string[]): { plan: PlanComidas; copiadas: number } {
+/**
+ * "Repetir semana": copia cada comida de la semana anterior a los días de `dias` que la tienen vacía.
+ * `copias` son exactamente las comidas que se pusieron (clave → comida), para poder deshacerlo.
+ */
+export function repetirSemana(plan: PlanComidas, dias: string[]): { plan: PlanComidas; copiadas: number; copias: PlanComidas } {
   const nuevo = { ...plan };
+  const copias: PlanComidas = {};
   let copiadas = 0;
   for (const f of dias)
     for (const t of TIPOS_COMIDA) {
@@ -147,10 +151,37 @@ export function repetirSemana(plan: PlanComidas, dias: string[]): { plan: PlanCo
       const k = claveComida(f, t.id);
       if (prev && !nuevo[k]) {
         nuevo[k] = copiarComida(prev);
+        copias[k] = copiarComida(prev);
         copiadas++;
       }
     }
-  return { plan: nuevo, copiadas };
+  return { plan: nuevo, copiadas, copias };
+}
+
+/** La comida en un texto que no depende del orden de las claves ni de las que valen undefined. */
+function huellaComida(c: unknown): string {
+  return JSON.stringify(c, (_k, v) =>
+    v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v,
+  );
+}
+
+/**
+ * Deshace "Repetir semana": quita del plan las comidas de `copias` (lo que devolvió `repetirSemana`)
+ * que siguen exactamente como se copiaron. Las que alguien cambió o quitó entretanto (en este equipo o
+ * en otro) no se tocan, y tampoco ninguna otra comida.
+ */
+export function deshacerRepetir(plan: PlanComidas, copias: PlanComidas): { plan: PlanComidas; quitadas: number; cambiadas: number } {
+  const nuevo = { ...plan };
+  let quitadas = 0;
+  let cambiadas = 0;
+  for (const [k, c] of Object.entries(copias)) {
+    if (!nuevo[k]) continue;
+    if (huellaComida(nuevo[k]) === huellaComida(c)) {
+      delete nuevo[k];
+      quitadas++;
+    } else cambiadas++;
+  }
+  return { plan: nuevo, quitadas, cambiadas };
 }
 
 /** Saca una receta (que se borró) de todos los espacios del plan; la comida que queda vacía se quita. */

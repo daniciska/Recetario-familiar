@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ahoraEnSantiago, horaAMinutos, sumarDias, type Ahora } from "./fechas";
 import type { Ajustes } from "./datos/tipos";
+import { MEDIA_TABLET } from "./pantalla";
 
 /** Reloj en vivo (se actualiza cada segundo). */
 export function useAhora(): Ahora {
@@ -172,8 +173,8 @@ export function useRecargaDiaria(ahora: Ahora, hora = "03:30", bloqueada = false
   }, [ahora, objetivo]);
 }
 
-/** Igual que la variante `md` de globals.css: ancho de tablet y alto suficiente (un teléfono horizontal no cuenta). */
-export const MEDIA_TABLET = "(min-width: 48rem) and (min-height: 29rem)";
+/** Igual que la variante `md` de globals.css (está en lib/pantalla.ts, que también usa app/layout.tsx). */
+export { MEDIA_TABLET };
 
 // ---------- Modo pared (ajuste de este equipo, no se comparte) ----------
 

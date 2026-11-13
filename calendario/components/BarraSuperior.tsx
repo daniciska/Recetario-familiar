@@ -44,7 +44,7 @@ export default function BarraSuperior({
     // Celular: una sola línea de unos 52 px (fecha y cuenta regresiva a la izquierda, clima a la derecha).
     // Sin reloj (el teléfono ya muestra la hora) ni «Hoy se cocina» (está en el bloque de hoy del
     // calendario y en el Menú).
-    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2 cel:flex-nowrap cel:gap-x-3 cel:px-4 cel:pb-1 cel:pt-[max(0.375rem,env(safe-area-inset-top))]">
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-4 md:min-[56rem]:flex-nowrap md:pt-4 xl:gap-x-6 [@media(max-height:650px)]:md:pt-2 cel:flex-nowrap cel:gap-x-3 cel:px-seguro cel:pb-1 cel:pt-[max(0.375rem,env(safe-area-inset-top))]">
       {/* Hora y fecha. Sin min-w-0: nunca se achica bajo su contenido (si no cabe, la tarjeta de
           la comida baja a otra línea, como en el iPad vertical). En el celular sí: la fecha se corta. */}
       <div className="flex grow items-baseline gap-4 cel:min-w-0">

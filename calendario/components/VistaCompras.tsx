@@ -96,7 +96,10 @@ export default function VistaCompras() {
       },
     ]);
     setTexto("");
+    // En el celular la categoría elegida se ve sólo como un ícono: vuelve a automática para lo siguiente.
+    if (celular) setCategoria("auto");
   };
+  const elegida = categoria === "auto" ? null : CATEGORIAS.find((c) => c.nombre === categoria);
 
   const alternar = (id: string) =>
     actualizar("compras", (l) => l.map((c) => (c.id === id ? { ...c, comprado: !c.comprado } : c)));
@@ -117,7 +120,8 @@ export default function VistaCompras() {
 
   return (
     <section className="flex h-full flex-col gap-3 cel:gap-2">
-      {/* Celular: título y una fila para agregar (la categoría es automática; «Sacar comprados» va en «En el carro»). */}
+      {/* Celular: título y una fila para agregar (la categoría es automática salvo que se elija con el botón de
+          al lado; «Sacar comprados» va en «En el carro»). */}
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="mr-2 font-display text-2xl font-semibold md:text-3xl cel:text-[1.375rem]">
           Lista de compras <span className="num text-tinta-suave">· {pendientes.length}</span>
@@ -129,11 +133,11 @@ export default function VistaCompras() {
         )}
       </div>
 
-      <form onSubmit={agregar} className="grid gap-2 md:grid-cols-[1fr_auto_auto] cel:grid-cols-[minmax(0,1fr)_auto]">
+      <form onSubmit={agregar} className="grid gap-2 md:grid-cols-[1fr_auto_auto] cel:grid-cols-[minmax(0,1fr)_auto_auto]">
         <Entrada
           value={texto}
           onChange={(e) => setTexto(e.target.value)}
-          placeholder={celular ? "Agregar: “2 kg papas”, “leche”…" : "Agregar: “2 kg papas”, “leche”, “detergente”…"}
+          placeholder={celular ? "Ej.: 2 kg papas" : "Agregar: “2 kg papas”, “leche”, “detergente”…"}
           aria-label="Agregar a la lista"
           enterKeyHint="done"
         />
@@ -145,6 +149,31 @@ export default function VistaCompras() {
             </option>
           ))}
         </Selector>
+        {/* Celular: la categoría en un botón de ícono (✨ = automática). Encima va el selector del sistema,
+            invisible, que es el que se toca: abre la lista del iPhone o de Android. Letra de 16 px o más para
+            que el iPhone no se acerque al tocarlo. */}
+        <label
+          className={cx(
+            "relative hidden size-11 shrink-0 items-center justify-center rounded-xl border-2 text-xl transition cel:flex has-[:focus-visible]:border-acento",
+            elegida ? "border-acento bg-acento-suave" : "border-borde bg-superficie-2",
+          )}
+          title={elegida ? `Categoría: ${elegida.nombre}` : "Categoría: automática"}
+        >
+          <span aria-hidden>{elegida ? elegida.emoji : "✨"}</span>
+          <select
+            value={categoria}
+            onChange={(e) => setCategoria(e.target.value as CategoriaCompra | "auto")}
+            aria-label={elegida ? `Categoría: ${elegida.nombre}` : "Categoría: automática"}
+            className="absolute -left-0.5 -top-0.5 size-11 cursor-pointer appearance-none rounded-xl text-lg opacity-0"
+          >
+            <option value="auto">✨ Categoría automática</option>
+            {CATEGORIAS.map((c) => (
+              <option key={c.nombre} value={c.nombre}>
+                {c.emoji} {c.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
         <Boton type="submit" variante="primario" disabled={!texto.trim()} aria-label="Agregar" className="cel:min-w-11 cel:px-0">
           <span className="cel:hidden">＋ Agregar</span>
           <span className="hidden text-xl cel:inline">＋</span>

@@ -141,6 +141,22 @@ export function rangoSemana(lunes: string): string {
   return `${a.dia} de ${MESES[a.mes - 1]} – ${b.dia} de ${MESES[b.mes - 1]}`;
 }
 
+/** "Sep 2026": el mes en tres letras, para el título del celular angosto. */
+export function mesAnioCorto(f: string): string {
+  const { anio, mes } = partes(f);
+  return `${MESES[mes - 1][0].toUpperCase()}${MESES[mes - 1].slice(1, 3)} ${anio}`;
+}
+
+/** ¿La semana que empieza ese lunes termina en el mismo mes? */
+export function semanaDeUnMes(lunes: string): boolean {
+  return partes(lunes).mes === partes(sumarDias(lunes, 6)).mes;
+}
+
+/** Rango mínimo, sin meses, para el celular angosto: "2–8" o "30–6". */
+export function semanaMinima(lunes: string): string {
+  return `${partes(lunes).dia}–${partes(sumarDias(lunes, 6)).dia}`;
+}
+
 /** Rango corto: "2–8 nov" o "30 nov–6 dic". */
 export function semanaCorta(lunes: string): string {
   const a = partes(lunes);

@@ -153,15 +153,15 @@ function Panel() {
         <AvisoSinFamilia compacto={modoPared} />
         <AvisoRecienUnido />
         {errorGuardado && (
-          <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4 cel:mx-4 cel:gap-2 cel:px-3 cel:py-1">
+          <div role="alert" className="mx-3 mb-2 flex items-center gap-3 rounded-2xl bg-red-600/15 px-4 py-2 text-lg font-bold text-red-700 noche:text-red-300 md:mx-4 cel:mx-seguro cel:gap-2 cel:px-3 cel:py-1">
             <span className="flex-1">{errorGuardado}</span>
             <button type="button" onClick={cerrarError} aria-label="Cerrar aviso" className="min-h-11 min-w-11 rounded-xl text-xl">
               ✕
             </button>
           </div>
         )}
-        {/* Celular: márgenes de 16 px, como una app de teléfono. */}
-        <main className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-4 md:pb-4 cel:px-4 cel:pb-2">
+        {/* Celular: márgenes de 16 px, como una app de teléfono (más, en horizontal, si la muesca los tapa). */}
+        <main className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-4 md:pb-4 cel:px-seguro cel:pb-2">
           {pestana === "calendario" && (
             <VistaCalendario key={reinicio} hoy={ahora.fecha} clima={clima} alIrAMenu={() => ir("comidas")} />
           )}
@@ -175,9 +175,11 @@ function Panel() {
 
       {unirse && <UnirseModal codigo={unirse} alCerrar={() => setUnirse(null)} />}
 
-      {/* Barra inferior (teléfono): 52 px más la zona segura; la pestaña activa con una píldora detrás del
-          ícono (el emoji no se puede teñir) y la etiqueta en el color de acento. */}
-      <nav className="grid shrink-0 grid-cols-6 border-t border-borde bg-superficie pb-[env(safe-area-inset-bottom)] md:hidden">
+      {/* Barra inferior (teléfono): 52 px más la zona segura (abajo y, en horizontal, a los lados); la pestaña
+          activa con una píldora detrás del ícono (el emoji no se puede teñir) y la etiqueta (12 px) en el color
+          de acento. Cada pestaña mide lo que su etiqueta y reparte lo que sobra: así «Calendario» no se corta en
+          un teléfono angosto (en seis partes iguales de 320 o 375 px no cabe). */}
+      <nav className="flex shrink-0 border-t border-borde bg-superficie pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] md:hidden">
         {PESTANAS.map((p) => {
           const activa = pestana === p.id;
           return (
@@ -187,7 +189,7 @@ function Panel() {
               onClick={() => ir(p.id)}
               aria-current={activa ? "page" : undefined}
               className={cx(
-                "flex min-h-13 min-w-0 flex-col items-center justify-center gap-0.5 pt-1 text-[0.6875rem] font-bold leading-tight",
+                "flex min-h-13 min-w-11 flex-[1_1_auto] flex-col items-center justify-center gap-0.5 pt-1 text-[0.75rem] font-bold leading-tight",
                 activa ? "text-acento" : "text-tinta-suave",
               )}
             >

@@ -12,9 +12,12 @@ import {
   grillaMes,
   lunesDe,
   mesAnio,
+  mesAnioCorto,
   partes,
   rangoSemana,
   semanaCorta,
+  semanaDeUnMes,
+  semanaMinima,
   sumarDias,
   sumarMeses,
   diaSemana,
@@ -24,7 +27,7 @@ import { duracionDias, ocurrenciasEnRango, seRepite, textoHora } from "@/lib/eve
 import { iconoClima, useIrAHoyEnMovil, type Clima } from "@/lib/hooks";
 import { claveComida } from "@/lib/compras";
 import { TIPOS_COMIDA, emojiComida, nombreComida, nombresComida } from "@/lib/comidas";
-import { Avatar, Boton, BotonIcono, Segmentos, cx } from "./ui";
+import { Avatar, Boton, BotonIcono, Segmentos, TextoQueCabe, cx } from "./ui";
 import EventoModal from "./EventoModal";
 
 type Modo = "dia" | "semana" | "mes";
@@ -65,6 +68,9 @@ export default function VistaCalendario({
       : modo === "mes"
         ? mesAnio(a)
         : `${DIAS_CORTOS[diaSemana(a)]} ${pa.dia} ${MESES[pa.mes - 1].slice(0, 3)}`;
+  // Teléfono angosto (320 px): si el título no cabe, uno más corto («Sep 2026», «9–15») en vez de cortarlo.
+  const tituloMinimo = modo === "semana" ? semanaMinima(lunesDe(a)) : modo === "mes" ? mesAnioCorto(a) : tituloCorto;
+  const anchoTitulo = modo === "mes" ? "9.75rem" : modo === "semana" && !semanaDeUnMes(lunesDe(a)) ? "7.25rem" : "6rem";
   const enHoy =
     modo === "semana" ? lunesDe(a) === lunesDe(hoy) : modo === "mes" ? a.slice(0, 7) === hoy.slice(0, 7) : a === hoy;
 
@@ -97,9 +103,9 @@ export default function VistaCalendario({
           type="button"
           onClick={() => setAncla(null)}
           aria-label={enHoy ? titulo : `${titulo}. Volver a hoy`}
-          className="hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
+          className="@container hidden min-h-11 min-w-0 flex-col items-center justify-center rounded-xl px-1 leading-tight transition active:scale-[0.97] cel:col-start-2 cel:row-start-1 cel:flex"
         >
-          <span className="max-w-full truncate font-display text-2xl font-semibold first-letter:uppercase">{tituloCorto}</span>
+          <TextoQueCabe largo={tituloCorto} corto={tituloMinimo} minimo={anchoTitulo} className="font-display text-2xl font-semibold first-letter:uppercase" />
           <span className={cx("text-xs font-bold", enHoy ? "text-tinta-suave" : "text-acento")}>
             {enHoy ? (modo === "semana" ? "Esta semana" : modo === "mes" ? "Este mes" : "Hoy") : "↩ Volver a hoy"}
           </span>
@@ -531,8 +537,10 @@ function Mes({
   const ocs = ocurrenciasEnRango(estado.eventos, dias[0], dias[41], filtro);
   return (
     <div className="flex h-full flex-col">
-      {/* Celular: casi sin espacio entre columnas, así cada día mide 44 px o más de ancho (360 px de pantalla). */}
-      <div className="grid grid-cols-7 gap-1.5 pb-1.5 cel:gap-x-0.5">
+      {/* Celular: sin espacio entre columnas (el que se ve es el borde transparente de cada día, que también
+          se toca), así cada día mide 44 px o más de ancho; en un teléfono angosto (320 px) la grilla toma
+          10 px de cada margen. */}
+      <div className="grid grid-cols-7 gap-1.5 pb-1.5 cel:gap-x-0 cel:max-[22rem]:-mx-2.5">
         {DIAS_CORTOS.map((d) => (
           <div key={d} className="text-center text-sm font-extrabold uppercase text-tinta-suave md:text-base">
             {d}
@@ -540,7 +548,7 @@ function Mes({
         ))}
       </div>
       {/* En el teléfono cada fila tiene un alto mínimo (el número y los puntos) y la grilla hace scroll. */}
-      <div className="desliza grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(3.25rem,1fr))] gap-1.5 overflow-y-auto md:grid-rows-6 md:overflow-visible cel:gap-x-0.5 cel:gap-y-1">
+      <div className="desliza grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(3.25rem,1fr))] gap-1.5 overflow-y-auto md:grid-rows-6 md:overflow-visible cel:gap-0 cel:max-[22rem]:-mx-2.5">
         {dias.map((f) => {
           const lista = ocs.get(f)!;
           const fuera = partes(f).mes !== mes;
@@ -551,7 +559,7 @@ function Mes({
               type="button"
               onClick={() => alVerDia(f)}
               className={cx(
-                "flex min-h-0 flex-col overflow-hidden rounded-2xl border-[3px] p-1 text-left md:p-1.5 cel:rounded-xl cel:border-2",
+                "flex min-h-0 flex-col overflow-hidden rounded-2xl border-[3px] p-1 text-left md:p-1.5 cel:rounded-xl cel:border-2 cel:bg-clip-padding",
                 esHoy ? "border-hoy-borde bg-hoy" : "border-transparent bg-superficie",
                 fuera && "opacity-40",
               )}

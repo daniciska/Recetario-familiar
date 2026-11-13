@@ -161,7 +161,7 @@ export default function VistaTareas({ hoy }: { hoy: string }) {
         </Boton>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 cel:-mx-4 cel:flex-nowrap cel:overflow-x-auto cel:px-4 cel:[scrollbar-width:none]">
+      <div className="flex flex-wrap gap-1.5 cel:-ml-[max(1rem,env(safe-area-inset-left))] cel:-mr-[max(1rem,env(safe-area-inset-right))] cel:flex-nowrap cel:overflow-x-auto cel:px-seguro cel:[scrollbar-width:none]">
         <FiltroBtn activo={filtro === "todos"} onClick={() => setFiltro("todos")}>
           Todos
         </FiltroBtn>

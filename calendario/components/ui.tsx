@@ -12,17 +12,29 @@ type Variante = "primario" | "suave" | "fantasma" | "peligro";
 export function Boton({
   variante = "suave",
   grande,
+  apilado,
   className,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variante?: Variante; grande?: boolean }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variante?: Variante;
+  grande?: boolean;
+  /** Celular: ícono arriba y una palabra corta abajo (p. ej. «↻» y «Repetir»), angosto como un botón de barra. */
+  apilado?: boolean;
+}) {
   return (
     <button
       type="button"
       {...props}
       className={cx(
-        "inline-flex items-center justify-center gap-2 rounded-2xl font-bold transition active:scale-[0.97] disabled:opacity-40 cel:gap-1.5",
+        "inline-flex items-center justify-center gap-2 rounded-2xl font-bold transition active:scale-[0.97] disabled:opacity-40",
         // Celular: 44 px (48 el grande) con letra de 17 (18), como los botones de una app de teléfono.
-        grande ? "min-h-16 px-6 text-xl cel:min-h-12 cel:px-5" : "min-h-12 px-4 text-lg cel:min-h-11 cel:px-3.5",
+        // El fantasma (sin fondo, p. ej. «Cancelar») con menos relleno: no se ve y deja lugar en los pies.
+        grande
+          ? "min-h-16 px-6 text-xl cel:min-h-12 cel:gap-1.5 cel:px-5"
+          : cx(
+              "min-h-12 px-4 text-lg cel:min-h-11 cel:min-w-11",
+              apilado ? "cel:flex-col cel:gap-0 cel:px-1.5" : variante === "fantasma" ? "cel:gap-1.5 cel:px-2" : "cel:gap-1.5 cel:px-3.5",
+            ),
         variante === "primario" && "bg-acento text-acento-tinta shadow-sm",
         variante === "suave" && "bg-superficie-2 text-tinta",
         variante === "fantasma" && "text-tinta-suave",
@@ -52,6 +64,40 @@ export function BotonIcono({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Clases de `TextoQueCabe`, escritas completas (Tailwind sólo genera las que ve en el código). La medida es
+ * lo que ocupa el texto largo más ancho de ese tipo en los títulos del celular: a 20 px (Fredoka semibold)
+ * «23–29 nov» 94 px, «30 nov–6 dic» 114 px, «Septiembre 2026» 153 px; a 13 px (Nunito bold) «Esta semana»
+ * 77 px y «↩ Volver a esta semana» 148 px.
+ */
+const CABE = {
+  "4.875rem": ["@max-[4.875rem]:hidden", "hidden @max-[4.875rem]:inline"],
+  "6rem": ["@max-[6rem]:hidden", "hidden @max-[6rem]:inline"],
+  "7.25rem": ["@max-[7.25rem]:hidden", "hidden @max-[7.25rem]:inline"],
+  "9.25rem": ["@max-[9.25rem]:hidden", "hidden @max-[9.25rem]:inline"],
+  "9.75rem": ["@max-[9.75rem]:hidden", "hidden @max-[9.75rem]:inline"],
+} as const;
+
+/**
+ * Título del celular que, si no cabe, se cambia por uno más corto («9–15 nov» → «9–15»), en vez de
+ * cortarse con «…» (con `corto` vacío, desaparece). Es CSS (consulta de contenedor), así que no salta al
+ * cargar: el que lo usa pone `@container` en el elemento que da el ancho. Sin consultas de contenedor
+ * (iOS < 16) queda el largo.
+ */
+export function TextoQueCabe({ largo, corto, minimo, className }: { largo: string; corto: string; minimo: keyof typeof CABE; className?: string }) {
+  if (largo === corto) return <span className={cx("max-w-full truncate", className)}>{largo}</span>;
+  return (
+    <>
+      <span className={cx("max-w-full truncate", CABE[minimo][0], className)}>{largo}</span>
+      {corto && (
+        <span aria-hidden className={cx("max-w-full truncate", CABE[minimo][1], className)}>
+          {corto}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -91,7 +137,7 @@ export function Modal({
         )}
       >
         {/* Celular: encabezado de 52 px con el título (20 px) en una línea y el ✕ sin fondo. */}
-        <div className="flex items-center gap-3 border-b border-borde px-5 py-4 cel:gap-2 cel:py-1 cel:pl-4 cel:pr-2">
+        <div className="flex items-center gap-3 border-b border-borde px-5 py-4 cel:gap-2 cel:py-1 cel:pl-[max(1rem,env(safe-area-inset-left))] cel:pr-[max(0.5rem,env(safe-area-inset-right))]">
           <h2 className="flex-1 font-display text-2xl font-semibold cel:min-w-0 cel:truncate">
             {tituloCorto ? (
               <>
@@ -107,11 +153,13 @@ export function Modal({
           </BotonIcono>
         </div>
         {/* Sin pie, el final del contenido deja la zona segura de abajo (la barra de inicio del iPhone). */}
-        <div className={cx("desliza flex-1 overflow-y-auto px-5 py-5 cel:px-4 cel:py-4", !pie && "cel:pb-[max(1rem,env(safe-area-inset-bottom))]")}>
+        <div className={cx("desliza flex-1 overflow-y-auto px-5 py-5 cel:px-seguro cel:py-4", !pie && "cel:pb-[max(1rem,env(safe-area-inset-bottom))]")}>
           {children}
         </div>
+        {/* Teléfono angosto (≤ 352 px, p. ej. 320): los botones del pie con letra de 15 px y menos relleno, para
+            que «Borrar · Cancelar · Guardar» o «Cancelar · Mandar 35 a la lista» quepan en una fila. */}
         {pie && (
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-borde px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] cel:gap-2 cel:px-4 cel:pt-2.5 cel:pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-borde px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] cel:gap-2 cel:px-seguro cel:pt-2.5 cel:pb-[max(0.625rem,env(safe-area-inset-bottom))] cel:max-[22rem]:[&_button]:px-2.5 cel:max-[22rem]:[&_button]:text-[0.9375rem]">
             {pie}
           </div>
         )}
@@ -193,7 +241,7 @@ export function Contador({
   max?: number;
 }) {
   return (
-    <div className="inline-flex items-center gap-2">
+    <div className="inline-flex items-center gap-2 cel:gap-1">
       <BotonIcono etiqueta="Menos" onClick={() => alCambiar(Math.max(min, valor - 1))}>
         −
       </BotonIcono>

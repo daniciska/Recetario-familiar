@@ -51,10 +51,10 @@ export function AvisoSinFamilia({ compacto }: { compacto: boolean }) {
           // Con «¿Por qué?» abierto en una pantalla baja, la franja no pasa de la mitad: se desplaza adentro.
           compacto ? "px-3 py-1.5" : "desliza max-h-[50dvh] overflow-y-auto overscroll-contain px-4 py-3",
           // Celular: más baja (texto corto de 14 px, botones de 44 px con textos cortos).
-          "cel:mx-4 cel:gap-y-1.5 cel:px-3 cel:py-2",
+          "cel:mx-seguro cel:gap-y-1.5 cel:px-3 cel:py-2",
         )}
       >
-        <div className="min-w-0 flex-[1_1_20rem] space-y-1 cel:space-y-0.5">
+        <div className={cx("min-w-0 flex-[1_1_20rem] space-y-1 cel:space-y-0.5", conPorQue && "cel:[@media(max-height:640px)]:pb-2")}>
           <p className={cx("font-extrabold", compacto ? "text-base" : "text-base md:text-lg", "cel:text-sm")}>
             <span className="cel:hidden">
               {ejemplo
@@ -69,13 +69,15 @@ export function AvisoSinFamilia({ compacto }: { compacto: boolean }) {
             {conPorQue && (
               <>
                 {" "}
-                {/* -my-1 compensa el py-1 (área para tocar) sin agrandar la línea. */}
+                {/* -my-1 compensa el py-1 (área para tocar) sin agrandar la línea. En el celular el área es de
+                    44 px y sobresale 13 px arriba y abajo de la línea: relative z-10 para que el párrafo de abajo
+                    no tape esa parte (y, si abajo vienen los botones, el pb-2 de más abajo los separa). */}
                 <button
                   type="button"
                   aria-expanded={porQue}
                   aria-controls={idPorQue}
                   onClick={() => setPorQue((v) => !v)}
-                  className="-my-1 rounded-lg px-1 py-1 text-base font-bold whitespace-nowrap text-tinta underline decoration-2 underline-offset-2 cel:-my-3.5 cel:inline-flex cel:min-h-11 cel:items-center cel:text-sm"
+                  className="-my-1 rounded-lg px-1 py-1 text-base font-bold whitespace-nowrap text-tinta underline decoration-2 underline-offset-2 cel:relative cel:z-10 cel:-my-3.5 cel:inline-flex cel:min-h-11 cel:items-center cel:rounded-md cel:text-sm"
                 >
                   ¿Por qué?
                 </button>
@@ -143,7 +145,7 @@ export function AvisoRecienUnido() {
     <section
       aria-label="Equipo unido a la familia"
       data-aviso="recien-unido"
-      className="mx-3 mb-2 flex items-start gap-3 rounded-2xl border-2 border-ok/40 bg-superficie px-4 py-3 md:mx-4 cel:mx-4 cel:gap-2 cel:px-3 cel:py-2"
+      className="mx-3 mb-2 flex items-start gap-3 rounded-2xl border-2 border-ok/40 bg-superficie px-4 py-3 md:mx-4 cel:mx-seguro cel:gap-2 cel:px-3 cel:py-2"
     >
       <div className="min-w-0 flex-1 space-y-1">
         <p className="text-lg font-extrabold">

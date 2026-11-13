@@ -5,7 +5,7 @@
 /* "md" = interfaz de tablet: ancho de tablet Y alto suficiente. Un teléfono en horizontal
    (≤ 448 px de alto, incluso instalado a pantalla completa) sigue usando la interfaz de teléfono;
    un tablet de 600 dp en el navegador con todas sus barras (≈ 472 px) usa la de tablet.
-   Igual que MEDIA_TABLET en lib/hooks.ts. */
+   Igual que MEDIA_TABLET en lib/pantalla.ts. */
 @custom-variant md (@media (width >= 48rem) and (height >= 29rem));
 
 /* "cel" = interfaz de teléfono: la negación EXACTA de md (teléfono vertical y también en horizontal).
@@ -56,6 +56,10 @@
    entradas quedan con 16 px o más (text-lg 17, la hora text-xl 18): el iPhone no hace zoom al enfocar. */
 @media not all and (min-width: 48rem) and (min-height: 29rem) {
   :root {
+    /* 12 → 13: el texto más chico del celular (rótulos como DESAYUNO, «Esta semana», 👥4) no baja de 13 px.
+       Las etiquetas de la barra de pestañas van aparte, en 12 px (App.tsx). */
+    --text-xs: 0.8125rem;
+    --text-xs--line-height: 1.3;
     --text-sm: 0.8125rem; /* 14 → 13 */
     --text-sm--line-height: 1.4;
     --text-base: 0.9375rem; /* 16 → 15 */
@@ -78,6 +82,22 @@
     --font-weight-black: 800;
     --radius-3xl: 1.25rem; /* 24 → 20 */
   }
+  /* El celular sí se puede acercar con dos dedos (ver el meta viewport en app/layout.tsx); el doble toque
+     no acerca, para que tocar rápido dos veces no agrande la página por accidente. */
+  html {
+    touch-action: manipulation;
+  }
+}
+
+/* Márgenes del celular que respetan la muesca y las esquinas redondeadas del teléfono en horizontal
+   (viewportFit "cover"): nunca menos de 16 px, ni menos que la zona segura de ese lado. Se usan con cel:. */
+@utility px-seguro {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+@utility mx-seguro {
+  margin-left: max(1rem, env(safe-area-inset-left));
+  margin-right: max(1rem, env(safe-area-inset-right));
 }
 
 @theme inline {
