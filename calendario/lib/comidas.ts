@@ -184,6 +184,39 @@ export function deshacerRepetir(plan: PlanComidas, copias: PlanComidas): { plan:
   return { plan: nuevo, quitadas, cambiadas };
 }
 
+/**
+ * Operaciones que se hacen de a una: cada `poner(op)` empieza cuando terminó la anterior (aunque haya
+ * fallado) y devuelve lo que devuelve `op`. Con la fila vacía, `op` empieza en el acto (en el mismo toque).
+ * `ocupada()` dice si queda alguna sin terminar.
+ *
+ * El menú la usa para «Repetir» y «Deshacer»: los guardados de una misma colección salen en paralelo con
+ * la misma versión y el servidor los puede recibir al revés. Entonces el primero recibe un conflicto y
+ * `actualizar` lo vuelve a aplicar encima del segundo: «Repetir» volvería a copiar lo que «Deshacer» quitó.
+ */
+export function crearFila() {
+  let ultima: Promise<unknown> = Promise.resolve();
+  let pendientes = 0;
+  return {
+    ocupada: () => pendientes > 0,
+    poner<T>(op: () => Promise<T>): Promise<T> {
+      const correr = (): Promise<T> => {
+        try {
+          return Promise.resolve(op());
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      };
+      const libre = pendientes === 0;
+      pendientes++;
+      const p = (libre ? correr() : ultima.then(correr)).finally(() => {
+        pendientes--;
+      });
+      ultima = p.catch(() => {});
+      return p;
+    },
+  };
+}
+
 /** Saca una receta (que se borró) de todos los espacios del plan; la comida que queda vacía se quita. */
 export function quitarRecetaDelPlan(plan: PlanComidas, recetaId: string): PlanComidas {
   const n: PlanComidas = {};

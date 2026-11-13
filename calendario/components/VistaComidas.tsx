@@ -19,6 +19,7 @@ import {
   TIPOS_COMIDA,
   atajosComida,
   claveComida,
+  crearFila,
   emojiComida,
   esComidaEntera,
   itemsLlenos,
@@ -36,6 +37,19 @@ import { useIrAHoyEnMovil } from "@/lib/hooks";
 import { Boton, BotonIcono, Casilla, Contador, Entrada, Modal, TextoQueCabe, cx } from "./ui";
 import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
 
+/**
+ * Lo que copió un «Repetir» en la semana de `lunes`. `final` es lo que copió el intento que quedó guardado
+ * (null si no se guardó) y falta mientras se guarda; `listo` resuelve con lo mismo.
+ */
+type Copia = { lunes: string; final?: PlanComidas | null; listo: Promise<PlanComidas | null> };
+type Aviso = { texto: string; copia?: Copia };
+
+/**
+ * «Repetir» y «Deshacer» del menú, de a uno: cada uno espera que el anterior termine de guardarse (ver
+ * `crearFila`). Está fuera del componente para que siga valiendo si se cambia de pestaña y se vuelve.
+ */
+const filaMenu = crearFila();
+
 export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrACompras: () => void }) {
   const { estado, actualizar } = useDatos();
   const { proteger } = useCandado();
@@ -45,16 +59,21 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   const [celda, setCelda] = useState<{ fecha: string; tipo: TipoComida } | null>(null);
   // Lunes de la semana para la que se abrió "Generar lista" (fijo aunque pase la medianoche del domingo).
   const [generando, setGenerando] = useState<string | null>(null);
-  // Aviso bajo la barra («Se copiaron 5 comidas…»). Con `copias`, ofrece «Deshacer» un rato.
-  const [aviso, setAviso] = useState<{ texto: string; copias?: PlanComidas } | null>(null);
+  // Aviso bajo la barra («Se copiaron 5 comidas…»). Con `copia`, ofrece «Deshacer» un rato.
+  const [aviso, setAviso] = useState<Aviso | null>(null);
+  const avisoActual = useRef<Aviso | null>(null);
   const relojAviso = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(relojAviso.current), []);
-  const mostrarAviso = (texto: string, copias?: PlanComidas) => {
+  const ponerAviso = (a: Aviso | null) => {
     clearTimeout(relojAviso.current);
-    const nuevo = { texto, copias };
-    setAviso(nuevo);
-    relojAviso.current = setTimeout(() => setAviso(null), copias ? 15_000 : 4_000);
-    return nuevo;
+    avisoActual.current = a;
+    setAviso(a);
+    if (a) relojAviso.current = setTimeout(() => ponerAviso(null), a.copia ? 15_000 : 4_000);
+    return a;
+  };
+  /** Cambia el aviso sólo si sigue siendo `de` (si ya se cerró o hay otro, no se toca). */
+  const corregirAviso = (de: Aviso | null, a: Aviso | null) => {
+    if (avisoActual.current === de) ponerAviso(a);
   };
   const dias = diasDeSemana(lunes);
   const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
@@ -68,26 +87,38 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   /**
    * Copia la semana pasada en los espacios vacíos de esta (para toda la familia) y ofrece deshacerlo.
    * Si otro equipo guardó antes, `actualizar` vuelve a aplicar el cambio sobre lo último: lo que se deshace
-   * es lo que quedó guardado (el último intento), no lo del primero.
+   * es lo que quedó guardado (el último intento), no lo del primero. Va en `filaMenu`: espera que termine
+   * de guardarse un «Deshacer» anterior.
    */
-  const repetirSemanaPasada = async () => {
-    let copias: PlanComidas = {};
-    const guardado = actualizar("plan", (plan) => {
-      const r = repetirSemana(plan, dias);
-      copias = r.copias;
-      return r.plan;
+  const repetirSemanaPasada = () =>
+    filaMenu.poner(async () => {
+      let copias: PlanComidas = {};
+      const guardado = actualizar("plan", (plan) => {
+        const r = repetirSemana(plan, dias);
+        copias = r.copias;
+        return r.plan;
+      });
+      const n = Object.keys(copias).length;
+      const copia: Copia = {
+        lunes,
+        listo: guardado.then(
+          (ok) => (copia.final = ok ? copias : null),
+          () => (copia.final = null),
+        ),
+      };
+      // Tocado dos veces: la segunda no tiene nada nuevo que copiar y no le quita el «Deshacer» a la primera.
+      const previo = avisoActual.current;
+      const mostrado = !n && previo?.copia?.lunes === lunes ? previo : ponerAviso({ texto: textoCopiadas(n), copia: n ? copia : undefined });
+      const f = await copia.listo;
+      // No se guardó (sin conexión o sin espacio): el cambio ya se deshizo solo y la app muestra por qué.
+      if (!f) {
+        if (n) corregirAviso(mostrado, null);
+      } else if (Object.keys(f).length !== n) {
+        // Otro equipo guardó antes y el último intento copió otra cantidad.
+        const m = Object.keys(f).length;
+        corregirAviso(mostrado, { texto: textoCopiadas(m), copia: m ? copia : undefined });
+      }
     });
-    const primeras = copias;
-    const n = Object.keys(primeras).length;
-    mostrarAviso(textoCopiadas(n), n ? primeras : undefined);
-    if (!n) return;
-    const ok = await guardado;
-    const finales = copias;
-    // No se guardó (sin conexión o sin espacio): el cambio ya se deshizo solo y hay otro aviso.
-    if (!ok) setAviso((a) => (a?.copias === primeras ? null : a));
-    else if (finales !== primeras)
-      setAviso((a) => (a?.copias === primeras ? { texto: textoCopiadas(Object.keys(finales).length), copias: finales } : a));
-  };
 
   const textoDeshecho = ({ quitadas, cambiadas }: { quitadas: number; cambiadas: number }) => {
     const quedan = cambiadas ? ` ${cambiadas === 1 ? "Una ya la habían cambiado y quedó" : `${cambiadas} ya las habían cambiado y quedaron`}.` : "";
@@ -96,21 +127,32 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
       : `No quedaba nada copiado que quitar.${quedan}`;
   };
 
-  /** Quita exactamente lo que se copió y sigue igual; lo que alguien cambió entretanto se queda. */
-  const deshacerCopia = async (copias: PlanComidas) => {
-    let r = { quitadas: 0, cambiadas: 0 };
-    const guardado = actualizar("plan", (plan) => {
-      const d = deshacerRepetir(plan, copias);
-      r = d;
-      return d.plan;
+  /**
+   * Quita exactamente lo que se copió y sigue igual; lo que alguien cambió entretanto se queda. Si «Repetir»
+   * todavía se está guardando, lo espera (`filaMenu`) y usa lo que copió su último intento.
+   */
+  const deshacerCopia = (copia: Copia) => {
+    // Mientras espera, el aviso dice qué pasa y ya no ofrece «Deshacer» (no se puede tocar dos veces).
+    const espera = filaMenu.ocupada() ? ponerAviso({ texto: "Quitando las comidas copiadas…" }) : avisoActual.current;
+    return filaMenu.poner(async () => {
+      // Sin espera (lo normal) `final` ya está y todo pasa en el mismo toque, como antes.
+      const copias = copia.final !== undefined ? copia.final : await copia.listo;
+      // «Repetir» no se guardó: ya se deshizo solo y la app muestra por qué.
+      if (!copias) return corregirAviso(espera, null);
+      let r = { quitadas: 0, cambiadas: 0 };
+      const guardado = actualizar("plan", (plan) => {
+        const d = deshacerRepetir(plan, copias);
+        r = d;
+        return d.plan;
+      });
+      const primero = r;
+      const mostrado = ponerAviso({ texto: textoDeshecho(r) });
+      const ok = await guardado;
+      // No se guardó: el plan volvió a como estaba y la app ya muestra por qué; el «Listo» sería falso.
+      if (!ok) corregirAviso(mostrado, null);
+      // Otro equipo guardó antes: se volvió a aplicar sobre lo último y la cuenta puede ser otra.
+      else if (r !== primero) corregirAviso(mostrado, { texto: textoDeshecho(r) });
     });
-    const primero = r;
-    const mostrado = mostrarAviso(textoDeshecho(r));
-    const ok = await guardado;
-    // No se guardó: el plan volvió a como estaba y la app ya muestra por qué; el «Listo» sería falso.
-    if (!ok) setAviso((a) => (a === mostrado ? null : a));
-    // Otro equipo guardó antes: se volvió a aplicar sobre lo último y la cuenta puede ser otra.
-    else if (r !== primero) setAviso((a) => (a === mostrado ? { texto: textoDeshecho(r) } : a));
   };
 
   return (
@@ -191,8 +233,8 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
           className="flex items-center gap-3 rounded-2xl bg-acento-suave px-4 py-2 text-lg font-bold cel:gap-2 cel:py-1 cel:pl-3 cel:pr-1 cel:text-[0.9375rem] cel:leading-snug"
         >
           <span className="min-w-0 flex-1 cel:py-1.5">{aviso.texto}</span>
-          {aviso.copias && (
-            <Boton variante="primario" className="shrink-0" onClick={() => proteger(() => deshacerCopia(aviso.copias!))}>
+          {aviso.copia && (
+            <Boton variante="primario" className="shrink-0" onClick={() => proteger(() => deshacerCopia(aviso.copia!))}>
               Deshacer
             </Boton>
           )}

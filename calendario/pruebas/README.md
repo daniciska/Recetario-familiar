@@ -35,7 +35,7 @@ Cada suite imprime una línea `OK …` o `MAL …` por comprobación y termina c
 
 - `infra.test.ts`: los ganchos, el mock de Blobs y el simulador de token montado en otro servidor.
 - `equipo/aviso.test.ts`: la franja de equipo sin unir, sin navegador: `esFamiliaDeEjemplo` (`lib/ejemplo.ts`, con sus casos de familia propia) y que «Usar sólo en este equipo» se olvide al unirse o crear la familia (`lib/datos/nube.ts`, con un `localStorage` en memoria).
-- `comidas/*.test.ts`: el menú por espacios (`lib/comidas.ts`, `lib/compras.ts`, `normalizar`), sin navegador: `espacios`, `normalizar`, `compras` (la lista que sale del menú), `compatibilidad` y `sin-red` (equipos con la versión anterior), `conservar-nota` y `repetir` («Repetir la semana pasada» y su «Deshacer», que quita sólo las comidas copiadas que siguen igual).
+- `comidas/*.test.ts`: el menú por espacios (`lib/comidas.ts`, `lib/compras.ts`, `normalizar`), sin navegador: `espacios`, `normalizar`, `compras` (la lista que sale del menú), `compatibilidad` y `sin-red` (equipos con la versión anterior), `conservar-nota` y `repetir` («Repetir la semana pasada» y su «Deshacer», que quita sólo las comidas copiadas que siguen igual; y la fila que los guarda de a uno, con un modelo de la nube que recibe los guardados al revés).
 - `google/cuenta.test.ts`: `servidor/google/cuenta.ts` (lectura de `GOOGLE_CUENTA_SERVICIO`, JWT, caché y pedidos simultáneos, renovación, desfase de reloj, tabla de errores, plazos y que la aserción nunca salga hacia otro sitio).
 - `google/mock.test.ts`: el simulador de Google contra lo documentado (cada regla importante tiene un caso).
 - `google/ids.test.ts`: `servidor/google/ids.ts` (id reversible a partir del UID, generaciones, ids ajenos y de prueba).
