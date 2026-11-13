@@ -361,7 +361,9 @@ export default function EventoModal({
 
         {!repeticionDeAfuera && !diaDeSerie && f.repeticion !== "nunca" && (
           <div className="-mt-1 space-y-3 rounded-2xl bg-superficie-2 px-4 py-3 cel:rounded-xl cel:px-3">
-            <div className="flex flex-wrap items-center gap-3">
+            {/* Celular: menos espacio entre las partes (el − y el + no tienen borde visible sobre este fondo),
+                así «Cada − 2 + semanas» cabe en una línea aun en 320 px. */}
+            <div className="flex flex-wrap items-center gap-3 cel:gap-x-1.5">
               <span className="text-lg font-bold">Cada</span>
               <Contador
                 valor={f.intervalo ?? 1}

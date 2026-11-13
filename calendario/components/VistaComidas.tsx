@@ -51,8 +51,10 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
   useEffect(() => () => clearTimeout(relojAviso.current), []);
   const mostrarAviso = (texto: string, copias?: PlanComidas) => {
     clearTimeout(relojAviso.current);
-    setAviso({ texto, copias });
+    const nuevo = { texto, copias };
+    setAviso(nuevo);
     relojAviso.current = setTimeout(() => setAviso(null), copias ? 15_000 : 4_000);
+    return nuevo;
   };
   const dias = diasDeSemana(lunes);
   const recetas = useMemo(() => new Map(estado.recetas.map((r) => [r.id, r])), [estado.recetas]);
@@ -87,20 +89,28 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
       setAviso((a) => (a?.copias === primeras ? { texto: textoCopiadas(Object.keys(finales).length), copias: finales } : a));
   };
 
+  const textoDeshecho = ({ quitadas, cambiadas }: { quitadas: number; cambiadas: number }) => {
+    const quedan = cambiadas ? ` ${cambiadas === 1 ? "Una ya la habían cambiado y quedó" : `${cambiadas} ya las habían cambiado y quedaron`}.` : "";
+    return quitadas
+      ? `Listo: se ${quitadas === 1 ? "quitó la comida copiada" : `quitaron las ${quitadas} comidas copiadas`}.${quedan}`
+      : `No quedaba nada copiado que quitar.${quedan}`;
+  };
+
   /** Quita exactamente lo que se copió y sigue igual; lo que alguien cambió entretanto se queda. */
-  const deshacerCopia = (copias: PlanComidas) => {
+  const deshacerCopia = async (copias: PlanComidas) => {
     let r = { quitadas: 0, cambiadas: 0 };
-    actualizar("plan", (plan) => {
+    const guardado = actualizar("plan", (plan) => {
       const d = deshacerRepetir(plan, copias);
       r = d;
       return d.plan;
     });
-    const quedan = r.cambiadas ? ` ${r.cambiadas === 1 ? "Una ya la habían cambiado y quedó" : `${r.cambiadas} ya las habían cambiado y quedaron`}.` : "";
-    mostrarAviso(
-      r.quitadas
-        ? `Listo: se ${r.quitadas === 1 ? "quitó la comida copiada" : `quitaron las ${r.quitadas} comidas copiadas`}.${quedan}`
-        : `No quedaba nada copiado que quitar.${quedan}`,
-    );
+    const primero = r;
+    const mostrado = mostrarAviso(textoDeshecho(r));
+    const ok = await guardado;
+    // No se guardó: el plan volvió a como estaba y la app ya muestra por qué; el «Listo» sería falso.
+    if (!ok) setAviso((a) => (a === mostrado ? null : a));
+    // Otro equipo guardó antes: se volvió a aplicar sobre lo último y la cuenta puede ser otra.
+    else if (r !== primero) setAviso((a) => (a === mostrado ? { texto: textoDeshecho(r) } : a));
   };
 
   return (
@@ -806,11 +816,17 @@ function GenerarLista({ lunes, alCerrar, alEnviar }: { lunes: string; alCerrar: 
             Cancelar
           </Boton>
           <Boton variante="primario" grande disabled={elegidas.length === 0 && nPendientes === 0} onClick={enviar}>
-            {elegidas.length > 0
-              ? `Mandar ${elegidas.length} a la lista`
-              : nPendientes > 0
-                ? `Quitar ${nPendientes} ${nPendientes === 1 ? "pendiente" : "pendientes"} de la lista`
-                : "Nada que mandar"}
+            {elegidas.length > 0 ? (
+              `Mandar ${elegidas.length} a la lista`
+            ) : nPendientes > 0 ? (
+              <>
+                {/* Celular: sin «pendientes», para que quepa en una fila con «Cancelar» aun en 320 px. */}
+                <span className="cel:hidden">{`Quitar ${nPendientes} ${nPendientes === 1 ? "pendiente" : "pendientes"} de la lista`}</span>
+                <span className="hidden cel:inline">{`Quitar ${nPendientes} de la lista`}</span>
+              </>
+            ) : (
+              "Nada que mandar"
+            )}
           </Boton>
         </>
       }
