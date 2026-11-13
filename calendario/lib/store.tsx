@@ -62,11 +62,14 @@ export function ProveedorDatos({ children }: { children: React.ReactNode }) {
     if (sinAlmacenamiento.current) return setError(AVISO_SIN_ALMACENAMIENTO);
     const lleno = [...fallidas.current].filter(([, m]) => m === "lleno").map(([c]) => NOMBRES[c]);
     const red = [...fallidas.current].filter(([, m]) => m === "red").map(([c]) => NOMBRES[c]);
+    // «No se pudo guardar el menú» / «No se pudieron guardar las recetas» / «… los eventos y el menú».
+    const noSe = (l: string[]) =>
+      `No se ${l.length > 1 || /^l[oa]s /.test(l[0]) ? "pudieron" : "pudo"} guardar ${l.length > 1 ? `${l.slice(0, -1).join(", ")} y ${l[l.length - 1]}` : l[0]}`;
     const partes = [
       lleno.length &&
-        `No se pudieron guardar ${lleno.join(", ")}: el almacenamiento de este equipo está lleno. Prueba quitando fotos de recetas o usando fotos más chicas.`,
+        `${noSe(lleno)}: el almacenamiento de este equipo está lleno. Prueba quitando fotos de recetas o usando fotos más chicas.`,
       red.length &&
-        `No se pudieron guardar ${red.join(", ")}: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo; lo demás está a salvo.`,
+        `${noSe(red)}: no hay conexión con la nube. Revisa el wifi e inténtalo de nuevo; lo demás está a salvo.`,
     ].filter(Boolean);
     setError(partes.length ? partes.join(" ") : null);
   }, []);

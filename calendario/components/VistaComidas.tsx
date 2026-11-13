@@ -42,7 +42,8 @@ import { FotoReceta, RecetaDetalle } from "./VistaRecetas";
  * (null si no se guardó) y falta mientras se guarda; `listo` resuelve con lo mismo.
  */
 type Copia = { lunes: string; final?: PlanComidas | null; listo: Promise<PlanComidas | null> };
-type Aviso = { texto: string; copia?: Copia };
+/** `espera`: «Copiando…» / «Quitando…» mientras se guarda lo anterior; no se cierra solo a los 4 s. */
+type Aviso = { texto: string; copia?: Copia; espera?: boolean };
 
 /**
  * «Repetir» y «Deshacer» del menú, de a uno: cada uno espera que el anterior termine de guardarse (ver
@@ -68,7 +69,8 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
     clearTimeout(relojAviso.current);
     avisoActual.current = a;
     setAviso(a);
-    if (a) relojAviso.current = setTimeout(() => ponerAviso(null), a.copia ? 15_000 : 4_000);
+    // El de espera lo reemplaza el resultado; el minuto es sólo un tope por si algo no termina nunca.
+    if (a) relojAviso.current = setTimeout(() => ponerAviso(null), a.espera ? 60_000 : a.copia ? 15_000 : 4_000);
     return a;
   };
   /** Cambia el aviso sólo si sigue siendo `de` (si ya se cerró o hay otro, no se toca). */
@@ -90,8 +92,13 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
    * es lo que quedó guardado (el último intento), no lo del primero. Va en `filaMenu`: espera que termine
    * de guardarse un «Deshacer» anterior.
    */
-  const repetirSemanaPasada = () =>
-    filaMenu.poner(async () => {
+  const repetirSemanaPasada = () => {
+    // Si todavía se guarda un «Deshacer», el toque se nota al tiro (si no, no pasaría nada hasta que termine).
+    // Si en cambio se ve el «Deshacer» de una copia de esta semana (Repetir tocado dos veces), se deja: el
+    // segundo toque no tiene nada nuevo que copiar y no debe quitarle el «Deshacer» al primero.
+    if (filaMenu.ocupada() && avisoActual.current?.copia?.lunes !== lunes)
+      ponerAviso({ texto: "Copiando la semana pasada…", espera: true });
+    return filaMenu.poner(async () => {
       let copias: PlanComidas = {};
       const guardado = actualizar("plan", (plan) => {
         const r = repetirSemana(plan, dias);
@@ -119,6 +126,7 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
         corregirAviso(mostrado, { texto: textoCopiadas(m), copia: m ? copia : undefined });
       }
     });
+  };
 
   const textoDeshecho = ({ quitadas, cambiadas }: { quitadas: number; cambiadas: number }) => {
     const quedan = cambiadas ? ` ${cambiadas === 1 ? "Una ya la habían cambiado y quedó" : `${cambiadas} ya las habían cambiado y quedaron`}.` : "";
@@ -133,7 +141,7 @@ export default function VistaComidas({ hoy, alIrACompras }: { hoy: string; alIrA
    */
   const deshacerCopia = (copia: Copia) => {
     // Mientras espera, el aviso dice qué pasa y ya no ofrece «Deshacer» (no se puede tocar dos veces).
-    const espera = filaMenu.ocupada() ? ponerAviso({ texto: "Quitando las comidas copiadas…" }) : avisoActual.current;
+    const espera = filaMenu.ocupada() ? ponerAviso({ texto: "Quitando las comidas copiadas…", espera: true }) : avisoActual.current;
     return filaMenu.poner(async () => {
       // Sin espera (lo normal) `final` ya está y todo pasa en el mismo toque, como antes.
       const copias = copia.final !== undefined ? copia.final : await copia.listo;
